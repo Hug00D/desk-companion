@@ -42,3 +42,21 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 定義 CameraX 版本
+    val camerax_version = "1.3.0"
+
+    // CameraX 核心庫
+    implementation("androidx.camera:camera-core:${camerax_version}")
+    implementation("androidx.camera:camera-camera2:${camerax_version}")
+
+    // CameraX 生命週期庫（讓相機隨 Activity 自動開啟/關閉）
+    implementation("androidx.camera:camera-lifecycle:${camerax_version}")
+
+    // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
+    implementation("androidx.camera:camera-view:${camerax_version}")
+
+    // 如果之後要用 Google ML Kit 辨識人臉，也可以先在這邊預留
+    // implementation("com.google.mlkit:face-detection:16.1.6")
+}
