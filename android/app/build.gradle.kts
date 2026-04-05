@@ -56,7 +56,6 @@ dependencies {
 
     // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
     implementation("androidx.camera:camera-view:${camerax_version}")
+    implementation("com.google.mlkit:face-detection:16.1.6")
 
-    // 如果之後要用 Google ML Kit 辨識人臉，也可以先在這邊預留
-    // implementation("com.google.mlkit:face-detection:16.1.6")
 }

@@ -3,6 +3,10 @@ import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
 
 void main() => runApp(const MaterialApp(home: FaceDetectionScreen()));
 
@@ -42,35 +46,61 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     });
   }
 
+  String? _tempVideoPath;
+
   Future<void> _detectFaceFromVideo() async {
-    if (_isProcessing) return;
+    if (_isProcessing || !_controller.value.isInitialized) return;
     _isProcessing = true;
 
     try {
-      // 【核心邏輯】
-      // 在真實開發中，我們會用 flutter_ffmpeg 或自定義截圖套件
-      // 這裡我們演示當你拿到圖片後，如何丟給 ML Kit：
-
-      // 假設你已經有一張從影片抓下來的暫存圖片路徑 imagePath
-      // InputImage inputImage = InputImage.fromFilePath(imagePath);
-
-      // 呼叫 ML Kit 偵測
-      // final List<Face> faces = await _faceDetector.processImage(inputImage);
-
-      // 這裡我們用「模擬偵測」來測試與 Kotlin 的連動：
-      setState(() { _status = "AI 正在掃描畫面..."; });
-
-      // 模擬偵測到人臉
-      bool mockDetected = true;
-
-      if (mockDetected) {
-        setState(() { _status = "偵測成功：發現人臉！"; });
-        // 關鍵！呼叫你寫的 Kotlin Toast
-        _callNativeToast("AI 助理提示：發現使用者！");
+      if (_tempVideoPath == null) {
+        final byteData = await rootBundle.load('assets/test_face.mp4');
+        final directory = await getTemporaryDirectory();
+        final file = File('${directory.path}/temp_video.mp4');
+        await file.writeAsBytes(byteData.buffer.asUint8List(
+            byteData.offsetInBytes, byteData.lengthInBytes));
+        _tempVideoPath = file.path;
+        print("影片已成功搬移至: $_tempVideoPath");
       }
 
+      final String? thumbnailPath = await VideoThumbnail.thumbnailFile(
+        video: _tempVideoPath!,
+        thumbnailPath: (await getTemporaryDirectory()).path,
+        imageFormat: ImageFormat.JPEG,
+        timeMs: _controller.value.position.inMilliseconds,
+        quality: 50
+      );
+
+      if(thumbnailPath != null) {
+        File imageFile = File(thumbnailPath);
+        Uint8List imageBytes = await imageFile.readAsBytes();
+
+        final dynamic result = await platform.invokeMethod(
+            'analyzeFrame', imageBytes);
+
+        if (result != null && result['hasFace'] == true) {
+          double leftProbability = result['leftEye'];
+          double rightProbability = result['rightEye'];
+
+          setState(() {
+            _status =
+            "Kotlin 辨識成功！\n左眼開度: ${leftProbability.toStringAsFixed(
+                2)}\n右眼開度: ${rightProbability.toStringAsFixed(2)}";
+          });
+
+          // 如果眼睛閉起來 (小於 0.2)，叫 Kotlin 跳警告
+          if (leftProbability < 0.2 && rightProbability < 0.2) {
+            platform.invokeMethod(
+                'showToast', {"message": "警告：偵測到疲勞閉眼！"});
+          }
+        } else {
+          setState(() {
+            _status = "Kotlin 沒看到人臉...";
+          });
+        }
+      }
     } catch (e) {
-      print("辨識出錯: $e");
+      debugPrint("辨識出錯: $e");
     } finally {
       _isProcessing = false;
     }
