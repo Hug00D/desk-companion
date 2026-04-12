@@ -13,6 +13,7 @@ public record RegisterUserRequest(
         @Size(min = 8, max = 100)
         String password,
 
+        @NotBlank
         @Size(max = 100)
         String displayName
 ) {}

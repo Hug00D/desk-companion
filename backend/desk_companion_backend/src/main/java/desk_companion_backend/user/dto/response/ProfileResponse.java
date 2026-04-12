@@ -4,7 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record ProfileResponse(
-        UUID id,
+        UUID id, //same with user id
         String displayName,
         String avatarUrl,
         OffsetDateTime createdAt,

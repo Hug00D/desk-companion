@@ -13,7 +13,6 @@ public class UserMapper {
         return new UserResponse(
                 user.getId(),
                 user.getEmail(),
-                user.getGoogleId(),
                 user.getAuthProvider().name(),
                 user.isEmailVerified(),
                 user.getAccountStatus().name(),

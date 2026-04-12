@@ -39,7 +39,6 @@ public class ProfileServiceImpl implements ProfileService {
 
         // 如果你是 shared PK + @MapsId，通常只要 setUser(user)
         // 如果目前 entity 還沒設好，可先保守補 setId(user.getId())
-        profile.setId(user.getId());
         profile.setUser(user);
         profile.setDisplayName(displayName);
         profile.setAvatarUrl(avatarUrl);
