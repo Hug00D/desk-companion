@@ -39,6 +39,7 @@ dependencies:
   google_mlkit_face_detection: ^0.11.0 # 用來做人臉辨識
   path_provider: ^2.1.2             # 用來處理暫存檔案
   video_thumbnail: ^0.5.3
+  rive: ^0.13.0
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/test_face.mp4
+    - assets/test.riv
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,4 +1,4 @@
-package com.example.desk_buddy
+package com.example.desk_companion
 
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -15,7 +15,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.example.desk_buddy/cv_channel"
+    private val CHANNEL = "com.example.desk_companion/cv_channel"
     private  lateinit var cameraExecutor: ExecutorService
 
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
