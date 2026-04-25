@@ -131,6 +131,11 @@ app.*.symbols
 
 # Obfuscation related
 app.*.map.json
+*.mp4
+*.mov
+*.avi
+*.wmv
+*.wmv
 
 # Android Studio will place build artifacts here
 /android/app/debug

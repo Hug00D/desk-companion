@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.camera" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <application
-        android:label="desk_buddy"
+        android:label="desk_companion"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

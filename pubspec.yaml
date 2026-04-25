@@ -1,3 +1,5 @@
+
+name: desk_companion
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -33,6 +35,11 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  video_player: ^2.8.1              # 用來播你的測試影片
+  google_mlkit_face_detection: ^0.11.0 # 用來做人臉辨識
+  path_provider: ^2.1.2             # 用來處理暫存檔案
+  video_thumbnail: ^0.5.3
+  rive: ^0.13.0
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +62,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/test_face.mp4
+    - assets/test.riv
 
   # To add assets to your application, add an assets section, like this:
   # assets:

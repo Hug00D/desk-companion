@@ -1,34 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'face_detection_screen.dart';
+import 'login_screen.dart';
 
-void main() => runApp(const MyApp());
+void main() => runApp(const DeskCompanionApp());
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  static const platform = MethodChannel('com.example.desk_buddy/cv_channel');
-
-  Future<void> _showNativeToast() async {
-    try {
-      final String result = await platform.invokeMethod('showToast', {"message": "哈囉！這是來自 Android 的原生訊息"});
-      print(result);
-    } on PlatformException catch (e) {
-      print("Failed to call native: '${e.message}'.");
-    }
-  }
+class DeskCompanionApp extends StatelessWidget {
+  const DeskCompanionApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(title: const Text('Desk Buddy 雛型')),
-        body: Center(
-          child: ElevatedButton(
-            onPressed: _showNativeToast,
-            child: const Text('測試原生溝通'),
-          ),
-        ),
+      title: 'Desk Companion',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        primaryColor: const Color(0xFF57BEEB),
       ),
+      // 之後如果你寫好了 LoginScreen，就把這裡換掉
+      home: const LoginScreen(),
     );
   }
 }
