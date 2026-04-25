@@ -1,0 +1,31 @@
+### 變數設定 (方便切換環境)
+@baseUrl = http://localhost:8080/api/v1
+
+### 1. 註冊新帳號 (Register)
+POST {{baseUrl}}/users/register
+Content-Type: application/json
+
+{
+  "email": "test_user@example.com",
+  "password": "Password123!",
+  "displayName": "桌面小夥伴"
+}
+
+### 2. 帳號登入 (Login)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test_user@example.com",
+  "password": "Password123!"
+}
+
+### 3. 測試驗證失敗 (故意傳送格式錯誤的 Email)
+POST {{baseUrl}}/users/register
+Content-Type: application/json
+
+{
+  "email": "invalid-email",
+  "password": "123",
+  "displayName": ""
+}
