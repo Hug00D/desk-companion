@@ -2,6 +2,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:rive/rive.dart' as rv;
 import 'face_detection_screen.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -21,14 +23,71 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleAction() async {
-    if (_emailController.text.isEmpty) return;
+    final email = _emailController.text.trim();
+    final password = _pwController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("請填寫 Email 與密碼")));
+      return;
+    }
+
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
-    );
+
+    try {
+      // 模擬器連本地後端 IP
+      const String baseUrl = "http://10.0.2.2:8080/api/v1";
+
+      final url = _isSignUp
+          ? Uri.parse("$baseUrl/users/register")
+          : Uri.parse("$baseUrl/auth/login");
+
+      // 根據文件構造 Request Body
+      final Map<String, dynamic> requestBody = {
+        "email": email,
+        "password": password,
+      };
+
+      if (_isSignUp) {
+        // 註冊時必須多傳 displayName
+        requestBody["displayName"] = "New User"; // 之後可以加一個欄位讓使用者填
+      }
+
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(requestBody),
+      );
+
+      if (!mounted) return;
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // 成功！
+        print("Success: ${data['message'] ?? 'Action Successful'}");
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
+        );
+      } else {
+        // 依照文件處理錯誤格式 (BusinessException / Validation)
+        String errorMsg = data['message'] ?? "未知錯誤";
+        if (data['errorCode'] == "VALIDATION_ERROR" && data['details'] != null) {
+          errorMsg = "驗證失敗: ${data['details']}";
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMsg), backgroundColor: Colors.redAccent),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("網路連線失敗: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
