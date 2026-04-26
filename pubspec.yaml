@@ -40,6 +40,7 @@ dependencies:
   path_provider: ^2.1.2             # 用來處理暫存檔案
   video_thumbnail: ^0.5.3
   rive: ^0.13.0
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
