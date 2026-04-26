@@ -1,7 +1,14 @@
-### 變數設定 (方便切換環境)
-@baseUrl = http://localhost:8080/api/v1
+### Desk Companion Backend API smoke tests
+### Use with VS Code REST Client or IntelliJ HTTP Client
 
-### 1. 註冊新帳號 (Register)
+### Environment variables
+@baseUrl = http://localhost:8080/api/v1
+### IMPORTANT: must be a valid UUID format, otherwise GET/PUT profile returns HTTP 400.
+@userId = 73f8a65c-fd87-41f1-ac68-3a00b83e1211
+
+
+### 1) Register new account
+# @name register
 POST {{baseUrl}}/users/register
 Content-Type: application/json
 
@@ -11,7 +18,9 @@ Content-Type: application/json
   "displayName": "桌面小夥伴"
 }
 
-### 2. 帳號登入 (Login)
+
+### 2) Login
+# @name login
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
@@ -20,7 +29,8 @@ Content-Type: application/json
   "password": "Password123!"
 }
 
-### 3. 測試驗證失敗 (故意傳送格式錯誤的 Email)
+
+### 3) Validation failure test (invalid email + short password + blank displayName)
 POST {{baseUrl}}/users/register
 Content-Type: application/json
 
@@ -28,4 +38,43 @@ Content-Type: application/json
   "email": "invalid-email",
   "password": "123",
   "displayName": ""
+}
+
+
+### 4) Get profile by userId
+### Option A: manually set @userId above with a valid UUID
+GET {{baseUrl}}/users/{{userId}}/profile
+Content-Type: application/json
+
+
+### 4-2) Get profile from register response (VS Code REST Client)
+### Uses id from step 1 response body: { "id": "..." }
+GET {{baseUrl}}/users/{{register.response.body.$.id}}/profile
+Content-Type: application/json
+
+
+### 4-3) Get profile from login response (VS Code REST Client)
+### Uses userId from step 2 response body: { "userId": "..." }
+GET {{baseUrl}}/users/{{login.response.body.$.userId}}/profile
+Content-Type: application/json
+
+
+### 5) Update profile by userId
+### Option A: manually set @userId above with a valid UUID
+PUT {{baseUrl}}/users/{{userId}}/profile
+Content-Type: application/json
+
+{
+  "displayName": "桌面小夥伴-更新",
+  "avatarUrl": "https://example.com/avatar.png"
+}
+
+
+### 5-2) Update profile from login response (VS Code REST Client)
+PUT {{baseUrl}}/users/{{login.response.body.$.userId}}/profile
+Content-Type: application/json
+
+{
+  "displayName": "桌面小夥伴-更新-2",
+  "avatarUrl": "https://example.com/avatar-2.png"
 }

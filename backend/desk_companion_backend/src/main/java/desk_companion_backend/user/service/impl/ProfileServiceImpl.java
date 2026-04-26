@@ -37,8 +37,7 @@ public class ProfileServiceImpl implements ProfileService {
     public Profile createProfile(User user, String displayName, String avatarUrl) {
         Profile profile = new Profile();
 
-        // 如果你是 shared PK + @MapsId，通常只要 setUser(user)
-        // 如果目前 entity 還沒設好，可先保守補 setId(user.getId())
+        
         profile.setUser(user);
         profile.setDisplayName(displayName);
         profile.setAvatarUrl(avatarUrl);
