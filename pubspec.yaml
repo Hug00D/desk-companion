@@ -36,7 +36,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   video_player: ^2.8.1              # 用來播你的測試影片
-  google_mlkit_face_detection: ^0.11.0 # 用來做人臉辨識
+  google_mlkit_face_detection: ^0.13.2 # 用來做人臉辨識
   path_provider: ^2.1.2             # 用來處理暫存檔案
   video_thumbnail: ^0.5.3
   rive: ^0.13.0
