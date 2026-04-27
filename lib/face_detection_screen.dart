@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:rive/rive.dart' as rv; // 使用 rv 避免命名空間衝突
+import 'vision/pose_calculator.dart';
 import 'dart:io' as io;
 
 class FaceDetectionScreen extends StatefulWidget {
@@ -31,8 +32,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   bool _showDebugPanel = false;
 
   static const double _eyeClosedThreshold = 0.2;
-  static const int _attentionClosedFrames = 3;
-  static const int _fatigueClosedFrames = 6;
+  static const int _attentionClosedFrames = 1;
+  static const int _fatigueClosedFrames = 3;
   static const Duration _alertCooldown = Duration(seconds: 3);
 
   int _closedEyeFrameCount = 0;
@@ -63,131 +64,123 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         });
   }
 
+  // --- 核心偵測函式 ---
   Future<void> _detectFaceFromVideo() async {
     if (_isProcessing || !_controller.value.isInitialized) return;
     _isProcessing = true;
+
+    String? thumbnailPath;
 
     try {
       if (_tempVideoPath == null) {
         final byteData = await rootBundle.load('assets/test_face.mp4');
         final directory = await getTemporaryDirectory();
         final file = io.File('${directory.path}/temp_video.mp4');
-        await file.writeAsBytes(
-          byteData.buffer.asUint8List(
-            byteData.offsetInBytes,
-            byteData.lengthInBytes,
-          ),
-        );
+        await file.writeAsBytes(byteData.buffer.asUint8List(
+          byteData.offsetInBytes, byteData.lengthInBytes,
+        ));
         _tempVideoPath = file.path;
-        debugPrint("影片已成功搬移至: $_tempVideoPath");
       }
 
-      final String? thumbnailPath = await VideoThumbnail.thumbnailFile(
+      thumbnailPath = await VideoThumbnail.thumbnailFile(
         video: _tempVideoPath!,
         thumbnailPath: (await getTemporaryDirectory()).path,
         imageFormat: ImageFormat.JPEG,
         timeMs: _controller.value.position.inMilliseconds,
-        quality: 100,
+        quality: 20,
       );
 
-      if (thumbnailPath == null) {
-        if (mounted) {
-          setState(() {
-            _status = "抽幀失敗：無法取得影片畫面";
-          });
-        }
-        return;
-      }
+      if (thumbnailPath == null) return;
 
       final imageFile = io.File(thumbnailPath);
       final Uint8List imageBytes = await imageFile.readAsBytes();
 
-      final dynamic result = await platform.invokeMethod(
-        'analyzeFrame',
-        imageBytes,
-      );
+      final dynamic result = await platform.invokeMethod('analyzeFrame', imageBytes);
 
-      debugPrint("Kotlin result: $result");
+      if (result != null) {
+        double? shoulderWidth; // 統一用這個名字
 
-      if (result != null && result['hasFace'] == true) {
-        final double? leftProbability = (result['leftEye'] as num?)?.toDouble();
-        final double? rightProbability =
-        (result['rightEye'] as num?)?.toDouble();
-
-        _hasFace = true;
-        _leftEyeOpenValue = leftProbability;
-        _rightEyeOpenValue = rightProbability;
-
-        if (leftProbability == null || rightProbability == null) {
-          _resetFatigueState(resetLevel: false);
-          if (mounted) {
-            setState(() {
-              _status = "偵測到人臉，但眼睛開度資料為空";
-            });
-          }
-          return;
-        }
-
-        final bool bothEyesClosed =
-            leftProbability < _eyeClosedThreshold &&
-                rightProbability < _eyeClosedThreshold;
-
-        if (bothEyesClosed) {
-          _closedEyeFrameCount++;
-        } else {
-          _closedEyeFrameCount = 0;
-        }
-
-        _updateFatigueLevel();
-
-        if (mounted) {
-          setState(() {
-            _status =
-            "Kotlin 辨識成功\n"
-                "左眼開度: ${leftProbability.toStringAsFixed(2)}\n"
-                "右眼開度: ${rightProbability.toStringAsFixed(2)}\n"
-                "連續閉眼次數: $_closedEyeFrameCount\n"
-                "目前狀態: $_fatigueLevel";
-          });
-        }
-
-        if (_closedEyeFrameCount >= _fatigueClosedFrames) {
-          await _showFatigueAlert(
-            leftProbability: leftProbability,
-            rightProbability: rightProbability,
+        if (result['hasPose'] == true) {
+          shoulderWidth = PoseCalculator.getWidth(
+            (result['lsX'] as num).toDouble(), (result['lsY'] as num).toDouble(),
+            (result['rsX'] as num).toDouble(), (result['rsY'] as num).toDouble(),
           );
         }
-      } else {
-        _hasFace = false;
-        _leftEyeOpenValue = null;
-        _rightEyeOpenValue = null;
-        _resetFatigueState();
+
+        if (result['hasFace'] == true) {
+          _hasFace = true;
+          _leftEyeOpenValue = (result['leftEye'] as num).toDouble();
+          _rightEyeOpenValue = (result['rightEye'] as num).toDouble();
+
+          if (_leftEyeOpenValue! < _eyeClosedThreshold && _rightEyeOpenValue! < _eyeClosedThreshold) {
+            _closedEyeFrameCount++;
+          } else {
+            _closedEyeFrameCount = 0;
+          }
+
+          // 呼叫判斷函式
+          _updateFatigueLevel(shoulderWidth);
+
+          if (_closedEyeFrameCount >= _fatigueClosedFrames) {
+            _showFatigueAlert(
+              leftProbability: _leftEyeOpenValue!,
+              rightProbability: _rightEyeOpenValue!,
+            );
+          }
+        } else {
+          _hasFace = false;
+          _leftEyeOpenValue = null;
+          _rightEyeOpenValue = null;
+          _resetFatigueState(resetLevel: false);
+          _updateFatigueLevel(shoulderWidth);
+        }
 
         if (mounted) {
           setState(() {
-            _status = "Kotlin 沒看到人臉...";
+            // 這裡統一變數名稱，消除紅線
+            _status = "寬度: ${shoulderWidth?.toStringAsFixed(1) ?? 'N/A'} px\n"
+                "左眼: ${_leftEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'} 右眼: ${_rightEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'}\n"
+                "狀態: $_fatigueLevel";
           });
         }
       }
     } catch (e) {
-      debugPrint("辨識出錯: $e");
-      if (mounted) {
-        setState(() {
-          _status = "辨識出錯: $e";
-        });
-      }
+      debugPrint("辨識錯誤: $e");
     } finally {
       _isProcessing = false;
+      if (thumbnailPath != null) {
+        final file = io.File(thumbnailPath);
+        if (file.existsSync()) {
+          try { file.deleteSync(); } catch (e) { debugPrint("刪檔失敗"); }
+        }
+      }
     }
   }
 
-  void _updateFatigueLevel() {
+// --- 以下 Function 確保都有被呼叫到 ---
+
+  void _updateFatigueLevel(double? shoulderWidth) {
+    // --- 第一優先：先看閉眼次數，次數夠多直接變紅 ---
     if (_closedEyeFrameCount >= _fatigueClosedFrames) {
-      _fatigueLevel = "疲勞警告";
-    } else if (_closedEyeFrameCount >= _attentionClosedFrames) {
-      _fatigueLevel = "注意";
+      _fatigueLevel = "疲勞警告：偵測到閉眼";
+      return; // 強制結束，確保顯示紅色
+    }
+
+    // --- 第二優先：次數中等變黃 ---
+    if (_closedEyeFrameCount >= _attentionClosedFrames) {
+      _fatigueLevel = "注意：眨眼頻繁";
+      return; // 強制結束，顯示黃色
+    }
+
+    // --- 第三優先：沒閉眼才看坐姿 ---
+    if (shoulderWidth != null) {
+      if (shoulderWidth > 780) { // 坐姿太近也給黃色
+        _fatigueLevel = "坐姿警告：離螢幕太近";
+      } else {
+        _fatigueLevel = "狀態：正常"; // 藍色
+      }
     } else {
-      _fatigueLevel = "正常";
+      _fatigueLevel = _hasFace ? "狀態：正常" : "尚未偵測到完整使用者";
     }
   }
 
@@ -203,18 +196,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     required double rightProbability,
   }) async {
     final now = DateTime.now();
-
-    if (_lastAlertTime != null &&
-        now.difference(_lastAlertTime!) < _alertCooldown) {
+    if (_lastAlertTime != null && now.difference(_lastAlertTime!) < _alertCooldown) {
       return;
     }
-
     _lastAlertTime = now;
 
-    final message =
-        "警告：偵測到連續閉眼，疑似疲勞！\n"
-        "左眼: ${leftProbability.toStringAsFixed(2)}，"
-        "右眼: ${rightProbability.toStringAsFixed(2)}";
+    final message = "警告：偵測到連續閉眼，請立刻休息！";
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -249,13 +236,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Color _getStatusColor() {
-    switch (_fatigueLevel) {
-      case "疲勞警告":
-        return const Color(0xFFE85D75);
-      case "注意":
-        return const Color(0xFFFFB648);
-      default:
-        return const Color(0xFF68C7F2);
+    // 1. 優先判斷疲勞（紅色）
+    if (_fatigueLevel.contains("疲勞警告")) {
+      return const Color(0xFFE85D75);
+    }
+    // 2. 判斷注意或坐姿（黃/橘色）
+    else if (_fatigueLevel.contains("注意") || _fatigueLevel.contains("坐姿警告")) {
+      return const Color(0xFFFFB648);
+    }
+    // 3. 預設（藍色/正常）
+    else {
+      return const Color(0xFF68C7F2);
     }
   }
 
@@ -264,13 +255,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       return "尚未偵測到使用者，請確認畫面與光線。";
     }
 
-    switch (_fatigueLevel) {
-      case "疲勞警告":
-        return "偵測到持續閉眼，建議先休息一下。";
-      case "注意":
-        return "似乎有些疲倦了，記得留意狀態。";
-      default:
-        return "目前狀態穩定，請保持節奏。";
+    // 使用 contains 檢查關鍵字，不要用 switch 寫死
+    if (_fatigueLevel.contains("疲勞警告")) {
+      return "偵測到持續閉眼，建議先休息一下。";
+    } else if (_fatigueLevel.contains("注意")) {
+      return "似乎有些疲倦了，記得留意狀態。";
+    } else if (_fatigueLevel.contains("坐姿警告")) {
+      return "你靠得太近了，請調整坐姿保護眼睛。";
+    } else {
+      return "目前狀態穩定，請保持節奏。";
     }
   }
 

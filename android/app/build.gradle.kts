@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.desk_companion"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -25,7 +25,7 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -57,5 +57,6 @@ dependencies {
     // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
     implementation("androidx.camera:camera-view:${camerax_version}")
     implementation("com.google.mlkit:face-detection:16.1.6")
+    implementation("com.google.mlkit:pose-detection:18.0.0-beta3")
 
 }

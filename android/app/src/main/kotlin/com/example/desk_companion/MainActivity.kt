@@ -1,39 +1,45 @@
 package com.example.desk_companion
 
-import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.annotation.NonNull
-import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.pose.PoseDetection
+import com.google.mlkit.vision.pose.PoseLandmark
+import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.desk_companion/cv_channel"
-    private  lateinit var cameraExecutor: ExecutorService
+    private lateinit var cameraExecutor: ExecutorService
 
+    // --- Face Detector 配置 ---
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
         .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
         .build()
+    private val faceDetector = FaceDetection.getClient(faceDetectorOptions)
 
-    private val detector = FaceDetection.getClient(faceDetectorOptions)
+    // --- Pose Detector 配置 ---
+    private val poseOptions = PoseDetectorOptions.Builder()
+        .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
+        .build()
+    private val poseDetector = PoseDetection.getClient(poseOptions)
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine){
         super.configureFlutterEngine(flutterEngine)
-
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when(call.method) {
                 "showToast" -> {
-                    val message = call.argument<String>("meaasge")
+                    val message = call.argument<String>("message")
                     Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
                     result.success("OK")
                 }
@@ -57,28 +63,41 @@ class MainActivity: FlutterActivity() {
         try{
             val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
             val image = InputImage.fromBitmap(bitmap, 0)
+            val resultMap = mutableMapOf<String, Any>()
 
-            detector.process(image)
-                .addOnSuccessListener { faces ->
-                    if(faces.isNotEmpty()){
-                        val face = faces[0]
-                        val leftEye = face.leftEyeOpenProbability ?: -1f
-                        val rightEye = face.rightEyeOpenProbability ?: -1f
+            // 1. 先啟動 Pose 偵測 (抓肩膀)
+            poseDetector.process(image)
+                .addOnSuccessListener { pose ->
+                    val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+                    val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
 
-                        val resultMap = mapOf(
-                            "hasFace" to true,
-                            "leftEye" to leftEye,
-                            "rightEye" to rightEye,
-                            "faceCount" to faces.size
-                        )
-                        result.success(resultMap)
+                    if (leftShoulder != null && rightShoulder != null) {
+                        resultMap["hasPose"] = true
+                        resultMap["lsX"] = leftShoulder.position.x
+                        resultMap["lsY"] = leftShoulder.position.y
+                        resultMap["rsX"] = rightShoulder.position.x
+                        resultMap["rsY"] = rightShoulder.position.y
                     } else {
-                        result.success(mapOf("hasFace" to false))
+                        resultMap["hasPose"] = false
                     }
+
+                    // 2. 嵌套執行 Face 偵測 (抓眼睛)
+                    faceDetector.process(image)
+                        .addOnSuccessListener { faces ->
+                            if(faces.isNotEmpty()){
+                                val face = faces[0]
+                                resultMap["hasFace"] = true
+                                resultMap["leftEye"] = face.leftEyeOpenProbability ?: -1f
+                                resultMap["rightEye"] = face.rightEyeOpenProbability ?: -1f
+                            } else {
+                                resultMap["hasFace"] = false
+                            }
+                            // 3. 兩邊都跑完了，一次回傳給 Flutter
+                            result.success(resultMap)
+                        }
+                        .addOnFailureListener { e -> result.error("FACE_ERROR", e.message, null) }
                 }
-                .addOnFailureListener { e ->
-                    result.error("ML_KIT_ERROR", e.message, null)
-                }
+                .addOnFailureListener { e -> result.error("POSE_ERROR", e.message, null) }
         } catch (e: Exception) {
             result.error("PROCESS_ERROR", e.message, null)
         }
@@ -86,9 +105,10 @@ class MainActivity: FlutterActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        detector.close() // 釋放 AI 資源
+        faceDetector.close()
+        poseDetector.close() // 釋放 Pose 資源
         if (::cameraExecutor.isInitialized) {
             cameraExecutor.shutdown()
         }
     }
-} // <-- 這裡才是結束 MainActivity 類別
+}
