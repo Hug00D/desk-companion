@@ -1,4 +1,9 @@
 allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
     subprojects {
         configurations.all {
             resolutionStrategy.eachDependency {
