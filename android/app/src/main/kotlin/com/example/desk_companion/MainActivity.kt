@@ -26,7 +26,7 @@ class MainActivity : FlutterActivity() {
     private var faceLandmarker: FaceLandmarker? = null
     private var faceLandmarkerInitError: String? = null
 
-    // Pose Detector：Step 2 先保留 ML Kit Pose，避免 Face / Pose 一次全換造成除錯困難。
+    // Pose Detector：目前先保留 ML Kit Pose，避免 Face / Pose 一次全換造成除錯困難。
     private val poseOptions = PoseDetectorOptions.Builder()
         .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
         .build()
@@ -65,6 +65,11 @@ class MainActivity : FlutterActivity() {
 
     private fun initializeFaceLandmarker() {
         try {
+            val assetSize = assets.open(faceModelAssetPath).use { it.available() }
+            if (assetSize <= 0) {
+                throw IllegalStateException("$faceModelAssetPath 存在，但檔案大小為 0，請重新下載正確的 MediaPipe task 模型。")
+            }
+
             val baseOptions = BaseOptions.builder()
                 .setModelAssetPath(faceModelAssetPath)
                 .build()
@@ -75,14 +80,13 @@ class MainActivity : FlutterActivity() {
                 .setNumFaces(1)
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
-                .setMinTrackingConfidence(0.5f)
                 .build()
 
             faceLandmarker = FaceLandmarker.createFromOptions(this, options)
             faceLandmarkerInitError = null
         } catch (e: Exception) {
             faceLandmarker = null
-            faceLandmarkerInitError = e.message ?: e.toString()
+            faceLandmarkerInitError = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
         }
     }
 
@@ -97,70 +101,83 @@ class MainActivity : FlutterActivity() {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
             val resultMap = mutableMapOf<String, Any>()
 
-            // 1. Pose 偵測：目前先保留 ML Kit Pose，維持肩寬 / 坐姿資料。
+            // 先跑 Face EAR。即使 Pose 失敗，也不要阻斷疲勞偵測。
+            appendFaceResult(bitmap, resultMap)
+
+            // Pose 只是坐姿輔助資料；失敗時回傳 poseError，Flutter 仍可顯示 EAR。
             poseDetector.process(inputImage)
                 .addOnSuccessListener { pose ->
-                    val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
-                    val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
-
-                    if (leftShoulder != null && rightShoulder != null) {
-                        resultMap["hasPose"] = true
-                        resultMap["lsX"] = leftShoulder.position.x
-                        resultMap["lsY"] = leftShoulder.position.y
-                        resultMap["rsX"] = rightShoulder.position.x
-                        resultMap["rsY"] = rightShoulder.position.y
-                    } else {
-                        resultMap["hasPose"] = false
-                    }
-
-                    // 2. Face 偵測：改用 MediaPipe Face Landmarker 取得 landmarks，再計算六點 EAR。
-                    val landmarker = faceLandmarker
-                    if (landmarker == null) {
-                        resultMap["hasFace"] = false
-                        resultMap["eyeMetricMode"] = "MEDIAPIPE_MODEL_NOT_READY"
-                        resultMap["mediaPipeError"] = faceLandmarkerInitError ?: "FaceLandmarker 尚未初始化"
-                        result.success(resultMap)
-                        return@addOnSuccessListener
-                    }
-
-                    try {
-                        val mpImage = BitmapImageBuilder(bitmap).build()
-                        val faceResult = landmarker.detect(mpImage)
-                        val faceLandmarks = faceResult.faceLandmarks()
-
-                        if (faceLandmarks.isNotEmpty()) {
-                            val landmarks = faceLandmarks[0]
-                            val leftEar = calculateMediaPipeEar(landmarks, LEFT_EYE_INDICES)
-                            val rightEar = calculateMediaPipeEar(landmarks, RIGHT_EYE_INDICES)
-
-                            resultMap["hasFace"] = true
-                            resultMap["eyeMetricMode"] = "MEDIAPIPE_EAR"
-                            resultMap["leftEAR"] = leftEar
-                            resultMap["rightEAR"] = rightEar
-
-                            // 保留 Flutter 端既有欄位名稱，讓 Dart 端不需要大改。
-                            resultMap["leftEye"] = leftEar
-                            resultMap["rightEye"] = rightEar
-                            resultMap["leftEyeProbability"] = -1f
-                            resultMap["rightEyeProbability"] = -1f
-                        } else {
-                            resultMap["hasFace"] = false
-                            resultMap["eyeMetricMode"] = "MEDIAPIPE_NO_FACE"
-                        }
-
-                        result.success(resultMap)
-                    } catch (e: Exception) {
-                        resultMap["hasFace"] = false
-                        resultMap["eyeMetricMode"] = "MEDIAPIPE_RUNTIME_ERROR"
-                        resultMap["mediaPipeError"] = e.message ?: e.toString()
-                        result.success(resultMap)
-                    }
+                    appendPoseResult(pose, resultMap)
+                    result.success(resultMap)
                 }
                 .addOnFailureListener { e ->
-                    result.error("POSE_ERROR", e.message, null)
+                    resultMap["hasPose"] = false
+                    resultMap["poseError"] = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
+                    result.success(resultMap)
                 }
         } catch (e: Exception) {
-            result.error("PROCESS_ERROR", e.message, null)
+            result.error("PROCESS_ERROR", "${e::class.java.simpleName}: ${e.message ?: e.toString()}", null)
+        }
+    }
+
+    private fun appendFaceResult(
+        bitmap: android.graphics.Bitmap,
+        resultMap: MutableMap<String, Any>
+    ) {
+        val landmarker = faceLandmarker
+        if (landmarker == null) {
+            resultMap["hasFace"] = false
+            resultMap["eyeMetricMode"] = "MEDIAPIPE_MODEL_NOT_READY"
+            resultMap["mediaPipeError"] = faceLandmarkerInitError ?: "FaceLandmarker 尚未初始化"
+            return
+        }
+
+        try {
+            val mpImage = BitmapImageBuilder(bitmap).build()
+            val faceResult = landmarker.detect(mpImage)
+            val faceLandmarks = faceResult.faceLandmarks()
+
+            if (faceLandmarks.isNotEmpty()) {
+                val landmarks = faceLandmarks[0]
+                val leftEar = calculateMediaPipeEar(landmarks, LEFT_EYE_INDICES)
+                val rightEar = calculateMediaPipeEar(landmarks, RIGHT_EYE_INDICES)
+
+                resultMap["hasFace"] = leftEar > 0f && rightEar > 0f
+                resultMap["eyeMetricMode"] = "MEDIAPIPE_EAR"
+                resultMap["leftEAR"] = leftEar
+                resultMap["rightEAR"] = rightEar
+
+                // 保留 Flutter 端既有欄位名稱，讓 Dart 端不需要大改。
+                resultMap["leftEye"] = leftEar
+                resultMap["rightEye"] = rightEar
+                resultMap["leftEyeProbability"] = -1f
+                resultMap["rightEyeProbability"] = -1f
+            } else {
+                resultMap["hasFace"] = false
+                resultMap["eyeMetricMode"] = "MEDIAPIPE_NO_FACE"
+            }
+        } catch (e: Exception) {
+            resultMap["hasFace"] = false
+            resultMap["eyeMetricMode"] = "MEDIAPIPE_RUNTIME_ERROR"
+            resultMap["mediaPipeError"] = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
+        }
+    }
+
+    private fun appendPoseResult(
+        pose: com.google.mlkit.vision.pose.Pose,
+        resultMap: MutableMap<String, Any>
+    ) {
+        val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
+        val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
+
+        if (leftShoulder != null && rightShoulder != null) {
+            resultMap["hasPose"] = true
+            resultMap["lsX"] = leftShoulder.position.x
+            resultMap["lsY"] = leftShoulder.position.y
+            resultMap["rsX"] = rightShoulder.position.x
+            resultMap["rsY"] = rightShoulder.position.y
+        } else {
+            resultMap["hasPose"] = false
         }
     }
 
