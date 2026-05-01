@@ -20,7 +20,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.desk_companion"
         // MediaPipe Tasks Vision requires Android SDK 24 or higher.
         minSdk = 24
@@ -43,22 +42,17 @@ flutter {
 }
 
 dependencies {
-    // 定義 CameraX 版本
-    val camerax_version = "1.3.0"
+    val cameraxVersion = "1.3.0"
 
-    // CameraX 核心庫
-    implementation("androidx.camera:camera-core:${camerax_version}")
-    implementation("androidx.camera:camera-camera2:${camerax_version}")
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // CameraX 生命週期庫（讓相機隨 Activity 自動開啟/關閉）
-    implementation("androidx.camera:camera-lifecycle:${camerax_version}")
+    // Step 2: 用 MediaPipe Face Landmarker 取代 ML Kit Face Detection，產生臉部 landmarks 並計算 EAR。
+    // 這個版本相對穩定；若 Gradle 顯示找不到版本，再依照本機 Maven 可用版本調整。
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
-    // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
-    implementation("androidx.camera:camera-view:${camerax_version}")
-
-    // Step 1: 先將人臉 / EAR 偵測從 ML Kit Face Detection 替換為 MediaPipe Face Landmarker。
-    implementation("com.google.mediapipe:tasks-vision:0.10.33")
-
-    // Pose Detector：暫時保留原本肩膀/坐姿邏輯，下一步再替換成 MediaPipe Pose Landmarker。
+    // Pose Detector 暫時保留 ML Kit，下一步再替換成 MediaPipe Pose Landmarker。
     implementation("com.google.mlkit:pose-detection:18.0.0-beta3")
 }
