@@ -22,9 +22,8 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.desk_companion"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // MediaPipe Tasks Vision requires Android SDK 24 or higher.
+        minSdk = 24
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -56,7 +55,10 @@ dependencies {
 
     // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
     implementation("androidx.camera:camera-view:${camerax_version}")
-    implementation("com.google.mlkit:face-detection:16.1.6")
-    implementation("com.google.mlkit:pose-detection:18.0.0-beta3")
 
+    // Step 1: 先將人臉 / EAR 偵測從 ML Kit Face Detection 替換為 MediaPipe Face Landmarker。
+    implementation("com.google.mediapipe:tasks-vision:0.10.33")
+
+    // Pose Detector：暫時保留原本肩膀/坐姿邏輯，下一步再替換成 MediaPipe Pose Landmarker。
+    implementation("com.google.mlkit:pose-detection:18.0.0-beta3")
 }
