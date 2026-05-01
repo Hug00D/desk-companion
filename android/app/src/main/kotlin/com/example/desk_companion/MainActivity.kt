@@ -84,9 +84,9 @@ class MainActivity : FlutterActivity() {
 
             faceLandmarker = FaceLandmarker.createFromOptions(this, options)
             faceLandmarkerInitError = null
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             faceLandmarker = null
-            faceLandmarkerInitError = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
+            faceLandmarkerInitError = buildMediaPipeInitError(t)
         }
     }
 
@@ -115,8 +115,8 @@ class MainActivity : FlutterActivity() {
                     resultMap["poseError"] = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
                     result.success(resultMap)
                 }
-        } catch (e: Exception) {
-            result.error("PROCESS_ERROR", "${e::class.java.simpleName}: ${e.message ?: e.toString()}", null)
+        } catch (t: Throwable) {
+            result.error("PROCESS_ERROR", "${t::class.java.simpleName}: ${t.message ?: t.toString()}", null)
         }
     }
 
@@ -156,10 +156,10 @@ class MainActivity : FlutterActivity() {
                 resultMap["hasFace"] = false
                 resultMap["eyeMetricMode"] = "MEDIAPIPE_NO_FACE"
             }
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             resultMap["hasFace"] = false
             resultMap["eyeMetricMode"] = "MEDIAPIPE_RUNTIME_ERROR"
-            resultMap["mediaPipeError"] = "${e::class.java.simpleName}: ${e.message ?: e.toString()}"
+            resultMap["mediaPipeError"] = "${t::class.java.simpleName}: ${t.message ?: t.toString()}"
         }
     }
 
@@ -178,6 +178,17 @@ class MainActivity : FlutterActivity() {
             resultMap["rsY"] = rightShoulder.position.y
         } else {
             resultMap["hasPose"] = false
+        }
+    }
+
+    private fun buildMediaPipeInitError(t: Throwable): String {
+        val rawMessage = "${t::class.java.simpleName}: ${t.message ?: t.toString()}"
+        val isMissingNativeLibrary = t is UnsatisfiedLinkError || rawMessage.contains("libmediapipe_tasks_vision_jni.so")
+
+        return if (isMissingNativeLibrary) {
+            "$rawMessage。此裝置或模擬器無法載入 MediaPipe Tasks Vision native library。若你使用 sdk gphone64 x86_64 模擬器，請改用 ARM64 實機測試，或先使用 ML Kit fallback。"
+        } else {
+            rawMessage
         }
     }
 
