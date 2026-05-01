@@ -5,7 +5,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:rive/rive.dart' as rv; // 使用 rv 避免命名空間衝突
+import 'package:rive/rive.dart' as rv;
 import 'vision/pose_calculator.dart';
 import 'dart:io' as io;
 
@@ -27,13 +27,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   double? _leftEyeOpenValue;
   double? _rightEyeOpenValue;
+  double? _leftEyeProbabilityValue;
+  double? _rightEyeProbabilityValue;
+  String _eyeMetricMode = "WAITING";
   bool _hasFace = false;
 
   bool _showDebugPanel = false;
 
-  static const double _eyeClosedThreshold = 0.2;
-  static const int _attentionClosedFrames = 1;
-  static const int _fatigueClosedFrames = 3;
+  // EAR 數值通常越小代表眼睛越閉；ML Kit probability 則越小代表越閉。
+  static const double _earClosedThreshold = 0.18;
+  static const double _probabilityClosedThreshold = 0.2;
+  static const int _attentionClosedFrames = 2;
+  static const int _fatigueClosedFrames = 5;
   static const Duration _alertCooldown = Duration(seconds: 3);
 
   int _closedEyeFrameCount = 0;
@@ -52,19 +57,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         _controller.setLooping(true);
       });
 
-    _detectionTimer =
-        Timer.periodic(const Duration(milliseconds: 200), (timer) {
-          if (!mounted) {
-            timer.cancel();
-            return;
-          }
-          if (_controller.value.isInitialized && !_isProcessing) {
-            _detectFaceFromVideo();
-          }
-        });
+    _detectionTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_controller.value.isInitialized && !_isProcessing) {
+        _detectFaceFromVideo();
+      }
+    });
   }
 
-  // --- 核心偵測函式 ---
   Future<void> _detectFaceFromVideo() async {
     if (_isProcessing || !_controller.value.isInitialized) return;
     _isProcessing = true;
@@ -76,10 +79,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         final byteData = await rootBundle.load('assets/test_face.mp4');
         final directory = await getTemporaryDirectory();
         final file = io.File('${directory.path}/temp_video.mp4');
-        await file.writeAsBytes(byteData.buffer.asUint8List(
-          byteData.offsetInBytes, byteData.lengthInBytes,
-        ));
+        await file.writeAsBytes(
+          byteData.buffer.asUint8List(
+            byteData.offsetInBytes,
+            byteData.lengthInBytes,
+          ),
+        );
         _tempVideoPath = file.path;
+        debugPrint("影片已成功搬移至: $_tempVideoPath");
       }
 
       thumbnailPath = await VideoThumbnail.thumbnailFile(
@@ -87,97 +94,133 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         thumbnailPath: (await getTemporaryDirectory()).path,
         imageFormat: ImageFormat.JPEG,
         timeMs: _controller.value.position.inMilliseconds,
-        quality: 20,
+        quality: 35,
       );
 
-      if (thumbnailPath == null) return;
+      if (thumbnailPath == null) {
+        if (mounted) {
+          setState(() => _status = "抽幀失敗：無法取得影片畫面");
+        }
+        return;
+      }
 
       final imageFile = io.File(thumbnailPath);
       final Uint8List imageBytes = await imageFile.readAsBytes();
-
       final dynamic result = await platform.invokeMethod('analyzeFrame', imageBytes);
 
       if (result != null) {
-        double? shoulderWidth; // 統一用這個名字
+        double? shoulderWidth;
 
         if (result['hasPose'] == true) {
           shoulderWidth = PoseCalculator.getWidth(
-            (result['lsX'] as num).toDouble(), (result['lsY'] as num).toDouble(),
-            (result['rsX'] as num).toDouble(), (result['rsY'] as num).toDouble(),
+            (result['lsX'] as num).toDouble(),
+            (result['lsY'] as num).toDouble(),
+            (result['rsX'] as num).toDouble(),
+            (result['rsY'] as num).toDouble(),
           );
         }
 
         if (result['hasFace'] == true) {
           _hasFace = true;
-          _leftEyeOpenValue = (result['leftEye'] as num).toDouble();
-          _rightEyeOpenValue = (result['rightEye'] as num).toDouble();
+          _eyeMetricMode = (result['eyeMetricMode'] as String?) ?? "UNKNOWN";
 
-          if (_leftEyeOpenValue! < _eyeClosedThreshold && _rightEyeOpenValue! < _eyeClosedThreshold) {
+          final leftEar = (result['leftEAR'] as num?)?.toDouble();
+          final rightEar = (result['rightEAR'] as num?)?.toDouble();
+          final leftProbability =
+              (result['leftEyeProbability'] as num?)?.toDouble() ??
+                  (result['leftEye'] as num?)?.toDouble();
+          final rightProbability =
+              (result['rightEyeProbability'] as num?)?.toDouble() ??
+                  (result['rightEye'] as num?)?.toDouble();
+
+          _leftEyeProbabilityValue = leftProbability;
+          _rightEyeProbabilityValue = rightProbability;
+
+          final bool hasValidEar =
+              leftEar != null && rightEar != null && leftEar > 0 && rightEar > 0;
+
+          if (hasValidEar) {
+            _leftEyeOpenValue = leftEar;
+            _rightEyeOpenValue = rightEar;
+          } else {
+            _leftEyeOpenValue = leftProbability;
+            _rightEyeOpenValue = rightProbability;
+          }
+
+          final bool bothEyesClosed = hasValidEar
+              ? leftEar < _earClosedThreshold && rightEar < _earClosedThreshold
+              : leftProbability != null &&
+                  rightProbability != null &&
+                  leftProbability < _probabilityClosedThreshold &&
+                  rightProbability < _probabilityClosedThreshold;
+
+          if (bothEyesClosed) {
             _closedEyeFrameCount++;
           } else {
             _closedEyeFrameCount = 0;
           }
 
-          // 呼叫判斷函式
           _updateFatigueLevel(shoulderWidth);
 
           if (_closedEyeFrameCount >= _fatigueClosedFrames) {
-            _showFatigueAlert(
-              leftProbability: _leftEyeOpenValue!,
-              rightProbability: _rightEyeOpenValue!,
-            );
+            _showFatigueAlert();
           }
         } else {
           _hasFace = false;
+          _eyeMetricMode = "NO_FACE";
           _leftEyeOpenValue = null;
           _rightEyeOpenValue = null;
+          _leftEyeProbabilityValue = null;
+          _rightEyeProbabilityValue = null;
           _resetFatigueState(resetLevel: false);
           _updateFatigueLevel(shoulderWidth);
         }
 
         if (mounted) {
           setState(() {
-            // 這裡統一變數名稱，消除紅線
-            _status = "寬度: ${shoulderWidth?.toStringAsFixed(1) ?? 'N/A'} px\n"
-                "左眼: ${_leftEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'} 右眼: ${_rightEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'}\n"
+            _status = "模式: $_eyeMetricMode\n"
+                "肩寬: ${shoulderWidth?.toStringAsFixed(1) ?? 'N/A'} px\n"
+                "左EAR/指標: ${_formatEyeValue(_leftEyeOpenValue)} 右EAR/指標: ${_formatEyeValue(_rightEyeOpenValue)}\n"
+                "左MLKit: ${_formatEyeValue(_leftEyeProbabilityValue)} 右MLKit: ${_formatEyeValue(_rightEyeProbabilityValue)}\n"
+                "連續閉眼: $_closedEyeFrameCount\n"
                 "狀態: $_fatigueLevel";
           });
         }
       }
     } catch (e) {
       debugPrint("辨識錯誤: $e");
+      if (mounted) setState(() => _status = "辨識錯誤: $e");
     } finally {
       _isProcessing = false;
       if (thumbnailPath != null) {
         final file = io.File(thumbnailPath);
         if (file.existsSync()) {
-          try { file.deleteSync(); } catch (e) { debugPrint("刪檔失敗"); }
+          try {
+            file.deleteSync();
+          } catch (_) {
+            debugPrint("刪除暫存縮圖失敗");
+          }
         }
       }
     }
   }
 
-// --- 以下 Function 確保都有被呼叫到 ---
-
   void _updateFatigueLevel(double? shoulderWidth) {
-    // --- 第一優先：先看閉眼次數，次數夠多直接變紅 ---
     if (_closedEyeFrameCount >= _fatigueClosedFrames) {
-      _fatigueLevel = "疲勞警告：偵測到閉眼";
-      return; // 強制結束，確保顯示紅色
+      _fatigueLevel = "疲勞警告：EAR 閉眼";
+      return;
     }
 
-    // --- 第二優先：次數中等變黃 ---
     if (_closedEyeFrameCount >= _attentionClosedFrames) {
-      _fatigueLevel = "注意：眨眼頻繁";
-      return; // 強制結束，顯示黃色
+      _fatigueLevel = "注意：EAR 偏低";
+      return;
     }
 
-    // --- 第三優先：沒閉眼才看坐姿 ---
     if (shoulderWidth != null) {
-      if (shoulderWidth > 780) { // 坐姿太近也給黃色
+      if (shoulderWidth > 780) {
         _fatigueLevel = "坐姿警告：離螢幕太近";
       } else {
-        _fatigueLevel = "狀態：正常"; // 藍色
+        _fatigueLevel = "狀態：正常";
       }
     } else {
       _fatigueLevel = _hasFace ? "狀態：正常" : "尚未偵測到完整使用者";
@@ -186,22 +229,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   void _resetFatigueState({bool resetLevel = true}) {
     _closedEyeFrameCount = 0;
-    if (resetLevel) {
-      _fatigueLevel = "正常";
-    }
+    if (resetLevel) _fatigueLevel = "狀態：正常";
   }
 
-  Future<void> _showFatigueAlert({
-    required double leftProbability,
-    required double rightProbability,
-  }) async {
+  Future<void> _showFatigueAlert() async {
     final now = DateTime.now();
     if (_lastAlertTime != null && now.difference(_lastAlertTime!) < _alertCooldown) {
       return;
     }
     _lastAlertTime = now;
 
-    final message = "警告：偵測到連續閉眼，請立刻休息！";
+    final message = "警告：EAR 偵測到連續閉眼，請休息一下！";
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -236,30 +274,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Color _getStatusColor() {
-    // 1. 優先判斷疲勞（紅色）
     if (_fatigueLevel.contains("疲勞警告")) {
       return const Color(0xFFE85D75);
-    }
-    // 2. 判斷注意或坐姿（黃/橘色）
-    else if (_fatigueLevel.contains("注意") || _fatigueLevel.contains("坐姿警告")) {
+    } else if (_fatigueLevel.contains("注意") || _fatigueLevel.contains("坐姿警告")) {
       return const Color(0xFFFFB648);
-    }
-    // 3. 預設（藍色/正常）
-    else {
+    } else {
       return const Color(0xFF68C7F2);
     }
   }
 
   String _getCompanionMessage() {
-    if (!_hasFace) {
-      return "尚未偵測到使用者，請確認畫面與光線。";
-    }
+    if (!_hasFace) return "尚未偵測到使用者，請確認畫面與光線。";
 
-    // 使用 contains 檢查關鍵字，不要用 switch 寫死
     if (_fatigueLevel.contains("疲勞警告")) {
-      return "偵測到持續閉眼，建議先休息一下。";
+      return "EAR 顯示你可能持續閉眼，先休息一下吧。";
     } else if (_fatigueLevel.contains("注意")) {
-      return "似乎有些疲倦了，記得留意狀態。";
+      return "眼睛開合指標偏低，記得留意自己的狀態。";
     } else if (_fatigueLevel.contains("坐姿警告")) {
       return "你靠得太近了，請調整坐姿保護眼睛。";
     } else {
@@ -268,8 +298,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   String _formatEyeValue(double? value) {
-    if (value == null) return "--";
-    return value.toStringAsFixed(2);
+    if (value == null || value < 0) return "--";
+    return value.toStringAsFixed(3);
   }
 
   Widget _buildTopStatusDot() {
@@ -292,7 +322,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Widget _buildAttentionBanner() {
-    if (_fatigueLevel != "注意") return const SizedBox.shrink();
+    if (!_fatigueLevel.contains("注意")) return const SizedBox.shrink();
 
     return Positioned(
       top: 96,
@@ -314,14 +344,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         ),
         child: Row(
           children: const [
-            Icon(
-              Icons.visibility_rounded,
-              color: Color(0xFFFFA94D),
-            ),
+            Icon(Icons.visibility_rounded, color: Color(0xFFFFA94D)),
             SizedBox(width: 10),
             Expanded(
               child: Text(
-                "偵測到短時間連續閉眼，請留意目前狀態。",
+                "EAR 指標偏低，請留意目前狀態。",
                 style: TextStyle(
                   color: Color(0xFF6B4E16),
                   fontSize: 15,
@@ -336,7 +363,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Widget _buildFatigueAlertCard() {
-    if (_fatigueLevel != "疲勞警告") return const SizedBox.shrink();
+    if (!_fatigueLevel.contains("疲勞警告")) return const SizedBox.shrink();
 
     return Center(
       child: Container(
@@ -381,7 +408,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              "偵測到使用者連續閉眼，可能出現疲勞狀態。\n建議暫時休息、喝水，或稍微離開螢幕。",
+              "EAR 偵測到使用者連續閉眼，可能出現疲勞狀態。\n建議暫時休息、喝水，或稍微離開螢幕。",
               style: TextStyle(
                 fontSize: 15,
                 height: 1.6,
@@ -498,7 +525,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  "開發資訊",
+                  "EAR 測試資訊",
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
@@ -506,8 +533,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Text("左眼開度：${_formatEyeValue(_leftEyeOpenValue)}"),
-                Text("右眼開度：${_formatEyeValue(_rightEyeOpenValue)}"),
+                Text("模式：$_eyeMetricMode"),
+                Text("左EAR/指標：${_formatEyeValue(_leftEyeOpenValue)}"),
+                Text("右EAR/指標：${_formatEyeValue(_rightEyeOpenValue)}"),
+                Text("左MLKit：${_formatEyeValue(_leftEyeProbabilityValue)}"),
+                Text("右MLKit：${_formatEyeValue(_rightEyeProbabilityValue)}"),
                 Text("連續閉眼次數：$_closedEyeFrameCount"),
                 Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
                 Text("目前狀態：$_fatigueLevel"),
@@ -534,7 +564,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _callNativeToast("手動觸發辨識結果！"),
+                        onPressed: () => _callNativeToast("EAR 測試提醒"),
                         icon: const Icon(Icons.notifications_active_rounded),
                         label: const Text("測試提醒"),
                         style: OutlinedButton.styleFrom(
@@ -597,27 +627,23 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final Color overlayColor = _fatigueLevel == "疲勞警告"
+    final Color overlayColor = _fatigueLevel.contains("疲勞警告")
         ? const Color(0x66E85D75)
-        : _fatigueLevel == "注意"
-        ? const Color(0x33FFB648)
-        : const Color(0x220D3B66);
+        : _fatigueLevel.contains("注意")
+            ? const Color(0x33FFB648)
+            : const Color(0x220D3B66);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5FBFF),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Full-screen video
-          // 換成你的 Rive 角色
-          SizedBox.expand( // 把 const 刪掉
+          SizedBox.expand(
             child: rv.RiveAnimation.asset(
               'assets/test.riv',
               fit: BoxFit.cover,
             ),
           ),
-
-          // Soft overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -632,18 +658,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
-
-          // Top title
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.16),
                       borderRadius: BorderRadius.circular(18),
@@ -676,38 +697,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
-
-          // Status banner and fatigue card
           _buildAttentionBanner(),
-
-          if (_fatigueLevel == "疲勞警告")
+          if (_fatigueLevel.contains("疲勞警告"))
             const Positioned.fill(
-              child: ColoredBox(
-                color: Color(0x22E85D75),
-              ),
+              child: ColoredBox(color: Color(0x22E85D75)),
             ),
-
-          _buildAttentionBanner(),
-
-          if (_fatigueLevel == "疲勞警告")
-            const Positioned.fill(
-              child: ColoredBox(
-                color: Color(0x22E85D75),
-              ),
-            ),
-
           Positioned.fill(
             child: SafeArea(
               child: Column(
                 children: [
                   const Spacer(),
-                  if (_fatigueLevel == "疲勞警告") _buildFatigueAlertCard(),
+                  if (_fatigueLevel.contains("疲勞警告")) _buildFatigueAlertCard(),
                   const Spacer(),
                 ],
               ),
             ),
           ),
-
           _buildBottomCompanionPanel(),
           _buildDebugPanel(),
           _buildDebugToggleButton(),
