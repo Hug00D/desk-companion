@@ -1,35 +1,32 @@
 package com.example.desk_companion
 
 import android.graphics.BitmapFactory
-import android.graphics.PointF
 import android.widget.Toast
 import androidx.annotation.NonNull
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.FaceContour
-import com.google.mlkit.vision.face.FaceDetection
-import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.sqrt
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.desk_companion/cv_channel"
+    private val faceModelAssetPath = "face_landmarker.task"
     private lateinit var cameraExecutor: ExecutorService
+    private var faceLandmarker: FaceLandmarker? = null
+    private var faceLandmarkerInitError: String? = null
 
-    // Face Detector：保留 ML Kit 作為影像來源，但啟用 eye contours 來測試 EAR。
-    private val faceDetectorOptions = FaceDetectorOptions.Builder()
-        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
-        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
-        .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
-        .build()
-    private val faceDetector = FaceDetection.getClient(faceDetectorOptions)
-
-    // Pose Detector：暫時保留原本肩膀/坐姿邏輯。
+    // Pose Detector：Step 2 先保留 ML Kit Pose，避免 Face / Pose 一次全換造成除錯困難。
     private val poseOptions = PoseDetectorOptions.Builder()
         .setDetectorMode(PoseDetectorOptions.STREAM_MODE)
         .build()
@@ -38,6 +35,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         cameraExecutor = Executors.newSingleThreadExecutor()
+        initializeFaceLandmarker()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -65,6 +63,29 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun initializeFaceLandmarker() {
+        try {
+            val baseOptions = BaseOptions.builder()
+                .setModelAssetPath(faceModelAssetPath)
+                .build()
+
+            val options = FaceLandmarker.FaceLandmarkerOptions.builder()
+                .setBaseOptions(baseOptions)
+                .setRunningMode(RunningMode.IMAGE)
+                .setNumFaces(1)
+                .setMinFaceDetectionConfidence(0.5f)
+                .setMinFacePresenceConfidence(0.5f)
+                .setMinTrackingConfidence(0.5f)
+                .build()
+
+            faceLandmarker = FaceLandmarker.createFromOptions(this, options)
+            faceLandmarkerInitError = null
+        } catch (e: Exception) {
+            faceLandmarker = null
+            faceLandmarkerInitError = e.message ?: e.toString()
+        }
+    }
+
     private fun processImage(data: ByteArray, result: MethodChannel.Result) {
         try {
             val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
@@ -73,11 +94,11 @@ class MainActivity : FlutterActivity() {
                 return
             }
 
-            val image = InputImage.fromBitmap(bitmap, 0)
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
             val resultMap = mutableMapOf<String, Any>()
 
-            // 1. Pose 偵測：抓左右肩座標。
-            poseDetector.process(image)
+            // 1. Pose 偵測：目前先保留 ML Kit Pose，維持肩寬 / 坐姿資料。
+            poseDetector.process(inputImage)
                 .addOnSuccessListener { pose ->
                     val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
                     val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
@@ -92,45 +113,48 @@ class MainActivity : FlutterActivity() {
                         resultMap["hasPose"] = false
                     }
 
-                    // 2. Face 偵測：除了 ML Kit 眼睛開度，也回傳 EAR 測試值。
-                    faceDetector.process(image)
-                        .addOnSuccessListener { faces ->
-                            if (faces.isNotEmpty()) {
-                                val face = faces[0]
-                                val leftEyeProbability = face.leftEyeOpenProbability ?: -1f
-                                val rightEyeProbability = face.rightEyeOpenProbability ?: -1f
+                    // 2. Face 偵測：改用 MediaPipe Face Landmarker 取得 landmarks，再計算六點 EAR。
+                    val landmarker = faceLandmarker
+                    if (landmarker == null) {
+                        resultMap["hasFace"] = false
+                        resultMap["eyeMetricMode"] = "MEDIAPIPE_MODEL_NOT_READY"
+                        resultMap["mediaPipeError"] = faceLandmarkerInitError ?: "FaceLandmarker 尚未初始化"
+                        result.success(resultMap)
+                        return@addOnSuccessListener
+                    }
 
-                                val leftEyeContour = face.getContour(FaceContour.LEFT_EYE)?.points
-                                val rightEyeContour = face.getContour(FaceContour.RIGHT_EYE)?.points
-                                val leftEar = calculateEyeAspectRatio(leftEyeContour)
-                                val rightEar = calculateEyeAspectRatio(rightEyeContour)
+                    try {
+                        val mpImage = BitmapImageBuilder(bitmap).build()
+                        val faceResult = landmarker.detect(mpImage)
+                        val faceLandmarks = faceResult.faceLandmarks()
 
-                                resultMap["hasFace"] = true
-                                resultMap["eyeMetricMode"] = if (leftEar > 0f && rightEar > 0f) {
-                                    "EAR"
-                                } else {
-                                    "MLKIT_PROBABILITY_FALLBACK"
-                                }
+                        if (faceLandmarks.isNotEmpty()) {
+                            val landmarks = faceLandmarks[0]
+                            val leftEar = calculateMediaPipeEar(landmarks, LEFT_EYE_INDICES)
+                            val rightEar = calculateMediaPipeEar(landmarks, RIGHT_EYE_INDICES)
 
-                                // 新欄位：EAR 測試值。
-                                resultMap["leftEAR"] = leftEar
-                                resultMap["rightEAR"] = rightEar
+                            resultMap["hasFace"] = true
+                            resultMap["eyeMetricMode"] = "MEDIAPIPE_EAR"
+                            resultMap["leftEAR"] = leftEar
+                            resultMap["rightEAR"] = rightEar
 
-                                // 舊欄位：保留 ML Kit probability，避免 Flutter 端舊功能完全斷裂。
-                                resultMap["leftEyeProbability"] = leftEyeProbability
-                                resultMap["rightEyeProbability"] = rightEyeProbability
-                                resultMap["leftEye"] = leftEyeProbability
-                                resultMap["rightEye"] = rightEyeProbability
-                            } else {
-                                resultMap["hasFace"] = false
-                                resultMap["eyeMetricMode"] = "NO_FACE"
-                            }
-
-                            result.success(resultMap)
+                            // 保留 Flutter 端既有欄位名稱，讓 Dart 端不需要大改。
+                            resultMap["leftEye"] = leftEar
+                            resultMap["rightEye"] = rightEar
+                            resultMap["leftEyeProbability"] = -1f
+                            resultMap["rightEyeProbability"] = -1f
+                        } else {
+                            resultMap["hasFace"] = false
+                            resultMap["eyeMetricMode"] = "MEDIAPIPE_NO_FACE"
                         }
-                        .addOnFailureListener { e ->
-                            result.error("FACE_ERROR", e.message, null)
-                        }
+
+                        result.success(resultMap)
+                    } catch (e: Exception) {
+                        resultMap["hasFace"] = false
+                        resultMap["eyeMetricMode"] = "MEDIAPIPE_RUNTIME_ERROR"
+                        resultMap["mediaPipeError"] = e.message ?: e.toString()
+                        result.success(resultMap)
+                    }
                 }
                 .addOnFailureListener { e ->
                     result.error("POSE_ERROR", e.message, null)
@@ -141,38 +165,50 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * EAR 測試版：
-     * 這裡先用 eye contour 的 bounding box 高寬比作為簡化 EAR。
-     * 真正 MediaPipe Face Landmarker 版本之後可以替換成指定眼部 landmark 的六點 EAR。
+     * MediaPipe Face Landmarker 六點 EAR。
+     * EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
      */
-    private fun calculateEyeAspectRatio(points: List<PointF>?): Float {
-        if (points == null || points.size < 4) return -1f
+    private fun calculateMediaPipeEar(
+        landmarks: List<NormalizedLandmark>,
+        indices: IntArray
+    ): Float {
+        if (indices.size != 6) return -1f
+        if (indices.any { it < 0 || it >= landmarks.size }) return -1f
 
-        var minX = Float.MAX_VALUE
-        var maxX = -Float.MAX_VALUE
-        var minY = Float.MAX_VALUE
-        var maxY = -Float.MAX_VALUE
+        val p1 = landmarks[indices[0]]
+        val p2 = landmarks[indices[1]]
+        val p3 = landmarks[indices[2]]
+        val p4 = landmarks[indices[3]]
+        val p5 = landmarks[indices[4]]
+        val p6 = landmarks[indices[5]]
 
-        for (point in points) {
-            if (point.x < minX) minX = point.x
-            if (point.x > maxX) maxX = point.x
-            if (point.y < minY) minY = point.y
-            if (point.y > maxY) maxY = point.y
-        }
+        val horizontal = distance(p1.x(), p1.y(), p4.x(), p4.y())
+        if (horizontal <= 0f) return -1f
 
-        val width = maxX - minX
-        val height = maxY - minY
+        val verticalA = distance(p2.x(), p2.y(), p6.x(), p6.y())
+        val verticalB = distance(p3.x(), p3.y(), p5.x(), p5.y())
 
-        if (width <= 0f || height <= 0f) return -1f
-        return height / width
+        return (verticalA + verticalB) / (2f * horizontal)
+    }
+
+    private fun distance(x1: Float, y1: Float, x2: Float, y2: Float): Float {
+        val dx = x1 - x2
+        val dy = y1 - y2
+        return sqrt(dx * dx + dy * dy)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        faceDetector.close()
+        faceLandmarker?.close()
         poseDetector.close()
         if (::cameraExecutor.isInitialized) {
             cameraExecutor.shutdown()
         }
+    }
+
+    companion object {
+        // MediaPipe Face Mesh 常用眼睛六點 landmark index。
+        private val RIGHT_EYE_INDICES = intArrayOf(33, 160, 158, 133, 153, 144)
+        private val LEFT_EYE_INDICES = intArrayOf(362, 385, 387, 263, 373, 380)
     }
 }
