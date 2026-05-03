@@ -56,7 +56,7 @@ dependencies {
 
     // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
     implementation("androidx.camera:camera-view:${camerax_version}")
-    implementation("com.google.mlkit:face-detection:16.1.6")
     implementation("com.google.mlkit:pose-detection:18.0.0-beta3")
+    implementation("com.google.mediapipe:tasks-vision:0.10.33")
 
 }
