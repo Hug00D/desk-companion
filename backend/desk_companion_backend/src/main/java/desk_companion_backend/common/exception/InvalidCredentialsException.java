@@ -1,7 +1,9 @@
 package desk_companion_backend.common.exception;
 
-public class InvalidCredentialsException extends RuntimeException {
+import org.springframework.http.HttpStatus;
+
+public class InvalidCredentialsException extends BusinessException {
     public InvalidCredentialsException() {
-        super("Invalid email or password.");
+        super("INVALID_CREDENTIALS", "Invalid email or password.", HttpStatus.UNAUTHORIZED);
     }
 }

@@ -48,9 +48,19 @@ public class UserServiceImpl implements UserService {
     public UserResponse register(RegisterUserRequest request) {
         String normalizedEmail = normalizeEmail(request.email());
 
-        if (userRepository.existsByEmail(normalizedEmail)) {
-            throw new EmailAlreadyExistsException(normalizedEmail);
-        }
+        userRepository.findByEmail(normalizedEmail).ifPresent(existingUser -> {
+            if (existingUser.getAccountStatus() == AccountStatus.ACTIVE) {
+                throw new EmailAlreadyExistsException(normalizedEmail);
+            }
+
+            if (existingUser.getAccountStatus() == AccountStatus.DELETED) {
+                throw new AccountDeletedException(normalizedEmail);
+            }
+
+            if (existingUser.getAccountStatus() == AccountStatus.SUSPENDED) {
+                throw new AccountSuspendedException();
+            }
+        });
 
         User user = new User();
         user.setEmail(normalizedEmail);
@@ -116,7 +126,7 @@ public class UserServiceImpl implements UserService {
             throw new AccountSuspendedException();
         }
         if (user.getAccountStatus() == AccountStatus.DELETED) {
-            throw new AccountDeletedException();
+            throw new AccountDeletedException(user.getEmail());
         }
     }
 }

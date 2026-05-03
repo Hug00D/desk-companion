@@ -26,7 +26,16 @@ Content-Type: application/json
 
 {
   "email": "test_user@example.com",
-  "password": "Password123!"
+  "password": "Password456!"
+}
+
+### 2) Login failure
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "test_uer@example.com",
+  "password": "Password456!"
 }
 
 
@@ -77,4 +86,59 @@ Content-Type: application/json
 {
   "displayName": "桌面小夥伴-更新-2",
   "avatarUrl": "https://example.com/avatar-2.png"
+}
+
+### 6) Forgot password
+### resetToken only returns when app.auth.return-reset-token-for-testing=true
+# @name forgotPassword
+POST {{baseUrl}}/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "test_user@example.com"
+}
+
+
+
+
+### 7-1) Validate reset token
+POST {{baseUrl}}/auth/validate-reset-token
+Content-Type: application/json
+
+{
+  "token": "{{forgotPassword.response.body.$.resetToken}}"
+}
+
+### 7) Reset password
+### Replace reset token with value from step 6 response body.resetToken
+POST {{baseUrl}}/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "{{forgotPassword.response.body.$.resetToken}}",
+  "newPassword": "Password456!"
+}
+
+
+### 8) Soft delete account
+DELETE {{baseUrl}}/users/{{login.response.body.$.userId}}
+Content-Type: application/json
+
+
+### 9) account recovery
+# @name recovery_account
+POST {{baseUrl}}/auth/account-recovery
+Content-Type: application/json
+
+{
+  "email": "test_user@example.com"
+}
+
+### 10) account-recovery-confirm
+# @name recovery_account
+POST {{baseUrl}}/auth/account-recovery/confirm
+Content-Type: application/json
+
+{
+  "token": "{{recovery_account.response.body.$.recoveryToken}}"
 }
