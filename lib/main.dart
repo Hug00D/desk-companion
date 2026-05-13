@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'face_detection_screen.dart';
-import 'login_screen.dart';
+
+import 'screens/login_screen.dart';
 
 void main() => runApp(const DeskCompanionApp());
 
