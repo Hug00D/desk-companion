@@ -68,14 +68,17 @@ public class ProfileServiceImpl implements ProfileService {
     }
 
     @Override
+    @Transactional
     public ProfileResponse getProfile(UUID userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(UserNotFoundException::new);
 
-        if (user.getProfile() == null) {
-            return null;
+        Profile profile = user.getProfile();
+        if (profile == null) {
+            profile = createProfile(user, null, null);
+            user.setProfile(profile);
         }
 
-        return userMapper.toProfileResponse(user.getProfile());
+        return userMapper.toProfileResponse(profile);
     }
 }

@@ -32,4 +32,5 @@ public class ProfileController {
     ) {
         return profileService.updateProfile(userId, request);
     }
+    
 }

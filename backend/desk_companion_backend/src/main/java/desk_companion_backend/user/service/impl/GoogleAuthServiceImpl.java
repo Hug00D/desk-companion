@@ -79,7 +79,7 @@ public class GoogleAuthServiceImpl implements GoogleAuthService {
             throw new AccountSuspendedException();
         }
         if (user.getAccountStatus() == AccountStatus.DELETED) {
-            throw new AccountDeletedException();
+            throw new AccountDeletedException(user.getEmail());
         }
     }
 
