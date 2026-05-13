@@ -8,8 +8,10 @@ import 'package:rive/rive.dart' as rv; // 使用 rv 避免命名空間衝突
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
-import 'vision/companion_state_evaluator.dart';
-import 'vision/vision_result.dart';
+import '../companion/companion_controller.dart';
+import '../vision/companion_state_evaluator.dart';
+import '../vision/vision_channel.dart';
+import '../vision/vision_result.dart';
 
 class FaceDetectionScreen extends StatefulWidget {
   const FaceDetectionScreen({super.key});
@@ -20,16 +22,13 @@ class FaceDetectionScreen extends StatefulWidget {
 
 class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   late VideoPlayerController _controller;
-  static const platform = MethodChannel(
-    'com.example.desk_companion/cv_channel',
-  );
 
   Timer? _detectionTimer;
   bool _isProcessing = false;
   String _status = "等待辨識...";
   String? _tempVideoPath;
-  final CompanionStateEvaluator _companionStateEvaluator =
-      const CompanionStateEvaluator();
+  final VisionChannel _visionChannel = const VisionChannel();
+  final CompanionController _companionController = CompanionController();
 
   double? _leftEyeOpenValue;
   double? _rightEyeOpenValue;
@@ -103,14 +102,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       final imageFile = io.File(thumbnailPath);
       final Uint8List imageBytes = await imageFile.readAsBytes();
 
-      final dynamic result = await platform.invokeMethod(
-        'analyzeFrame',
-        imageBytes,
-      );
+      final visionResult = await _visionChannel.analyzeFrame(imageBytes);
 
-      if (result is Map) {
-        _handleVisionResult(Map<dynamic, dynamic>.from(result));
-      }
+      _handleVisionResult(visionResult);
     } catch (e) {
       debugPrint("辨識錯誤: $e");
     } finally {
@@ -128,12 +122,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     }
   }
 
-  void _handleVisionResult(Map<dynamic, dynamic> rawResult) {
-    final visionResult = VisionResult.fromNativeMap(rawResult);
-    final analysis = _companionStateEvaluator.evaluate(
-      result: visionResult,
-      previousClosedFrameCount: _closedEyeFrameCount,
-    );
+  void _handleVisionResult(VisionResult visionResult) {
+    final analysis = _companionController.analyze(visionResult);
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
     _rightEyeOpenValue = visionResult.rightEyeOpen;
@@ -186,7 +176,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     }
 
     try {
-      await platform.invokeMethod('showToast', {"message": message});
+      await _visionChannel.showToast(message);
     } catch (e) {
       debugPrint("Toast 呼叫失敗: $e");
     }
@@ -194,7 +184,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   Future<void> _callNativeToast(String msg) async {
     try {
-      await platform.invokeMethod('showToast', {"message": msg});
+      await _visionChannel.showToast(msg);
     } catch (e) {
       debugPrint("手動 Toast 呼叫失敗: $e");
     }

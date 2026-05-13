@@ -1,9 +1,12 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:rive/rive.dart' as rv;
+
+import '../api/api_client.dart';
+import '../api/auth_api.dart';
+import '../auth/auth_session.dart';
 import 'face_detection_screen.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,6 +18,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _pwController = TextEditingController();
+  final _authApi = AuthApi(ApiClient());
+  final _authSession = AuthSession.instance;
   bool _isSignUp = false; // 切換註冊/登入
   bool _isLoading = false;
 
@@ -27,67 +32,54 @@ class _LoginScreenState extends State<LoginScreen> {
     final password = _pwController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("請填寫 Email 與密碼")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("請填寫 Email 與密碼")));
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
-      // 模擬器連本地後端 IP
-      const String baseUrl = "http://10.0.2.2:8080/api/v1";
-
-      final url = _isSignUp
-          ? Uri.parse("$baseUrl/users/register")
-          : Uri.parse("$baseUrl/auth/login");
-
-      // 根據文件構造 Request Body
-      final Map<String, dynamic> requestBody = {
-        "email": email,
-        "password": password,
-      };
-
-      if (_isSignUp) {
-        // 註冊時必須多傳 displayName
-        requestBody["displayName"] = "New User"; // 之後可以加一個欄位讓使用者填
-      }
-
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(requestBody),
-      );
+      final result = _isSignUp
+          ? await _authApi.register(
+              email: email,
+              password: password,
+              displayName: "New User",
+            )
+          : await _authApi.login(email: email, password: password);
 
       if (!mounted) return;
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        // 成功！
-        print("Success: ${data['message'] ?? 'Action Successful'}");
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
-        );
-      } else {
-        // 依照文件處理錯誤格式 (BusinessException / Validation)
-        String errorMsg = data['message'] ?? "未知錯誤";
-        if (data['errorCode'] == "VALIDATION_ERROR" && data['details'] != null) {
-          errorMsg = "驗證失敗: ${data['details']}";
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMsg), backgroundColor: Colors.redAccent),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("網路連線失敗: $e")),
+      _authSession.setSession(
+        userId: result.userId,
+        email: result.email,
+        accessToken: result.accessToken,
       );
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("網路連線失敗: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _pwController.dispose();
+    super.dispose();
   }
 
   @override
@@ -116,9 +108,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 50),
 
                   // 輸入框組
-                  _buildGlassField(Icons.email_outlined, "Email", _emailController),
+                  _buildGlassField(
+                    Icons.email_outlined,
+                    "Email",
+                    _emailController,
+                  ),
                   const SizedBox(height: 15),
-                  _buildGlassField(Icons.lock_outline, "Password", _pwController, isObscure: true),
+                  _buildGlassField(
+                    Icons.lock_outline,
+                    "Password",
+                    _pwController,
+                    isObscure: true,
+                  ),
 
                   // 忘記密碼 (只有登入模式顯示)
                   if (!_isSignUp)
@@ -126,7 +127,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       alignment: Alignment.centerRight,
                       child: TextButton(
                         onPressed: () {}, // 忘記密碼邏輯預留
-                        child: Text("Forgot Password?", style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                        child: Text(
+                          "Forgot Password?",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.5),
+                          ),
+                        ),
                       ),
                     ),
 
@@ -140,12 +146,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   // --- 分隔線 ---
                   Row(
                     children: [
-                      Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
+                      Expanded(
+                        child: Divider(color: Colors.white.withOpacity(0.2)),
+                      ),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Text("OR", style: TextStyle(color: Colors.white.withOpacity(0.3))),
+                        child: Text(
+                          "OR",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.3),
+                          ),
+                        ),
                       ),
-                      Expanded(child: Divider(color: Colors.white.withOpacity(0.2))),
+                      Expanded(
+                        child: Divider(color: Colors.white.withOpacity(0.2)),
+                      ),
                     ],
                   ),
 
@@ -161,12 +176,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     onTap: _toggleMode,
                     child: RichText(
                       text: TextSpan(
-                        text: _isSignUp ? "Already have an account? " : "New here? ",
+                        text: _isSignUp
+                            ? "Already have an account? "
+                            : "New here? ",
                         style: TextStyle(color: Colors.white.withOpacity(0.6)),
                         children: [
                           TextSpan(
                             text: _isSignUp ? "Sign In" : "Create Account",
-                            style: const TextStyle(color: Color(0xFF79D2F5), fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                              color: Color(0xFF79D2F5),
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ],
                       ),
@@ -186,17 +206,31 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildHeader() {
     return Column(
       children: [
-        const Icon(Icons.auto_awesome_motion_rounded, size: 50, color: Color(0xFF79D2F5)),
+        const Icon(
+          Icons.auto_awesome_motion_rounded,
+          size: 50,
+          color: Color(0xFF79D2F5),
+        ),
         const SizedBox(height: 15),
         Text(
           _isSignUp ? "JOIN US" : "WELCOME BACK",
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 5),
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
+            letterSpacing: 5,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildGlassField(IconData icon, String hint, TextEditingController controller, {bool isObscure = false}) {
+  Widget _buildGlassField(
+    IconData icon,
+    String hint,
+    TextEditingController controller, {
+    bool isObscure = false,
+  }) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: BackdropFilter(
@@ -232,14 +266,36 @@ class _LoginScreenState extends State<LoginScreen> {
         width: double.infinity,
         height: 55,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [Color(0xFF57BEEB), Color(0xFF2F7ED8)]),
+          gradient: const LinearGradient(
+            colors: [Color(0xFF57BEEB), Color(0xFF2F7ED8)],
+          ),
           borderRadius: BorderRadius.circular(18),
-          boxShadow: [BoxShadow(color: const Color(0xFF57BEEB).withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 6))],
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF57BEEB).withOpacity(0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
         child: Center(
           child: _isLoading
-              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : Text(_isSignUp ? "REGISTER" : "SIGN IN", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
+              : Text(
+                  _isSignUp ? "REGISTER" : "SIGN IN",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
         ),
       ),
     );
@@ -260,7 +316,13 @@ class _LoginScreenState extends State<LoginScreen> {
           // 這邊暫用 Icon 代替 Google Logo
           const Icon(Icons.g_mobiledata_rounded, color: Colors.white, size: 30),
           const SizedBox(width: 10),
-          Text("Continue with Google", style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15)),
+          Text(
+            "Continue with Google",
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 15,
+            ),
+          ),
         ],
       ),
     );
