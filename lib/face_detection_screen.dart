@@ -107,6 +107,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           );
         }
 
+        debugPrint(
+            "headYaw=${result['headYaw']} headPitch=${result['headPitch']}"
+        );
+
         if (result['hasFace'] == true) {
           _hasFace = true;
           _leftEyeOpenValue = (result['leftEye'] as num).toDouble();
