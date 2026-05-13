@@ -33,16 +33,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   bool _hasFace = false;
 
   bool _showDebugPanel = false;
+  bool _hasHand = false;
+  String _detectedGesture = "none";
 
   // EAR 數值通常越小代表眼睛越閉；ML Kit probability 則越小代表越閉。
   static const double _earClosedThreshold = 0.18;
   static const double _probabilityClosedThreshold = 0.2;
   static const int _attentionClosedFrames = 2;
   static const int _fatigueClosedFrames = 5;
+  static const int _victoryGestureFrames = 2;
   static const Duration _alertCooldown = Duration(seconds: 3);
+  static const Duration _gestureAlertCooldown = Duration(seconds: 4);
 
   int _closedEyeFrameCount = 0;
+  int _victoryGestureFrameCount = 0;
   DateTime? _lastAlertTime;
+  DateTime? _lastGestureAlertTime;
   String _fatigueLevel = "正常";
 
   @override
@@ -120,6 +126,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           );
         }
 
+        _updateGestureState(result);
+
         if (result['hasFace'] == true) {
           _hasFace = true;
           _eyeMetricMode = (result['eyeMetricMode'] as String?) ?? "UNKNOWN";
@@ -183,6 +191,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                 "左EAR/指標: ${_formatEyeValue(_leftEyeOpenValue)} 右EAR/指標: ${_formatEyeValue(_rightEyeOpenValue)}\n"
                 "左MLKit: ${_formatEyeValue(_leftEyeProbabilityValue)} 右MLKit: ${_formatEyeValue(_rightEyeProbabilityValue)}\n"
                 "連續閉眼: $_closedEyeFrameCount\n"
+                "手勢: ${_formatGestureStatus()}\n"
                 "狀態: $_fatigueLevel";
           });
         }
@@ -232,6 +241,52 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     if (resetLevel) _fatigueLevel = "狀態：正常";
   }
 
+  void _updateGestureState(dynamic result) {
+    _hasHand = result['hasHand'] == true;
+    _detectedGesture = (result['handGesture'] as String?) ?? "none";
+
+    if (_detectedGesture == "victory") {
+      _victoryGestureFrameCount++;
+    } else {
+      _victoryGestureFrameCount = 0;
+    }
+
+    if (_victoryGestureFrameCount >= _victoryGestureFrames) {
+      _handleGestureTriggered(_detectedGesture);
+    }
+  }
+
+  Future<void> _handleGestureTriggered(String gesture) async {
+    if (gesture != "victory") return;
+
+    final now = DateTime.now();
+    if (_lastGestureAlertTime != null &&
+        now.difference(_lastGestureAlertTime!) < _gestureAlertCooldown) {
+      return;
+    }
+    _lastGestureAlertTime = now;
+
+    const message = "偵測到 YA 手勢，功能提醒已觸發。";
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(message),
+          backgroundColor: Color(0xFF45B36B),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    try {
+      await platform.invokeMethod('speak', {"message": message});
+    } catch (e) {
+      debugPrint("語音提醒呼叫失敗: $e");
+      await _callNativeToast(message);
+    }
+  }
+
   Future<void> _showFatigueAlert() async {
     final now = DateTime.now();
     if (_lastAlertTime != null && now.difference(_lastAlertTime!) < _alertCooldown) {
@@ -274,7 +329,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Color _getStatusColor() {
-    if (_fatigueLevel.contains("疲勞警告")) {
+    if (_detectedGesture == "victory") {
+      return const Color(0xFF45B36B);
+    } else if (_fatigueLevel.contains("疲勞警告")) {
       return const Color(0xFFE85D75);
     } else if (_fatigueLevel.contains("注意") || _fatigueLevel.contains("坐姿警告")) {
       return const Color(0xFFFFB648);
@@ -286,7 +343,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   String _getCompanionMessage() {
     if (!_hasFace) return "尚未偵測到使用者，請確認畫面與光線。";
 
-    if (_fatigueLevel.contains("疲勞警告")) {
+    if (_detectedGesture == "victory") {
+      return "已偵測到 YA 手勢，語音提醒已準備觸發。";
+    } else if (_fatigueLevel.contains("疲勞警告")) {
       return "EAR 顯示你可能持續閉眼，先休息一下吧。";
     } else if (_fatigueLevel.contains("注意")) {
       return "眼睛開合指標偏低，記得留意自己的狀態。";
@@ -300,6 +359,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   String _formatEyeValue(double? value) {
     if (value == null || value < 0) return "--";
     return value.toStringAsFixed(3);
+  }
+
+  String _formatGestureStatus() {
+    if (!_hasHand) return "未偵測到手";
+    if (_detectedGesture == "victory") {
+      return "YA ($_victoryGestureFrameCount/$_victoryGestureFrames)";
+    }
+    return "未符合 YA";
   }
 
   Widget _buildTopStatusDot() {
@@ -540,6 +607,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                 Text("右MLKit：${_formatEyeValue(_rightEyeProbabilityValue)}"),
                 Text("連續閉眼次數：$_closedEyeFrameCount"),
                 Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
+                Text("是否偵測到手：${_hasHand ? "是" : "否"}"),
+                Text("目前手勢：${_formatGestureStatus()}"),
                 Text("目前狀態：$_fatigueLevel"),
                 const SizedBox(height: 10),
                 Text(_status),
