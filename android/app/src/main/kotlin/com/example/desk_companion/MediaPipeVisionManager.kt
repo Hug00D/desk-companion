@@ -22,6 +22,9 @@ class MediaPipeVisionManager(context: Context) {
     private var lastFaceResult: Map<String, Any> = mapOf("hasFace" to false)
     private var lastPoseResult: Map<String, Any> = mapOf("hasPose" to false)
     private var lastHandResult: Map<String, Any> = mapOf("hasHand" to false)
+    private var smoothedHeadYaw = 0.0f
+    private var smoothedHeadPitch = 0.0f
+    private var hasSmoothedHeadPose = false
 
     init {
         val faceBaseOptions = BaseOptions.builder()
@@ -155,10 +158,11 @@ class MediaPipeVisionManager(context: Context) {
         val middleTip = landmarks.getOrNull(MIDDLE_TIP) ?: return false
         val ringPip = landmarks.getOrNull(RING_PIP) ?: return false
         val ringTip = landmarks.getOrNull(RING_TIP) ?: return false
+        val pinkyMcp = landmarks.getOrNull(PINKY_MCP) ?: return false
         val pinkyPip = landmarks.getOrNull(PINKY_PIP) ?: return false
         val pinkyTip = landmarks.getOrNull(PINKY_TIP) ?: return false
 
-        val palmWidth = distance(indexMcp, landmarks.getOrNull(PINKY_MCP) ?: return false)
+        val palmWidth = distance(indexMcp, pinkyMcp)
         val handHeight = distance(wrist, middleMcp)
         val scale = max(0.05f, max(palmWidth, handHeight))
 
@@ -203,11 +207,14 @@ class MediaPipeVisionManager(context: Context) {
             val rightBlendOpen = blendshapeOpenProbability(firstFaceBlendshapes, "eyeBlinkRight")
             val leftLandmarkOpen = landmarkOpenProbability(landmarks, LEFT_EYE_POINTS)
             val rightLandmarkOpen = landmarkOpenProbability(landmarks, RIGHT_EYE_POINTS)
+            val headPose = estimateHeadPose(landmarks)
 
             mapOf(
                 "hasFace" to true,
                 "leftEye" to combineOpenProbability(leftBlendOpen, leftLandmarkOpen),
-                "rightEye" to combineOpenProbability(rightBlendOpen, rightLandmarkOpen)
+                "rightEye" to combineOpenProbability(rightBlendOpen, rightLandmarkOpen),
+                "headYaw" to headPose.first,
+                "headPitch" to headPose.second
             )
         } else {
             mapOf("hasFace" to false)
@@ -246,6 +253,53 @@ class MediaPipeVisionManager(context: Context) {
         return min(blendshapeOpen, landmarkOpen)
     }
 
+    private fun estimateHeadPose(landmarks: List<NormalizedLandmark>): Pair<Float, Float> {
+        val nose = landmarks.getOrNull(NOSE_TIP)
+        val leftEyeCorner = landmarks.getOrNull(LEFT_EYE_OUTER_CORNER)
+        val rightEyeCorner = landmarks.getOrNull(RIGHT_EYE_OUTER_CORNER)
+        val forehead = landmarks.getOrNull(FOREHEAD_TOP)
+        val chin = landmarks.getOrNull(CHIN)
+
+        if (nose == null || leftEyeCorner == null || rightEyeCorner == null || forehead == null || chin == null) {
+            return smoothedHeadYaw to smoothedHeadPitch
+        }
+
+        val eyeWidth = distance(leftEyeCorner, rightEyeCorner)
+        val faceHeight = distance(forehead, chin)
+        if (eyeWidth <= 0.0f || faceHeight <= 0.0f) {
+            return smoothedHeadYaw to smoothedHeadPitch
+        }
+
+        val eyeCenterX = (leftEyeCorner.x() + rightEyeCorner.x()) / 2.0f
+        val rawYaw = clamp(
+            value = ((nose.x() - eyeCenterX) / eyeWidth) * HEAD_YAW_SCALE,
+            minValue = -MAX_HEAD_YAW,
+            maxValue = MAX_HEAD_YAW
+        )
+
+        val normalizedNoseY = (nose.y() - forehead.y()) / (chin.y() - forehead.y())
+        val rawPitch = clamp(
+            value = (normalizedNoseY - NEUTRAL_NOSE_VERTICAL_RATIO) * HEAD_PITCH_SCALE,
+            minValue = -MAX_HEAD_PITCH,
+            maxValue = MAX_HEAD_PITCH
+        )
+
+        if (!hasSmoothedHeadPose) {
+            smoothedHeadYaw = rawYaw
+            smoothedHeadPitch = rawPitch
+            hasSmoothedHeadPose = true
+        } else {
+            smoothedHeadYaw = smooth(smoothedHeadYaw, rawYaw)
+            smoothedHeadPitch = smooth(smoothedHeadPitch, rawPitch)
+        }
+
+        return smoothedHeadYaw to smoothedHeadPitch
+    }
+
+    private fun smooth(previous: Float, current: Float): Float {
+        return previous * HEAD_POSE_SMOOTHING + current * (1.0f - HEAD_POSE_SMOOTHING)
+    }
+
     private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float {
         val dx = a.x() - b.x()
         val dy = a.y() - b.y()
@@ -253,6 +307,10 @@ class MediaPipeVisionManager(context: Context) {
     }
 
     private fun clamp01(value: Float): Float = max(0.0f, min(1.0f, value))
+
+    private fun clamp(value: Float, minValue: Float, maxValue: Float): Float {
+        return max(minValue, min(maxValue, value))
+    }
 
     fun close() {
         faceLandmarker.close()
@@ -277,9 +335,20 @@ class MediaPipeVisionManager(context: Context) {
         private const val PINKY_MCP = 17
         private const val PINKY_PIP = 18
         private const val PINKY_TIP = 20
+        private const val NOSE_TIP = 1
+        private const val FOREHEAD_TOP = 10
+        private const val CHIN = 152
+        private const val RIGHT_EYE_OUTER_CORNER = 33
+        private const val LEFT_EYE_OUTER_CORNER = 263
         private val LEFT_EYE_POINTS = intArrayOf(362, 385, 387, 263, 373, 380)
         private val RIGHT_EYE_POINTS = intArrayOf(33, 160, 158, 133, 153, 144)
         private const val CLOSED_EYE_EAR = 0.13f
         private const val OPEN_EYE_EAR = 0.27f
+        private const val HEAD_POSE_SMOOTHING = 0.75f
+        private const val HEAD_YAW_SCALE = 80.0f
+        private const val HEAD_PITCH_SCALE = 120.0f
+        private const val MAX_HEAD_YAW = 45.0f
+        private const val MAX_HEAD_PITCH = 45.0f
+        private const val NEUTRAL_NOSE_VERTICAL_RATIO = 0.52f
     }
 }
