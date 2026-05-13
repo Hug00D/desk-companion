@@ -28,6 +28,13 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleAction() async {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
+    );
+    return;
+
+
     final email = _emailController.text.trim();
     final password = _pwController.text.trim();
 

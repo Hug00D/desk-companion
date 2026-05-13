@@ -123,6 +123,19 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   void _handleVisionResult(VisionResult visionResult) {
+    debugPrint(
+      'Vision data: '
+      'hasFace=${visionResult.hasFace}, '
+      'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
+      'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
+      'headYaw=${_formatRawValue(visionResult.raw['headYaw'])}, '
+      'headPitch=${_formatRawValue(visionResult.raw['headPitch'])}, '
+      'hasPose=${visionResult.hasPose}, '
+      'shoulderWidth=${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'}, '
+      'ls=(${_formatRawValue(visionResult.raw['lsX'])}, ${_formatRawValue(visionResult.raw['lsY'])}), '
+      'rs=(${_formatRawValue(visionResult.raw['rsX'])}, ${_formatRawValue(visionResult.raw['rsY'])})',
+    );
+
     final analysis = _companionController.analyze(visionResult);
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
@@ -230,6 +243,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   String _formatEyeValue(double? value) {
     if (value == null) return "--";
     return value.toStringAsFixed(2);
+  }
+
+  String _formatRawValue(dynamic value) {
+    if (value is num) return value.toDouble().toStringAsFixed(3);
+    return "N/A";
   }
 
   Widget _buildTopStatusDot() {
