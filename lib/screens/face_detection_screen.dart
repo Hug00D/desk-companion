@@ -4,7 +4,7 @@ import 'dart:io' as io;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:rive/rive.dart' as rv; // 使用 rv 避免命名空間衝突
+import 'package:rive/rive.dart' as rv;
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
@@ -32,6 +32,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   double? _leftEyeOpenValue;
   double? _rightEyeOpenValue;
+  double? _headYaw;
+  double? _headPitch;
+  double? _headOffsetScore;
+  bool _isHeadOffsetCalibrating = false;
+  final List<double> _headOffsetSamples = <double>[];
   bool _hasFace = false;
 
   bool _showDebugPanel = false;
@@ -39,6 +44,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   static const Duration _alertCooldown = Duration(seconds: 3);
 
   int _closedEyeFrameCount = 0;
+  int _distractedFrameCount = 0;
   DateTime? _lastAlertTime;
   CompanionStatus _companionStatus = CompanionStatus.normal;
   String _fatigueLevel = CompanionStatus.normal.label;
@@ -68,7 +74,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     });
   }
 
-  // --- 核心偵測函式 ---
   Future<void> _detectFaceFromVideo() async {
     if (_isProcessing || !_controller.value.isInitialized) return;
     _isProcessing = true;
@@ -101,7 +106,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
       final imageFile = io.File(thumbnailPath);
       final Uint8List imageBytes = await imageFile.readAsBytes();
-
       final visionResult = await _visionChannel.analyzeFrame(imageBytes);
 
       _handleVisionResult(visionResult);
@@ -115,7 +119,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           try {
             file.deleteSync();
           } catch (e) {
-            debugPrint("刪檔失敗");
+            debugPrint("刪除暫存縮圖失敗: $e");
           }
         }
       }
@@ -128,8 +132,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       'hasFace=${visionResult.hasFace}, '
       'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
       'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
-      'headYaw=${_formatRawValue(visionResult.raw['headYaw'])}, '
-      'headPitch=${_formatRawValue(visionResult.raw['headPitch'])}, '
+      'headYaw=${_formatDebugValue(visionResult.headYaw)}, '
+      'headPitch=${_formatDebugValue(visionResult.headPitch)}, '
+      'headOffsetScore=${_formatDebugValue(visionResult.headOffsetScore)}, '
+      'headOffsetCalibrating=${visionResult.isHeadOffsetCalibrating}, '
       'hasPose=${visionResult.hasPose}, '
       'shoulderWidth=${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'}, '
       'ls=(${_formatRawValue(visionResult.raw['lsX'])}, ${_formatRawValue(visionResult.raw['lsY'])}), '
@@ -140,8 +146,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
     _rightEyeOpenValue = visionResult.rightEyeOpen;
+    _headYaw = visionResult.headYaw;
+    _headPitch = visionResult.headPitch;
+    _headOffsetScore = visionResult.headOffsetScore;
+    _isHeadOffsetCalibrating = visionResult.isHeadOffsetCalibrating;
+    _recordHeadOffsetSample(visionResult);
     _hasFace = visionResult.hasFace;
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
+    _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _companionStatus = analysis.status;
     _fatigueLevel = analysis.status.label;
 
@@ -157,8 +169,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     if (mounted) {
       setState(() {
         _status =
-            "寬度: ${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'} px\n"
-            "左眼: ${_leftEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'} 右眼: ${_rightEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'}\n"
+            "肩膀寬度: ${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'} px\n"
+            "左眼: ${_leftEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'} "
+            "右眼: ${_rightEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'}\n"
+            "頭部偏移分數: ${_formatScore(_headOffsetScore)}"
+            "${_isHeadOffsetCalibrating ? '（校正中）' : ''}\n"
             "狀態: $_fatigueLevel";
       });
     }
@@ -175,15 +190,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     }
     _lastAlertTime = now;
 
-    final message = "警告：偵測到連續閉眼，請立刻休息！";
+    const message = "警告：偵測到連續閉眼，請先休息一下。";
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Text(message),
-          backgroundColor: const Color(0xFFE85D75),
-          duration: const Duration(seconds: 2),
+          backgroundColor: Color(0xFFE85D75),
+          duration: Duration(seconds: 2),
         ),
       );
     }
@@ -214,6 +229,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       case CompanionStatus.fatigue:
         return const Color(0xFFE85D75);
       case CompanionStatus.attention:
+      case CompanionStatus.distracted:
       case CompanionStatus.tooClose:
         return const Color(0xFFFFB648);
       case CompanionStatus.normal:
@@ -232,6 +248,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         return "偵測到持續閉眼，建議先休息一下。";
       case CompanionStatus.attention:
         return "似乎有些疲倦了，記得留意狀態。";
+      case CompanionStatus.distracted:
+        return "視線偏離了一段時間，先把注意力帶回螢幕吧。";
       case CompanionStatus.tooClose:
         return "你靠得太近了，請調整坐姿保護眼睛。";
       case CompanionStatus.normal:
@@ -243,6 +261,61 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   String _formatEyeValue(double? value) {
     if (value == null) return "--";
     return value.toStringAsFixed(2);
+  }
+
+  String _formatAngle(double? value) {
+    if (value == null) return "--";
+    return "${value.toStringAsFixed(1)}°";
+  }
+
+  String _formatDebugValue(double? value) {
+    if (value == null) return "N/A";
+    return value.toStringAsFixed(3);
+  }
+
+  String _formatScore(double? value) {
+    if (value == null) return "--";
+    return value.toStringAsFixed(1);
+  }
+
+  void _recordHeadOffsetSample(VisionResult visionResult) {
+    if (!visionResult.hasFace ||
+        visionResult.isHeadOffsetCalibrating ||
+        visionResult.headOffsetScore == null) {
+      return;
+    }
+
+    _headOffsetSamples.add(visionResult.headOffsetScore!);
+    if (_headOffsetSamples.length % 30 == 0) {
+      _printHeadOffsetStats();
+    }
+  }
+
+  void _printHeadOffsetStats() {
+    if (_headOffsetSamples.isEmpty) return;
+
+    final sorted = List<double>.from(_headOffsetSamples)..sort();
+    final minValue = sorted.first;
+    final maxValue = sorted.last;
+    final average =
+        sorted.reduce((total, value) => total + value) / sorted.length;
+    final p90 = _percentile(sorted, 0.90);
+    final p95 = _percentile(sorted, 0.95);
+
+    debugPrint(
+      'HeadOffset stats: '
+      'samples=${sorted.length}, '
+      'min=${minValue.toStringAsFixed(1)}, '
+      'avg=${average.toStringAsFixed(1)}, '
+      'p90=${p90.toStringAsFixed(1)}, '
+      'p95=${p95.toStringAsFixed(1)}, '
+      'max=${maxValue.toStringAsFixed(1)}',
+    );
+  }
+
+  double _percentile(List<double> sortedValues, double percentile) {
+    final index = ((sortedValues.length - 1) * percentile).round();
+    return sortedValues[index.clamp(0, sortedValues.length - 1)];
   }
 
   String _formatRawValue(dynamic value) {
@@ -260,7 +333,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.45),
+            color: color.withValues(alpha: 0.45),
             blurRadius: 10,
             spreadRadius: 1,
           ),
@@ -270,9 +343,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   Widget _buildAttentionBanner() {
-    if (_companionStatus != CompanionStatus.attention) {
+    if (_companionStatus != CompanionStatus.attention &&
+        _companionStatus != CompanionStatus.distracted) {
       return const SizedBox.shrink();
     }
+    final isDistracted = _companionStatus == CompanionStatus.distracted;
 
     return Positioned(
       top: 96,
@@ -281,7 +356,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.92),
+          color: Colors.white.withValues(alpha: 0.92),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: const Color(0xFFFFD8A8)),
           boxShadow: const [
@@ -293,13 +368,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           ],
         ),
         child: Row(
-          children: const [
-            Icon(Icons.visibility_rounded, color: Color(0xFFFFA94D)),
-            SizedBox(width: 10),
+          children: [
+            const Icon(Icons.visibility_rounded, color: Color(0xFFFFA94D)),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
-                "偵測到短時間連續閉眼，請留意目前狀態。",
-                style: TextStyle(
+                isDistracted ? "偵測到視線偏離，請把注意力帶回螢幕。" : "偵測到眨眼頻繁，請留意疲勞狀態。",
+                style: const TextStyle(
                   color: Color(0xFF6B4E16),
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
@@ -322,7 +397,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         margin: const EdgeInsets.symmetric(horizontal: 24),
         padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.95),
+          color: Colors.white.withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(24),
           boxShadow: const [
             BoxShadow(
@@ -333,24 +408,26 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           ],
           border: Border.all(color: const Color(0xFFFFD0D7), width: 1.4),
         ),
-        child: Column(
+        child: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
+            SizedBox(
               width: 62,
               height: 62,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFEEF1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Icon(
-                Icons.health_and_safety_rounded,
-                color: Color(0xFFE85D75),
-                size: 34,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0xFFFFEEF1),
+                  borderRadius: BorderRadius.all(Radius.circular(20)),
+                ),
+                child: Icon(
+                  Icons.health_and_safety_rounded,
+                  color: Color(0xFFE85D75),
+                  size: 34,
+                ),
               ),
             ),
-            const SizedBox(height: 16),
-            const Text(
+            SizedBox(height: 16),
+            Text(
               "疲勞提醒",
               style: TextStyle(
                 fontSize: 24,
@@ -358,8 +435,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                 color: Color(0xFF20324D),
               ),
             ),
-            const SizedBox(height: 10),
-            const Text(
+            SizedBox(height: 10),
+            Text(
               "偵測到使用者連續閉眼，可能出現疲勞狀態。\n建議暫時休息、喝水，或稍微離開螢幕。",
               style: TextStyle(
                 fontSize: 15,
@@ -384,7 +461,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         child: Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.88),
+            color: Colors.white.withValues(alpha: 0.88),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: const Color(0xFFD6EEFA)),
             boxShadow: const [
@@ -455,7 +532,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.94),
+            color: Colors.white.withValues(alpha: 0.94),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: const Color(0xFFD8EEF8)),
             boxShadow: const [
@@ -487,6 +564,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                 const SizedBox(height: 10),
                 Text("左眼開度：${_formatEyeValue(_leftEyeOpenValue)}"),
                 Text("右眼開度：${_formatEyeValue(_rightEyeOpenValue)}"),
+                Text(
+                  "頭部偏移分數：${_formatScore(_headOffsetScore)}"
+                  "${_isHeadOffsetCalibrating ? "（校正中）" : ""}",
+                ),
+                Text("連續分心次數：$_distractedFrameCount"),
+                Text("Yaw 參考值：${_formatAngle(_headYaw)}"),
+                Text("Pitch 參考值：${_formatAngle(_headPitch)}"),
                 Text("連續閉眼次數：$_closedEyeFrameCount"),
                 Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
                 Text("目前狀態：$_fatigueLevel"),
@@ -513,7 +597,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _callNativeToast("手動觸發辨識結果！"),
+                        onPressed: () => _callNativeToast("手動觸發提醒測試"),
                         icon: const Icon(Icons.notifications_active_rounded),
                         label: const Text("測試提醒"),
                         style: OutlinedButton.styleFrom(
@@ -552,9 +636,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.16),
+              color: Colors.white.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.24)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
             ),
             child: const Icon(
               Icons.tune_rounded,
@@ -569,6 +653,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   @override
   void dispose() {
+    _printHeadOffsetStats();
     _detectionTimer?.cancel();
     _controller.dispose();
     super.dispose();
@@ -576,9 +661,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isWarmWarning =
+        _companionStatus == CompanionStatus.attention ||
+        _companionStatus == CompanionStatus.distracted;
     final Color overlayColor = _companionStatus == CompanionStatus.fatigue
         ? const Color(0x66E85D75)
-        : _companionStatus == CompanionStatus.attention
+        : isWarmWarning
         ? const Color(0x33FFB648)
         : const Color(0x220D3B66);
 
@@ -587,14 +675,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Full-screen video
-          // 換成你的 Rive 角色
           SizedBox.expand(
-            // 把 const 刪掉
             child: rv.RiveAnimation.asset('assets/test.riv', fit: BoxFit.cover),
           ),
-
-          // Soft overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -609,8 +692,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
-
-          // Top title
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
@@ -622,9 +703,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                       vertical: 10,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.16),
+                      color: Colors.white.withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white.withOpacity(0.22)),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.22),
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -653,13 +736,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
-
-          // Status banner and fatigue card
           _buildAttentionBanner(),
-
           if (_companionStatus == CompanionStatus.fatigue)
             const Positioned.fill(child: ColoredBox(color: Color(0x22E85D75))),
-
           Positioned.fill(
             child: SafeArea(
               child: Column(
@@ -672,7 +751,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
-
           _buildBottomCompanionPanel(),
           _buildDebugPanel(),
           _buildDebugToggleButton(),

@@ -11,6 +11,10 @@ class VisionResult {
     this.rightShoulderY,
     this.leftEyeOpen,
     this.rightEyeOpen,
+    this.headYaw,
+    this.headPitch,
+    this.headOffsetScore,
+    this.isHeadOffsetCalibrating = false,
     this.shoulderWidth,
   });
 
@@ -23,6 +27,10 @@ class VisionResult {
   final double? rightShoulderY;
   final double? leftEyeOpen;
   final double? rightEyeOpen;
+  final double? headYaw;
+  final double? headPitch;
+  final double? headOffsetScore;
+  final bool isHeadOffsetCalibrating;
   final double? shoulderWidth;
 
   bool get hasEyeData => leftEyeOpen != null && rightEyeOpen != null;
@@ -60,6 +68,10 @@ class VisionResult {
       rightShoulderY: rightShoulderY,
       leftEyeOpen: hasFace ? _toDouble(data['leftEye']) : null,
       rightEyeOpen: hasFace ? _toDouble(data['rightEye']) : null,
+      headYaw: hasFace ? _toDouble(data['headYaw']) : null,
+      headPitch: hasFace ? _toDouble(data['headPitch']) : null,
+      headOffsetScore: hasFace ? _toDouble(data['headOffsetScore']) : null,
+      isHeadOffsetCalibrating: data['headOffsetCalibrating'] == true,
       shoulderWidth: shoulderWidth,
     );
   }
