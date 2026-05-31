@@ -9,9 +9,14 @@ import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../companion/companion_controller.dart';
+import '../companion/companion_response_builder.dart';
+import '../focus/pomodoro_action_dispatcher.dart';
+import '../focus/pomodoro_controller.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../vision/vision_channel.dart';
 import '../vision/vision_result.dart';
+import '../voice/mock_voice_result_loader.dart';
+import '../voice/voice_interaction_controller.dart';
 
 class FaceDetectionScreen extends StatefulWidget {
   const FaceDetectionScreen({super.key});
@@ -24,11 +29,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   late VideoPlayerController _controller;
 
   Timer? _detectionTimer;
+  Timer? _pomodoroTimer;
   bool _isProcessing = false;
+  bool _isVoiceDemoLoading = false;
   String _status = "等待辨識...";
   String? _tempVideoPath;
   final VisionChannel _visionChannel = const VisionChannel();
   final CompanionController _companionController = CompanionController();
+  final CompanionResponseBuilder _responseBuilder =
+      const CompanionResponseBuilder();
+  final MockVoiceResultLoader _mockVoiceResultLoader =
+      const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
+  final VoiceInteractionController _voiceInteractionController =
+      const VoiceInteractionController();
+  final PomodoroActionDispatcher _pomodoroActionDispatcher =
+      const PomodoroActionDispatcher();
+  final PomodoroController _pomodoroController = PomodoroController();
 
   double? _leftEyeOpenValue;
   double? _rightEyeOpenValue;
@@ -37,11 +53,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   bool _showDebugPanel = false;
 
   static const Duration _alertCooldown = Duration(seconds: 3);
+  static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
 
   int _closedEyeFrameCount = 0;
   DateTime? _lastAlertTime;
+  DateTime? _voiceMessagePinnedUntil;
   CompanionStatus _companionStatus = CompanionStatus.normal;
   String _fatigueLevel = CompanionStatus.normal.label;
+  String _companionMessage = "目前狀態穩定，請保持節奏。";
+  String? _lastVoiceResponseMessage;
+  VoiceInteraction? _lastVoiceInteraction;
 
   @override
   void initState() {
@@ -137,6 +158,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     );
 
     final analysis = _companionController.analyze(visionResult);
+    final response = _responseBuilder.fromVision(analysis);
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
     _rightEyeOpenValue = visionResult.rightEyeOpen;
@@ -144,6 +166,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _companionStatus = analysis.status;
     _fatigueLevel = analysis.status.label;
+    if (!_isVoiceMessagePinned) {
+      _companionMessage = response.message;
+    }
 
     if (_companionStatus == CompanionStatus.fatigue &&
         _leftEyeOpenValue != null &&
@@ -151,6 +176,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       _showFatigueAlert(
         leftProbability: _leftEyeOpenValue!,
         rightProbability: _rightEyeOpenValue!,
+        message: response.message,
       );
     }
 
@@ -167,6 +193,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   Future<void> _showFatigueAlert({
     required double leftProbability,
     required double rightProbability,
+    String? message,
   }) async {
     final now = DateTime.now();
     if (_lastAlertTime != null &&
@@ -175,21 +202,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     }
     _lastAlertTime = now;
 
-    final message = "警告：偵測到連續閉眼，請立刻休息！";
+    final alertMessage = message ?? "警告：偵測到連續閉眼，請立刻休息！";
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
+          content: Text(alertMessage),
           backgroundColor: const Color(0xFFE85D75),
-          duration: const Duration(seconds: 2),
+          duration: const Duration(seconds: 5),
         ),
       );
     }
 
     try {
-      await _visionChannel.showToast(message);
+      await _visionChannel.showToast(alertMessage);
     } catch (e) {
       debugPrint("Toast 呼叫失敗: $e");
     }
@@ -203,6 +230,108 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     }
   }
 
+  Future<void> _runVoiceDemo(String caseId) async {
+    if (_isVoiceDemoLoading) return;
+
+    setState(() {
+      _isVoiceDemoLoading = true;
+    });
+
+    try {
+      final results = await _mockVoiceResultLoader.loadResults();
+      var selectedResult = results.isEmpty ? null : results.first;
+      for (final result in results) {
+        if (result.caseId == caseId) {
+          selectedResult = result;
+          break;
+        }
+      }
+      if (selectedResult?.caseId != caseId) {
+        selectedResult = null;
+      }
+      final selectedInteraction = selectedResult == null
+          ? null
+          : _voiceInteractionController.handle(selectedResult);
+
+      if (selectedInteraction == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("找不到語音 Demo 資料: $caseId"),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      _applyVoiceInteraction(selectedInteraction);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("語音 Demo 載入失敗: $e"),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isVoiceDemoLoading = false;
+        });
+      }
+    }
+  }
+
+  void _applyVoiceInteraction(VoiceInteraction interaction) {
+    _lastVoiceInteraction = interaction;
+    final actionResult = _pomodoroActionDispatcher.dispatch(
+      command: interaction.command,
+      controller: _pomodoroController,
+    );
+    _companionMessage = actionResult.response.message;
+    _lastVoiceResponseMessage = actionResult.response.message;
+    _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+
+    if (actionResult.shouldStopTimer) {
+      _pomodoroTimer?.cancel();
+    }
+
+    if (actionResult.shouldStartTimer) {
+      _startPomodoroTicker();
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _startPomodoroTicker() {
+    _pomodoroTimer?.cancel();
+    _pomodoroTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      setState(() {
+        _pomodoroController.tick();
+      });
+
+      if (_pomodoroController.status == PomodoroStatus.completed) {
+        timer.cancel();
+        _companionMessage = "這輪專注時間結束了，休息一下吧。";
+        _lastVoiceResponseMessage = null;
+        _voiceMessagePinnedUntil = null;
+        if (mounted) setState(() {});
+      }
+    });
+  }
+
+  bool get _isVoiceMessagePinned {
+    final pinnedUntil = _voiceMessagePinnedUntil;
+    return pinnedUntil != null && DateTime.now().isBefore(pinnedUntil);
+  }
+
   Future<void> _restartVideo() async {
     if (!_controller.value.isInitialized) return;
     await _controller.seekTo(Duration.zero);
@@ -214,7 +343,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       case CompanionStatus.fatigue:
         return const Color(0xFFE85D75);
       case CompanionStatus.attention:
-      case CompanionStatus.tooClose:
         return const Color(0xFFFFB648);
       case CompanionStatus.normal:
       case CompanionStatus.userMissing:
@@ -223,21 +351,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   String _getCompanionMessage() {
-    if (!_hasFace) {
-      return "尚未偵測到使用者，請確認畫面與光線。";
-    }
-
-    switch (_companionStatus) {
-      case CompanionStatus.fatigue:
-        return "偵測到持續閉眼，建議先休息一下。";
-      case CompanionStatus.attention:
-        return "似乎有些疲倦了，記得留意狀態。";
-      case CompanionStatus.tooClose:
-        return "你靠得太近了，請調整坐姿保護眼睛。";
-      case CompanionStatus.normal:
-      case CompanionStatus.userMissing:
-        return "目前狀態穩定，請保持節奏。";
-    }
+    return _companionMessage;
   }
 
   String _formatEyeValue(double? value) {
@@ -443,6 +557,184 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     );
   }
 
+  Widget _buildVoiceDemoButtons() {
+    return Positioned(
+      top: 74,
+      left: 18,
+      right: 18,
+      child: SafeArea(
+        bottom: false,
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _buildVoiceDemoChip("開始25", "final_start_pomodoro"),
+            _buildVoiceDemoChip("開始15", "final_start_custom_pomodoro"),
+            _buildVoiceDemoChip("暫停", "final_pause_timer"),
+            _buildVoiceDemoChip("繼續", "final_resume_timer"),
+            _buildVoiceDemoChip("中止", "final_stop_timer"),
+            _buildVoiceDemoChip("摘要", "final_summary_timer"),
+            _buildVoiceDemoChip("未知", "final_unknown_low_confidence"),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoiceDemoChip(String label, String caseId) {
+    return SizedBox(
+      height: 36,
+      child: ElevatedButton(
+        onPressed: _isVoiceDemoLoading ? null : () => _runVoiceDemo(caseId),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.white.withOpacity(0.18),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: Colors.white.withOpacity(0.24)),
+          ),
+        ),
+        child: _isVoiceDemoLoading
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Text(label),
+      ),
+    );
+  }
+
+  Widget _buildVoiceDialogPanel() {
+    final interaction = _lastVoiceInteraction;
+    if (interaction == null) return const SizedBox.shrink();
+    final responseMessage =
+        _lastVoiceResponseMessage ?? interaction.response.message;
+
+    final confidence = interaction.command.confidence;
+    final confidenceText = confidence == null
+        ? "信心值: N/A"
+        : "信心值: ${(confidence * 100).toStringAsFixed(0)}%";
+    final timerText = _pomodoroController.isActive
+        ? "番茄鐘 ${_pomodoroController.formattedRemaining}"
+        : "番茄鐘未啟動";
+
+    return Positioned(
+      left: 18,
+      right: 18,
+      bottom: 190,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.92),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: const Color(0xFFD8EEF8)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 18,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEAF7FF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.record_voice_over_rounded,
+                      color: Color(0xFF2F7ED8),
+                      size: 19,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      "語音 Demo",
+                      style: TextStyle(
+                        color: Color(0xFF20324D),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    timerText,
+                    style: const TextStyle(
+                      color: Color(0xFF2F7ED8),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "你說：${interaction.result.bestText}",
+                style: const TextStyle(
+                  color: Color(0xFF31465F),
+                  fontSize: 14,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Desk Companion：$responseMessage",
+                style: const TextStyle(
+                  color: Color(0xFF31465F),
+                  fontSize: 14,
+                  height: 1.45,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildVoiceMetaChip(confidenceText),
+                  _buildVoiceMetaChip("視覺狀態: $_fatigueLevel"),
+                  _buildVoiceMetaChip("畫面: ${_hasFace ? "有人臉" : "未見人臉"}"),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoiceMetaChip(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7FF),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Color(0xFF3F607D),
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
   Widget _buildDebugPanel() {
     if (!_showDebugPanel) return const SizedBox.shrink();
 
@@ -570,6 +862,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   @override
   void dispose() {
     _detectionTimer?.cancel();
+    _pomodoroTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -674,6 +967,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           ),
 
           _buildBottomCompanionPanel(),
+          _buildVoiceDialogPanel(),
+          _buildVoiceDemoButtons(),
           _buildDebugPanel(),
           _buildDebugToggleButton(),
         ],

@@ -3,7 +3,7 @@ import 'pose_state_detector.dart';
 import 'presence_detector.dart';
 import 'vision_result.dart';
 
-enum CompanionStatus { normal, attention, fatigue, tooClose, userMissing }
+enum CompanionStatus { normal, attention, fatigue, userMissing }
 
 extension CompanionStatusLabel on CompanionStatus {
   String get label {
@@ -14,8 +14,6 @@ extension CompanionStatusLabel on CompanionStatus {
         return '注意：眨眼頻繁';
       case CompanionStatus.fatigue:
         return '疲勞警告：偵測到閉眼';
-      case CompanionStatus.tooClose:
-        return '坐姿警告：離螢幕太近';
       case CompanionStatus.userMissing:
         return '尚未偵測到完整使用者';
     }
@@ -65,22 +63,16 @@ class CompanionStateEvaluator {
       eyeResult: eyeResult,
       poseState: poseState,
       presenceState: presenceState,
-      status: _combine(
-        eyeState: eyeResult.state,
-        poseState: poseState,
-        presenceState: presenceState,
-      ),
+      status: _combine(eyeState: eyeResult.state, presenceState: presenceState),
     );
   }
 
   CompanionStatus _combine({
     required EyeState eyeState,
-    required PoseState poseState,
     required PresenceState presenceState,
   }) {
     if (eyeState == EyeState.fatigue) return CompanionStatus.fatigue;
     if (eyeState == EyeState.attention) return CompanionStatus.attention;
-    if (poseState == PoseState.tooClose) return CompanionStatus.tooClose;
     if (presenceState == PresenceState.away) return CompanionStatus.userMissing;
     return CompanionStatus.normal;
   }

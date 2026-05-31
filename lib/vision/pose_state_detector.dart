@@ -1,22 +1,15 @@
 import 'vision_result.dart';
 
-enum PoseState { noPose, normal, tooClose }
+enum PoseState { noPose, detected }
 
 class PoseStateDetector {
-  const PoseStateDetector({this.tooCloseShoulderWidth = 780});
-
-  final double tooCloseShoulderWidth;
+  const PoseStateDetector();
 
   PoseState evaluate(VisionResult result) {
-    final shoulderWidth = result.shoulderWidth;
-    if (!result.hasPose || shoulderWidth == null) {
+    if (!result.hasPose || result.shoulderWidth == null) {
       return PoseState.noPose;
     }
 
-    if (shoulderWidth > tooCloseShoulderWidth) {
-      return PoseState.tooClose;
-    }
-
-    return PoseState.normal;
+    return PoseState.detected;
   }
 }
