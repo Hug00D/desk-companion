@@ -31,4 +31,8 @@ class VisionChannel {
   Future<void> startCamera() {
     return _channel.invokeMethod<void>('startCamera');
   }
+
+  Future<void> resetVision() {
+    return _channel.invokeMethod<void>('resetVision');
+  }
 }

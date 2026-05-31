@@ -14,8 +14,8 @@ class HeadOffsetDetectionResult {
 
 class HeadOffsetDetector {
   const HeadOffsetDetector({
-    this.distractedThreshold = 25,
-    this.distractedFrames = 2,
+    this.distractedThreshold = 45,
+    this.distractedFrames = 3,
   });
 
   final double distractedThreshold;
@@ -25,7 +25,7 @@ class HeadOffsetDetector {
     required VisionResult result,
     required int previousDistractedFrameCount,
   }) {
-    final score = result.headOffsetScore;
+    final score = _score(result);
     if (!result.hasFace || result.isHeadOffsetCalibrating || score == null) {
       return const HeadOffsetDetectionResult(
         state: HeadOffsetState.unavailable,
@@ -49,5 +49,9 @@ class HeadOffsetDetector {
       state: HeadOffsetState.normal,
       distractedFrameCount: distractedFrameCount,
     );
+  }
+
+  double? _score(VisionResult result) {
+    return result.headOffsetScore;
   }
 }

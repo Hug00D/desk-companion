@@ -2,7 +2,6 @@ package com.example.desk_companion
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.SystemClock
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.Category
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
@@ -11,6 +10,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -20,15 +20,17 @@ class MediaPipeVisionManager(context: Context) {
     private val poseLandmarker: PoseLandmarker
     private var lastFaceResult: Map<String, Any> = mapOf("hasFace" to false)
     private var lastPoseResult: Map<String, Any> = mapOf("hasPose" to false)
+    private var poseSequence = 0L
     private var smoothedHeadYaw = 0.0f
     private var smoothedHeadPitch = 0.0f
-    private var smoothedHeadOffsetScore = 0.0f
+    private var headOffsetScore = 0.0f
     private var hasSmoothedHeadPose = false
+    private var hasSmoothedHeadOffsetMetric = false
     private var headPitchBaseline: Float? = null
-    private var headOffsetBaselineStartMs: Long? = null
-    private var headOffsetBaselineSum = 0.0f
-    private var headOffsetBaselineCount = 0
+    private var smoothedHeadOffsetMetric = 0.0f
+    private val headOffsetBaselineSamples = mutableListOf<Float>()
     private var headOffsetBaseline: Float? = null
+    private var headOffsetScoreScale = HEAD_OFFSET_RATIO_SCORE_SCALE
 
     init {
         val faceBaseOptions = BaseOptions.builder()
@@ -39,6 +41,7 @@ class MediaPipeVisionManager(context: Context) {
             .setRunningMode(RunningMode.IMAGE)
             .setNumFaces(1)
             .setOutputFaceBlendshapes(true)
+            .setOutputFacialTransformationMatrixes(true)
             .setMinFaceDetectionConfidence(0.5f)
             .setMinFacePresenceConfidence(0.5f)
             .setMinTrackingConfidence(0.5f)
@@ -94,21 +97,56 @@ class MediaPipeVisionManager(context: Context) {
         imageHeight: Int
     ): Map<String, Any> {
         val poseResult = poseLandmarker.detect(mpImage)
+        poseSequence++
         val landmarks = poseResult.landmarks().firstOrNull()
         val leftShoulder = landmarks?.getOrNull(LEFT_SHOULDER)
         val rightShoulder = landmarks?.getOrNull(RIGHT_SHOULDER)
 
         return if (leftShoulder != null && rightShoulder != null) {
-            mapOf(
+            val result = mutableMapOf<String, Any>(
                 "hasPose" to true,
+                "poseSequence" to poseSequence,
+                "imageWidth" to imageWidth,
+                "imageHeight" to imageHeight,
                 "lsX" to leftShoulder.x() * imageWidth,
                 "lsY" to leftShoulder.y() * imageHeight,
+                "lsVisibility" to landmarkVisibility(leftShoulder),
                 "rsX" to rightShoulder.x() * imageWidth,
-                "rsY" to rightShoulder.y() * imageHeight
+                "rsY" to rightShoulder.y() * imageHeight,
+                "rsVisibility" to landmarkVisibility(rightShoulder)
             )
+            addPoseLandmark(result, "poseNose", landmarks, POSE_NOSE, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseLeftEye", landmarks, POSE_LEFT_EYE, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseRightEye", landmarks, POSE_RIGHT_EYE, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseLeftEar", landmarks, POSE_LEFT_EAR, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseRightEar", landmarks, POSE_RIGHT_EAR, imageWidth, imageHeight)
+            result
         } else {
-            mapOf("hasPose" to false)
+            mapOf(
+                "hasPose" to false,
+                "poseSequence" to poseSequence,
+                "imageWidth" to imageWidth,
+                "imageHeight" to imageHeight
+            )
         }
+    }
+
+    private fun addPoseLandmark(
+        result: MutableMap<String, Any>,
+        keyPrefix: String,
+        landmarks: List<NormalizedLandmark>?,
+        index: Int,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        val landmark = landmarks?.getOrNull(index) ?: return
+        result["${keyPrefix}X"] = landmark.x() * imageWidth
+        result["${keyPrefix}Y"] = landmark.y() * imageHeight
+        result["${keyPrefix}Visibility"] = landmarkVisibility(landmark)
+    }
+
+    private fun landmarkVisibility(landmark: NormalizedLandmark): Float {
+        return landmark.visibility().orElse(1.0f)
     }
 
     private fun analyzeFace(
@@ -129,7 +167,10 @@ class MediaPipeVisionManager(context: Context) {
             val rightBlendOpen = blendshapeOpenProbability(firstFaceBlendshapes, "eyeBlinkRight")
             val leftLandmarkOpen = landmarkOpenProbability(landmarks, LEFT_EYE_POINTS)
             val rightLandmarkOpen = landmarkOpenProbability(landmarks, RIGHT_EYE_POINTS)
-            val headPose = estimateHeadPose(landmarks)
+            val transformationMatrix = faceResult.facialTransformationMatrixes()
+                .orElse(emptyList())
+                .firstOrNull()
+            val headPose = estimateHeadPose(landmarks, transformationMatrix)
 
             mapOf(
                 "hasFace" to true,
@@ -177,7 +218,10 @@ class MediaPipeVisionManager(context: Context) {
         return min(blendshapeOpen, landmarkOpen)
     }
 
-    private fun estimateHeadPose(landmarks: List<NormalizedLandmark>): Triple<Float, Float, Float> {
+    private fun estimateHeadPose(
+        landmarks: List<NormalizedLandmark>,
+        transformationMatrix: FloatArray?
+    ): Triple<Float, Float, Float> {
         val nose = landmarks.getOrNull(NOSE_TIP)
         val leftEyeCorner = landmarks.getOrNull(LEFT_EYE_OUTER_CORNER)
         val rightEyeCorner = landmarks.getOrNull(RIGHT_EYE_OUTER_CORNER)
@@ -185,32 +229,50 @@ class MediaPipeVisionManager(context: Context) {
         val chin = landmarks.getOrNull(CHIN)
 
         if (nose == null || leftEyeCorner == null || rightEyeCorner == null || forehead == null || chin == null) {
-            return Triple(smoothedHeadYaw, smoothedHeadPitch, smoothedHeadOffsetScore)
+            return Triple(smoothedHeadYaw, smoothedHeadPitch, headOffsetScore)
         }
 
         val eyeWidth = distance(leftEyeCorner, rightEyeCorner)
         val faceHeight = distance(forehead, chin)
         if (eyeWidth <= 0.0f || faceHeight <= 0.0f) {
-            return Triple(smoothedHeadYaw, smoothedHeadPitch, smoothedHeadOffsetScore)
+            return Triple(smoothedHeadYaw, smoothedHeadPitch, headOffsetScore)
         }
 
         val distToLeft = abs(nose.x() - leftEyeCorner.x())
         val distToRight = abs(nose.x() - rightEyeCorner.x())
         val eyeDistanceSum = distToLeft + distToRight
         if (eyeDistanceSum <= 0.0f) {
-            return Triple(smoothedHeadYaw, smoothedHeadPitch, smoothedHeadOffsetScore)
+            return Triple(smoothedHeadYaw, smoothedHeadPitch, headOffsetScore)
         }
         val yawRatio = (distToLeft - distToRight) / eyeDistanceSum
-        val headOffsetScore = updateHeadOffsetScore(yawRatio)
-        val yawBaseline = headOffsetBaseline ?: yawRatio
-        val rawYaw = clamp((yawRatio - yawBaseline) * HEAD_YAW_ASYMMETRY_SCALE, -MAX_HEAD_YAW, MAX_HEAD_YAW)
+        val matrixYaw = transformationMatrix?.let { extractYawFromMatrix(it) }
+        val yawMetric = matrixYaw ?: yawRatio
+        val scoreScale = if (matrixYaw != null) {
+            HEAD_OFFSET_MATRIX_SCORE_SCALE
+        } else {
+            HEAD_OFFSET_RATIO_SCORE_SCALE
+        }
+        val headOffsetScore = updateHeadOffsetScore(yawMetric, scoreScale)
+        if (headOffsetBaseline == null) {
+            return Triple(0.0f, 0.0f, headOffsetScore)
+        }
 
-        val normalizedNoseY = (nose.y() - forehead.y()) / (chin.y() - forehead.y())
-        val rawPitch = clamp(
-            value = (normalizedNoseY - NEUTRAL_NOSE_VERTICAL_RATIO) * HEAD_PITCH_SCALE,
-            minValue = -MAX_HEAD_PITCH,
-            maxValue = MAX_HEAD_PITCH
-        )
+        val yawBaseline = headOffsetBaseline ?: yawMetric
+        val rawYawValue = if (headOffsetScoreScale == HEAD_OFFSET_MATRIX_SCORE_SCALE) {
+            yawMetric - yawBaseline
+        } else {
+            (yawMetric - yawBaseline) * HEAD_YAW_RATIO_DISPLAY_SCALE
+        }
+        val rawYaw = clamp(rawYawValue, -MAX_HEAD_YAW, MAX_HEAD_YAW)
+
+        val rawPitch = transformationMatrix?.let { extractPitchFromMatrix(it) } ?: run {
+            val normalizedNoseY = (nose.y() - forehead.y()) / (chin.y() - forehead.y())
+            clamp(
+                value = (normalizedNoseY - NEUTRAL_NOSE_VERTICAL_RATIO) * HEAD_PITCH_SCALE,
+                minValue = -MAX_HEAD_PITCH,
+                maxValue = MAX_HEAD_PITCH
+            )
+        }
 
         if (headPitchBaseline == null) {
             headPitchBaseline = rawPitch
@@ -220,33 +282,50 @@ class MediaPipeVisionManager(context: Context) {
         return smoothHeadPose(rawYaw, calibratedPitch, headOffsetScore)
     }
 
-    private fun updateHeadOffsetScore(yawRatio: Float): Float {
-        val now = SystemClock.elapsedRealtime()
-        if (headOffsetBaselineStartMs == null) {
-            headOffsetBaselineStartMs = now
-        }
-
+    private fun updateHeadOffsetScore(yawMetric: Float, scoreScale: Float): Float {
         if (headOffsetBaseline == null) {
-            headOffsetBaselineSum += yawRatio
-            headOffsetBaselineCount++
-
-            val elapsedMs = now - (headOffsetBaselineStartMs ?: now)
-            if (elapsedMs < HEAD_OFFSET_BASELINE_MS) {
-                smoothedHeadOffsetScore = 0.0f
-                return smoothedHeadOffsetScore
+            headOffsetBaselineSamples.add(yawMetric)
+            headOffsetScore = 0.0f
+            if (headOffsetBaselineSamples.size >= HEAD_OFFSET_BASELINE_SAMPLES) {
+                headOffsetBaseline = median(headOffsetBaselineSamples)
+                headOffsetScoreScale = scoreScale
+                smoothedHeadOffsetMetric = headOffsetBaseline ?: yawMetric
+                hasSmoothedHeadOffsetMetric = true
             }
-
-            headOffsetBaseline = headOffsetBaselineSum / max(1, headOffsetBaselineCount).toFloat()
+            return headOffsetScore
         }
 
-        val baseline = headOffsetBaseline ?: yawRatio
+        if (!hasSmoothedHeadOffsetMetric) {
+            smoothedHeadOffsetMetric = yawMetric
+            hasSmoothedHeadOffsetMetric = true
+        } else {
+            smoothedHeadOffsetMetric = smooth(
+                previous = smoothedHeadOffsetMetric,
+                current = yawMetric,
+                smoothing = HEAD_OFFSET_METRIC_SMOOTHING
+            )
+        }
+
+        val baseline = headOffsetBaseline ?: yawMetric
         val rawScore = clamp(
-            value = abs(yawRatio - baseline) * HEAD_OFFSET_SCORE_SCALE,
+            value = abs(smoothedHeadOffsetMetric - baseline) * headOffsetScoreScale,
             minValue = 0.0f,
             maxValue = 100.0f
         )
-        smoothedHeadOffsetScore = smooth(smoothedHeadOffsetScore, rawScore)
-        return smoothedHeadOffsetScore
+        headOffsetScore = rawScore
+        return headOffsetScore
+    }
+
+    private fun extractYawFromMatrix(matrix: FloatArray): Float? {
+        if (matrix.size < 11) return null
+        return Math.toDegrees(atan2(matrix[8].toDouble(), matrix[10].toDouble())).toFloat()
+    }
+
+    private fun extractPitchFromMatrix(matrix: FloatArray): Float? {
+        if (matrix.size < 11) return null
+        val y = -matrix[9].toDouble()
+        val x = sqrt(matrix[8] * matrix[8] + matrix[10] * matrix[10]).toDouble()
+        return Math.toDegrees(atan2(y, x)).toFloat()
     }
 
     private fun smoothHeadPose(rawYaw: Float, rawPitch: Float, headOffsetScore: Float): Triple<Float, Float, Float> {
@@ -255,15 +334,15 @@ class MediaPipeVisionManager(context: Context) {
             smoothedHeadPitch = rawPitch
             hasSmoothedHeadPose = true
         } else {
-            smoothedHeadYaw = smooth(smoothedHeadYaw, rawYaw)
-            smoothedHeadPitch = smooth(smoothedHeadPitch, rawPitch)
+            smoothedHeadYaw = smooth(smoothedHeadYaw, rawYaw, HEAD_POSE_SMOOTHING)
+            smoothedHeadPitch = smooth(smoothedHeadPitch, rawPitch, HEAD_POSE_SMOOTHING)
         }
 
         return Triple(smoothedHeadYaw, smoothedHeadPitch, headOffsetScore)
     }
 
-    private fun smooth(previous: Float, current: Float): Float {
-        return previous * HEAD_POSE_SMOOTHING + current * (1.0f - HEAD_POSE_SMOOTHING)
+    private fun smooth(previous: Float, current: Float, smoothing: Float): Float {
+        return previous * smoothing + current * (1.0f - smoothing)
     }
 
     private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float {
@@ -278,14 +357,45 @@ class MediaPipeVisionManager(context: Context) {
         return max(minValue, min(maxValue, value))
     }
 
+    private fun median(values: List<Float>): Float {
+        val sorted = values.sorted()
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 0) {
+            (sorted[middle - 1] + sorted[middle]) / 2.0f
+        } else {
+            sorted[middle]
+        }
+    }
+
     fun close() {
         faceLandmarker.close()
         poseLandmarker.close()
     }
 
+    fun resetCalibration() {
+        lastFaceResult = mapOf("hasFace" to false)
+        lastPoseResult = mapOf("hasPose" to false)
+        poseSequence = 0L
+        smoothedHeadYaw = 0.0f
+        smoothedHeadPitch = 0.0f
+        headOffsetScore = 0.0f
+        hasSmoothedHeadPose = false
+        hasSmoothedHeadOffsetMetric = false
+        headPitchBaseline = null
+        smoothedHeadOffsetMetric = 0.0f
+        headOffsetBaselineSamples.clear()
+        headOffsetBaseline = null
+        headOffsetScoreScale = HEAD_OFFSET_RATIO_SCORE_SCALE
+    }
+
     companion object {
         private const val LEFT_SHOULDER = 11
         private const val RIGHT_SHOULDER = 12
+        private const val POSE_NOSE = 0
+        private const val POSE_LEFT_EYE = 2
+        private const val POSE_RIGHT_EYE = 5
+        private const val POSE_LEFT_EAR = 7
+        private const val POSE_RIGHT_EAR = 8
         private const val NOSE_TIP = 1
         private const val FOREHEAD_TOP = 10
         private const val CHIN = 152
@@ -296,10 +406,12 @@ class MediaPipeVisionManager(context: Context) {
         private const val CLOSED_EYE_EAR = 0.13f
         private const val OPEN_EYE_EAR = 0.27f
         private const val HEAD_POSE_SMOOTHING = 0.45f
-        private const val HEAD_YAW_ASYMMETRY_SCALE = 120.0f
+        private const val HEAD_OFFSET_METRIC_SMOOTHING = 0.55f
         private const val HEAD_PITCH_SCALE = 120.0f
-        private const val HEAD_OFFSET_BASELINE_MS = 1000L
-        private const val HEAD_OFFSET_SCORE_SCALE = 260.0f
+        private const val HEAD_OFFSET_BASELINE_SAMPLES = 5
+        private const val HEAD_OFFSET_MATRIX_SCORE_SCALE = 2.4f
+        private const val HEAD_OFFSET_RATIO_SCORE_SCALE = 180.0f
+        private const val HEAD_YAW_RATIO_DISPLAY_SCALE = 120.0f
         private const val MAX_HEAD_YAW = 45.0f
         private const val MAX_HEAD_PITCH = 45.0f
         private const val NEUTRAL_NOSE_VERTICAL_RATIO = 0.52f

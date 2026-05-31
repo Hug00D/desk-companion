@@ -21,6 +21,8 @@ class FaceDetectionScreen extends StatefulWidget {
 }
 
 class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
+  static const String _testVideoAsset = 'assets/test.mp4';
+
   late VideoPlayerController _controller;
 
   Timer? _detectionTimer;
@@ -35,16 +37,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   double? _headYaw;
   double? _headPitch;
   double? _headOffsetScore;
+  double? _postureDownScore;
+  double? _poseNoseY;
+  int? _lastAnalyzedVideoMs;
   bool _isHeadOffsetCalibrating = false;
   final List<double> _headOffsetSamples = <double>[];
   bool _hasFace = false;
 
   bool _showDebugPanel = false;
+  bool _showVideoPreview = true;
 
   static const Duration _alertCooldown = Duration(seconds: 3);
 
   int _closedEyeFrameCount = 0;
   int _distractedFrameCount = 0;
+  int _postureDownFrameCount = 0;
   DateTime? _lastAlertTime;
   CompanionStatus _companionStatus = CompanionStatus.normal;
   String _fatigueLevel = CompanionStatus.normal.label;
@@ -53,10 +60,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   void initState() {
     super.initState();
 
-    _controller = VideoPlayerController.asset('assets/test_face.mp4')
-      ..initialize().then((_) {
+    _controller = VideoPlayerController.asset(_testVideoAsset)
+      ..initialize().then((_) async {
         if (!mounted) return;
         setState(() {});
+        await _resetVisionCalibration();
         _controller.play();
         _controller.setLooping(true);
       });
@@ -78,11 +86,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     if (_isProcessing || !_controller.value.isInitialized) return;
     _isProcessing = true;
 
-    String? thumbnailPath;
-
     try {
       if (_tempVideoPath == null) {
-        final byteData = await rootBundle.load('assets/test_face.mp4');
+        final byteData = await rootBundle.load(_testVideoAsset);
         final directory = await getTemporaryDirectory();
         final file = io.File('${directory.path}/temp_video.mp4');
         await file.writeAsBytes(
@@ -94,18 +100,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         _tempVideoPath = file.path;
       }
 
-      thumbnailPath = await VideoThumbnail.thumbnailFile(
+      final positionMs = _controller.value.position.inMilliseconds;
+      final imageBytes = await VideoThumbnail.thumbnailData(
         video: _tempVideoPath!,
-        thumbnailPath: (await getTemporaryDirectory()).path,
         imageFormat: ImageFormat.JPEG,
-        timeMs: _controller.value.position.inMilliseconds,
+        timeMs: positionMs,
         quality: 20,
       );
 
-      if (thumbnailPath == null) return;
+      if (imageBytes == null) return;
 
-      final imageFile = io.File(thumbnailPath);
-      final Uint8List imageBytes = await imageFile.readAsBytes();
+      _lastAnalyzedVideoMs = positionMs;
       final visionResult = await _visionChannel.analyzeFrame(imageBytes);
 
       _handleVisionResult(visionResult);
@@ -113,22 +118,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       debugPrint("辨識錯誤: $e");
     } finally {
       _isProcessing = false;
-      if (thumbnailPath != null) {
-        final file = io.File(thumbnailPath);
-        if (file.existsSync()) {
-          try {
-            file.deleteSync();
-          } catch (e) {
-            debugPrint("刪除暫存縮圖失敗: $e");
-          }
-        }
-      }
     }
   }
 
   void _handleVisionResult(VisionResult visionResult) {
+    final analysis = _companionController.analyze(visionResult);
+
     debugPrint(
       'Vision data: '
+      'videoMs=${_lastAnalyzedVideoMs ?? -1}, '
       'hasFace=${visionResult.hasFace}, '
       'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
       'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
@@ -136,24 +134,37 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       'headPitch=${_formatDebugValue(visionResult.headPitch)}, '
       'headOffsetScore=${_formatDebugValue(visionResult.headOffsetScore)}, '
       'headOffsetCalibrating=${visionResult.isHeadOffsetCalibrating}, '
+      'postureDownScore=${_formatDebugValue(analysis.postureDownResult.score)}, '
+      'postureDownFrames=${analysis.postureDownResult.downFrameCount}, '
+      'postureDownParts='
+      'headLow=${_formatDebugValue(analysis.postureDownResult.headLowScore)}, '
+      'shoulderDrop=${_formatDebugValue(analysis.postureDownResult.shoulderDropScore)}, '
+      'noseDrop=${_formatDebugValue(analysis.postureDownResult.noseDropScore)}, '
+      'visibility=${_formatDebugValue(analysis.postureDownResult.visibilityScore)}, '
+      'sideProne=${_formatDebugValue(analysis.postureDownResult.sideProneScore)}, '
+      'shoulderShrink=${_formatDebugValue(analysis.postureDownResult.shoulderShrinkScore)}, '
+      'postureCalibrating=${analysis.postureDownResult.isCalibrating}, '
       'hasPose=${visionResult.hasPose}, '
+      'poseSeq=${visionResult.poseSequence ?? 'N/A'}, '
       'shoulderWidth=${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'}, '
+      'poseNose=(${_formatRawValue(visionResult.raw['poseNoseX'])}, ${_formatRawValue(visionResult.raw['poseNoseY'])}), '
       'ls=(${_formatRawValue(visionResult.raw['lsX'])}, ${_formatRawValue(visionResult.raw['lsY'])}), '
       'rs=(${_formatRawValue(visionResult.raw['rsX'])}, ${_formatRawValue(visionResult.raw['rsY'])})',
     );
-
-    final analysis = _companionController.analyze(visionResult);
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
     _rightEyeOpenValue = visionResult.rightEyeOpen;
     _headYaw = visionResult.headYaw;
     _headPitch = visionResult.headPitch;
     _headOffsetScore = visionResult.headOffsetScore;
+    _postureDownScore = analysis.postureDownResult.score;
+    _poseNoseY = visionResult.poseNoseY;
     _isHeadOffsetCalibrating = visionResult.isHeadOffsetCalibrating;
     _recordHeadOffsetSample(visionResult);
     _hasFace = visionResult.hasFace;
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
+    _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
     _companionStatus = analysis.status;
     _fatigueLevel = analysis.status.label;
 
@@ -174,6 +185,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
             "右眼: ${_rightEyeOpenValue?.toStringAsFixed(2) ?? 'N/A'}\n"
             "頭部偏移分數: ${_formatScore(_headOffsetScore)}"
             "${_isHeadOffsetCalibrating ? '（校正中）' : ''}\n"
+            "趴下分數: ${_formatScore(_postureDownScore)}\n"
             "狀態: $_fatigueLevel";
       });
     }
@@ -220,8 +232,27 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   Future<void> _restartVideo() async {
     if (!_controller.value.isInitialized) return;
+    await _resetVisionCalibration();
     await _controller.seekTo(Duration.zero);
     await _controller.play();
+  }
+
+  Future<void> _resetVisionCalibration() async {
+    _companionController.reset();
+    _headOffsetSamples.clear();
+    _lastAnalyzedVideoMs = null;
+    _closedEyeFrameCount = 0;
+    _distractedFrameCount = 0;
+    _postureDownFrameCount = 0;
+    _headOffsetScore = null;
+    _postureDownScore = null;
+    _isHeadOffsetCalibrating = true;
+
+    try {
+      await _visionChannel.resetVision();
+    } catch (e) {
+      debugPrint("重設視覺校正失敗: $e");
+    }
   }
 
   Color _getStatusColor() {
@@ -230,6 +261,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         return const Color(0xFFE85D75);
       case CompanionStatus.attention:
       case CompanionStatus.distracted:
+      case CompanionStatus.postureDown:
       case CompanionStatus.tooClose:
         return const Color(0xFFFFB648);
       case CompanionStatus.normal:
@@ -239,7 +271,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   String _getCompanionMessage() {
-    if (!_hasFace) {
+    if (!_hasFace && _companionStatus != CompanionStatus.postureDown) {
       return "尚未偵測到使用者，請確認畫面與光線。";
     }
 
@@ -250,6 +282,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         return "似乎有些疲倦了，記得留意狀態。";
       case CompanionStatus.distracted:
         return "視線偏離了一段時間，先把注意力帶回螢幕吧。";
+      case CompanionStatus.postureDown:
+        return "偵測到頭部高度明顯下降，先確認一下姿勢吧。";
       case CompanionStatus.tooClose:
         return "你靠得太近了，請調整坐姿保護眼睛。";
       case CompanionStatus.normal:
@@ -276,6 +310,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   String _formatScore(double? value) {
     if (value == null) return "--";
     return value.toStringAsFixed(1);
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return "$minutes:$seconds";
   }
 
   void _recordHeadOffsetSample(VisionResult visionResult) {
@@ -344,13 +384,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
 
   Widget _buildAttentionBanner() {
     if (_companionStatus != CompanionStatus.attention &&
-        _companionStatus != CompanionStatus.distracted) {
+        _companionStatus != CompanionStatus.distracted &&
+        _companionStatus != CompanionStatus.postureDown) {
       return const SizedBox.shrink();
     }
     final isDistracted = _companionStatus == CompanionStatus.distracted;
+    final isPostureDown = _companionStatus == CompanionStatus.postureDown;
 
     return Positioned(
-      top: 96,
+      top: _showVideoPreview ? 316 : 96,
       left: 18,
       right: 18,
       child: Container(
@@ -373,7 +415,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                isDistracted ? "偵測到視線偏離，請把注意力帶回螢幕。" : "偵測到眨眼頻繁，請留意疲勞狀態。",
+                isPostureDown
+                    ? "偵測到頭部高度下降，請確認是否趴下或低頭過久。"
+                    : isDistracted
+                    ? "偵測到視線偏離，請把注意力帶回螢幕。"
+                    : "偵測到眨眼頻繁，請留意疲勞狀態。",
                 style: const TextStyle(
                   color: Color(0xFF6B4E16),
                   fontSize: 15,
@@ -569,6 +615,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
                   "${_isHeadOffsetCalibrating ? "（校正中）" : ""}",
                 ),
                 Text("連續分心次數：$_distractedFrameCount"),
+                Text("趴下分數：${_formatScore(_postureDownScore)}"),
+                Text("連續趴下次數：$_postureDownFrameCount"),
+                Text(
+                  "趴下細項："
+                  "頭低 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.headLowScore)} / "
+                  "肩降 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.shoulderDropScore)} / "
+                  "鼻降 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.noseDropScore)} / "
+                  "側趴 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.sideProneScore)} / "
+                  "肩縮 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.shoulderShrinkScore)}",
+                ),
+                Text("Pose 鼻子 Y：${_formatScore(_poseNoseY)}"),
                 Text("Yaw 參考值：${_formatAngle(_headYaw)}"),
                 Text("Pitch 參考值：${_formatAngle(_headPitch)}"),
                 Text("連續閉眼次數：$_closedEyeFrameCount"),
@@ -651,6 +708,125 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     );
   }
 
+  Widget _buildVideoPreviewPanel() {
+    if (!_showVideoPreview) return const SizedBox.shrink();
+
+    return Positioned(
+      top: 74,
+      left: 18,
+      right: 18,
+      child: SafeArea(
+        bottom: false,
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFD6EEFA)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 18,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.movie_filter_rounded,
+                    color: Color(0xFF2F7ED8),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      "測試影片同步預覽",
+                      style: TextStyle(
+                        color: Color(0xFF20324D),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: "隱藏影片",
+                    onPressed: () {
+                      setState(() {
+                        _showVideoPreview = false;
+                      });
+                    },
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                  ),
+                ],
+              ),
+              if (_controller.value.isInitialized)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Stack(
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      AspectRatio(
+                        aspectRatio: _controller.value.aspectRatio,
+                        child: VideoPlayer(_controller),
+                      ),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        color: Colors.black.withValues(alpha: 0.45),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _controller.value.isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              "${_formatDuration(_controller.value.position)} / "
+                              "${_formatDuration(_controller.value.duration)}",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              "趴下 ${_formatScore(_postureDownScore)}",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                const SizedBox(
+                  height: 140,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _printHeadOffsetStats();
@@ -663,7 +839,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   Widget build(BuildContext context) {
     final isWarmWarning =
         _companionStatus == CompanionStatus.attention ||
-        _companionStatus == CompanionStatus.distracted;
+        _companionStatus == CompanionStatus.distracted ||
+        _companionStatus == CompanionStatus.postureDown;
     final Color overlayColor = _companionStatus == CompanionStatus.fatigue
         ? const Color(0x66E85D75)
         : isWarmWarning
@@ -736,6 +913,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
               ),
             ),
           ),
+          _buildVideoPreviewPanel(),
           _buildAttentionBanner(),
           if (_companionStatus == CompanionStatus.fatigue)
             const Positioned.fill(child: ColoredBox(color: Color(0x22E85D75))),
@@ -753,6 +931,26 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
           ),
           _buildBottomCompanionPanel(),
           _buildDebugPanel(),
+          if (!_showVideoPreview)
+            Positioned(
+              top: 74,
+              right: 18,
+              child: SafeArea(
+                bottom: false,
+                child: FloatingActionButton.small(
+                  heroTag: "show-video-preview",
+                  tooltip: "顯示影片",
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF2F7ED8),
+                  onPressed: () {
+                    setState(() {
+                      _showVideoPreview = true;
+                    });
+                  },
+                  child: const Icon(Icons.movie_filter_rounded),
+                ),
+              ),
+            ),
           _buildDebugToggleButton(),
         ],
       ),
