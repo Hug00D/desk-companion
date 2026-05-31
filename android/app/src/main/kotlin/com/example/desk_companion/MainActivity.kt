@@ -46,6 +46,14 @@ class MainActivity : FlutterActivity() {
                     result.success("Simulator Mode: Camera logic bypassed")
                 }
 
+                "resetVision" -> {
+                    frameCounter = 0L
+                    if (visionManagerDelegate.isInitialized()) {
+                        visionManager.resetCalibration()
+                    }
+                    result.success("OK")
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -94,7 +102,7 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
-        private const val FACE_DETECTION_INTERVAL = 2
-        private const val POSE_DETECTION_INTERVAL = 10
+        private const val FACE_DETECTION_INTERVAL = 1
+        private const val POSE_DETECTION_INTERVAL = 3
     }
 }
