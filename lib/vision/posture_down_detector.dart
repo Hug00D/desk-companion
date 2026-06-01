@@ -78,6 +78,15 @@ class PostureDownDetector {
     required bool shouldUpdate,
   }) {
     if (!shouldUpdate) {
+      if (result.hasFace && !result.hasPose) {
+        _clearDownHold();
+        return const PostureDownDetectionResult(
+          state: PostureDownState.unavailable,
+          score: null,
+          downFrameCount: 0,
+        );
+      }
+
       final score = _lastScore;
       if (score == null) {
         return const PostureDownDetectionResult(
@@ -87,7 +96,7 @@ class PostureDownDetector {
         );
       }
 
-      return _evaluateHeldScore(
+      return _holdScore(
         score: score,
         previousDownFrameCount: previousDownFrameCount,
       );
@@ -95,9 +104,19 @@ class PostureDownDetector {
 
     final score = _calculateScore(result, shouldUpdate: shouldUpdate);
     if (score == null) {
+      if (result.hasFace) {
+        _clearDownHold();
+        return const PostureDownDetectionResult(
+          state: PostureDownState.unavailable,
+          score: null,
+          downFrameCount: 0,
+        );
+      }
+
       _missingPoseFrameCount++;
       final lastScore = _lastScore;
-      if (lastScore != null && _missingPoseFrameCount <= missingPoseHoldFrames) {
+      if (lastScore != null &&
+          _missingPoseFrameCount <= missingPoseHoldFrames) {
         if (previousDownFrameCount >= downFrames) {
           final heldScore = _lastDownScore ?? lastScore;
           return _buildResultFromScore(
@@ -107,7 +126,7 @@ class PostureDownDetector {
           );
         }
 
-        return _evaluateHeldScore(
+        return _holdScore(
           score: lastScore,
           previousDownFrameCount: previousDownFrameCount,
         );
@@ -127,25 +146,28 @@ class PostureDownDetector {
     );
   }
 
-  PostureDownDetectionResult _evaluateHeldScore({
+  PostureDownDetectionResult _holdScore({
     required _PostureScore score,
     required int previousDownFrameCount,
   }) {
-    final canContinueDown =
-        !score.isCalibrating &&
-        score.total >= downScoreThreshold &&
-        (previousDownFrameCount >= downFrames ||
-            score.total >= strongDownScoreThreshold);
-    final downFrameCount = canContinueDown
-        ? previousDownFrameCount + 1
+    final canConfirmFromHeldFrame =
+        previousDownFrameCount > 0 && _isStrongProneEvidence(score);
+    final downFrameCount = canConfirmFromHeldFrame
+        ? math.min(previousDownFrameCount + 1, downFrames)
         : previousDownFrameCount;
+    final isConfirmedDown = downFrameCount >= downFrames;
+    if (isConfirmedDown) {
+      _lastDownScore = score;
+    }
+
+    final displayScore = isConfirmedDown
+        ? score
+        : _withTotal(score, math.min(score.total, downScoreThreshold - 1));
 
     return _buildResultFromScore(
-      score: score,
+      score: displayScore,
       downFrameCount: downFrameCount,
-      state: downFrameCount >= downFrames
-          ? PostureDownState.down
-          : PostureDownState.normal,
+      state: isConfirmedDown ? PostureDownState.down : PostureDownState.normal,
     );
   }
 
@@ -159,6 +181,16 @@ class PostureDownDetector {
     }
 
     if (!isDown && previousDownFrameCount >= downFrames) {
+      if (_isClearlyRecovered(score)) {
+        _clearDownHold();
+        _lastScore = score;
+        return _buildResultFromScore(
+          score: score,
+          downFrameCount: 0,
+          state: PostureDownState.normal,
+        );
+      }
+
       _recoveryFrameCount++;
       if (_recoveryFrameCount < recoveryFrames) {
         final heldScore = _lastDownScore ?? score;
@@ -183,8 +215,11 @@ class PostureDownDetector {
       );
     }
 
+    final displayScore = isDown
+        ? _withTotal(score, math.min(score.total, downScoreThreshold - 1))
+        : score;
     return _buildResultFromScore(
-      score: score,
+      score: displayScore,
       downFrameCount: downFrameCount,
       state: PostureDownState.normal,
     );
@@ -236,6 +271,7 @@ class PostureDownDetector {
         headShoulderRatio: headShoulderRatio,
         shoulderCenterYRatio: shoulderCenterYRatio,
         noseYRatio: noseYRatio,
+        hasFace: result.hasFace,
         isCalibrating: true,
       );
     }
@@ -270,12 +306,22 @@ class PostureDownDetector {
         !result.hasFace && shoulderDropScore >= 20;
     final gatedHeadDropScore = hasBodyCollapseEvidence ? headDropScore : 0.0;
 
+    final gatedShoulderDropScore =
+        result.hasFace && shoulderShrinkScore < 45 && sideProneScore < 55
+        ? math.min(shoulderDropScore, downScoreThreshold - 1)
+        : shoulderDropScore;
+    final hasBodyCollapseEvidenceForProne =
+        shoulderShrinkScore >= 45 || shoulderDropScore >= 24;
+    final gatedSideProneScore = hasBodyCollapseEvidenceForProne
+        ? sideProneScore
+        : 0.0;
+
     final total = [
-      shoulderDropScore,
+      gatedShoulderDropScore,
       shoulderShrinkScore,
       gatedHeadDropScore,
       visibilityScore,
-      sideProneScore,
+      gatedSideProneScore,
     ].reduce(math.max);
 
     return _PostureScore(
@@ -289,6 +335,7 @@ class PostureDownDetector {
       headShoulderRatio: headShoulderRatio,
       shoulderCenterYRatio: shoulderCenterYRatio,
       noseYRatio: noseYRatio,
+      hasFace: result.hasFace,
     );
   }
 
@@ -346,6 +393,13 @@ class PostureDownDetector {
     _recoveryFrameCount = 0;
   }
 
+  void _clearDownHold() {
+    _lastScore = null;
+    _lastDownScore = null;
+    _missingPoseFrameCount = 0;
+    _recoveryFrameCount = 0;
+  }
+
   double _visibilityLossScore(VisionResult result) {
     final shoulderVisibility = _average([
       result.leftShoulderVisibility,
@@ -396,19 +450,29 @@ class PostureDownDetector {
     ]);
 
     final headDropEvidence = math.max(headLowScore, noseDropScore);
+    final faceMissingShoulderDropScore = _faceMissingShoulderDropScore(
+      hasFace: result.hasFace,
+      shoulderDropScore: shoulderDropScore,
+      shoulderVisibility: shoulderVisibility,
+      visibleShoulderCount: visibleShoulderCount,
+    );
+    if (faceMissingShoulderDropScore > 0) {
+      return faceMissingShoulderDropScore;
+    }
+
     if (headLowScore < 25 && noseDropScore < 55) {
       return 0;
     }
     if (headDropEvidence < 35) return 0;
     if (result.hasFace &&
         (headLowScore < 45 ||
-            (shoulderShrinkScore < 35 && shoulderDropScore < 25))) {
+            (shoulderShrinkScore < 35 && shoulderDropScore < 50))) {
       return 0;
     }
     if (!result.hasFace &&
-        headLowScore < 25 &&
+        headLowScore < 55 &&
         shoulderDropScore < 25 &&
-        shoulderShrinkScore < 35) {
+        shoulderShrinkScore < 45) {
       return 0;
     }
 
@@ -428,10 +492,32 @@ class PostureDownDetector {
     return score.clamp(0, 100).toDouble();
   }
 
+  double _faceMissingShoulderDropScore({
+    required bool hasFace,
+    required double shoulderDropScore,
+    required double shoulderVisibility,
+    required int visibleShoulderCount,
+  }) {
+    if (hasFace || shoulderDropScore < 24) return 0;
+
+    final visibilityBonus = ((shoulderVisibility - 0.35) / 0.45 * 12)
+        .clamp(0, 12)
+        .toDouble();
+    final singleShoulderBonus = visibleShoulderCount <= 1 ? 8.0 : 0.0;
+    return (52 +
+            shoulderDropScore * 1.25 +
+            visibilityBonus +
+            singleShoulderBonus)
+        .clamp(0, 100)
+        .toDouble();
+  }
+
   double _shoulderShrinkScore({required double shoulderWidthRatio}) {
     final baseline = _baselineShoulderWidthRatio;
     if (baseline == null || shoulderShrinkRatioForMaxScore <= 0) return 0;
-    return ((baseline - shoulderWidthRatio) / shoulderShrinkRatioForMaxScore * 100)
+    return ((baseline - shoulderWidthRatio) /
+            shoulderShrinkRatioForMaxScore *
+            100)
         .clamp(0, 100)
         .toDouble();
   }
@@ -449,6 +535,52 @@ class PostureDownDetector {
       return (sorted[middle - 1] + sorted[middle]) / 2;
     }
     return sorted[middle];
+  }
+
+  _PostureScore _withTotal(_PostureScore score, double total) {
+    return _PostureScore(
+      total: total,
+      headLow: score.headLow,
+      shoulderDrop: score.shoulderDrop,
+      noseDrop: score.noseDrop,
+      visibility: score.visibility,
+      sideProne: score.sideProne,
+      shoulderShrink: score.shoulderShrink,
+      headShoulderRatio: score.headShoulderRatio,
+      shoulderCenterYRatio: score.shoulderCenterYRatio,
+      noseYRatio: score.noseYRatio,
+      hasFace: score.hasFace,
+      isCalibrating: score.isCalibrating,
+    );
+  }
+
+  bool _isStrongProneEvidence(_PostureScore score) {
+    if (score.isCalibrating || score.total < strongDownScoreThreshold) {
+      return false;
+    }
+
+    final hasSideProneWithBodyCollapse =
+        score.sideProne >= 70 &&
+        score.headLow >= 75 &&
+        score.noseDrop >= 85 &&
+        (score.shoulderDrop >= 45 || score.shoulderShrink >= 70);
+    final hasShoulderShrinkProne =
+        score.shoulderShrink >= 80 &&
+        score.headLow >= 75 &&
+        score.noseDrop >= 85;
+    final hasFaceMissingShoulderDropEvidence =
+        score.sideProne >= 85 && score.shoulderDrop >= 45;
+    return hasSideProneWithBodyCollapse ||
+        hasShoulderShrinkProne ||
+        hasFaceMissingShoulderDropEvidence;
+  }
+
+  bool _isClearlyRecovered(_PostureScore score) {
+    return score.hasFace &&
+        score.total < downScoreThreshold &&
+        score.sideProne < 55 &&
+        score.shoulderDrop < 50 &&
+        score.shoulderShrink < 45;
   }
 
   PostureDownDetectionResult _buildResultFromScore({
@@ -486,6 +618,7 @@ class _PostureScore {
     required this.headShoulderRatio,
     required this.shoulderCenterYRatio,
     required this.noseYRatio,
+    required this.hasFace,
     this.isCalibrating = false,
   });
 
@@ -499,5 +632,6 @@ class _PostureScore {
   final double headShoulderRatio;
   final double shoulderCenterYRatio;
   final double noseYRatio;
+  final bool hasFace;
   final bool isCalibrating;
 }

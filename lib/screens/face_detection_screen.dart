@@ -101,6 +101,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
       }
 
       final positionMs = _controller.value.position.inMilliseconds;
+
       final imageBytes = await VideoThumbnail.thumbnailData(
         video: _tempVideoPath!,
         imageFormat: ImageFormat.JPEG,
@@ -127,6 +128,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     debugPrint(
       'Vision data: '
       'videoMs=${_lastAnalyzedVideoMs ?? -1}, '
+      'status=${analysis.status.name}, '
       'hasFace=${visionResult.hasFace}, '
       'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
       'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
@@ -261,6 +263,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         return const Color(0xFFE85D75);
       case CompanionStatus.attention:
       case CompanionStatus.distracted:
+      case CompanionStatus.drowsy:
       case CompanionStatus.postureDown:
       case CompanionStatus.tooClose:
         return const Color(0xFFFFB648);
@@ -271,7 +274,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   }
 
   String _getCompanionMessage() {
-    if (!_hasFace && _companionStatus != CompanionStatus.postureDown) {
+    if (!_hasFace &&
+        _companionStatus != CompanionStatus.postureDown &&
+        _companionStatus != CompanionStatus.distracted &&
+        _companionStatus != CompanionStatus.drowsy) {
       return "尚未偵測到使用者，請確認畫面與光線。";
     }
 
@@ -282,8 +288,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
         return "似乎有些疲倦了，記得留意狀態。";
       case CompanionStatus.distracted:
         return "視線偏離了一段時間，先把注意力帶回螢幕吧。";
+      case CompanionStatus.drowsy:
+        return "偵測到低頭打瞌睡，先抬頭休息一下。";
       case CompanionStatus.postureDown:
-        return "偵測到頭部高度明顯下降，先確認一下姿勢吧。";
+        return "偵測到趴下睡覺，先抬頭休息一下。";
       case CompanionStatus.tooClose:
         return "你靠得太近了，請調整坐姿保護眼睛。";
       case CompanionStatus.normal:
@@ -385,10 +393,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
   Widget _buildAttentionBanner() {
     if (_companionStatus != CompanionStatus.attention &&
         _companionStatus != CompanionStatus.distracted &&
+        _companionStatus != CompanionStatus.drowsy &&
         _companionStatus != CompanionStatus.postureDown) {
       return const SizedBox.shrink();
     }
     final isDistracted = _companionStatus == CompanionStatus.distracted;
+    final isDrowsy = _companionStatus == CompanionStatus.drowsy;
     final isPostureDown = _companionStatus == CompanionStatus.postureDown;
 
     return Positioned(
@@ -416,7 +426,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
             Expanded(
               child: Text(
                 isPostureDown
-                    ? "偵測到頭部高度下降，請確認是否趴下或低頭過久。"
+                    ? "偵測到趴下睡覺，先抬頭休息一下。"
+                    : isDrowsy
+                    ? "偵測到低頭打瞌睡，先抬頭休息一下。"
                     : isDistracted
                     ? "偵測到視線偏離，請把注意力帶回螢幕。"
                     : "偵測到眨眼頻繁，請留意疲勞狀態。",
@@ -840,6 +852,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen> {
     final isWarmWarning =
         _companionStatus == CompanionStatus.attention ||
         _companionStatus == CompanionStatus.distracted ||
+        _companionStatus == CompanionStatus.drowsy ||
         _companionStatus == CompanionStatus.postureDown;
     final Color overlayColor = _companionStatus == CompanionStatus.fatigue
         ? const Color(0x66E85D75)

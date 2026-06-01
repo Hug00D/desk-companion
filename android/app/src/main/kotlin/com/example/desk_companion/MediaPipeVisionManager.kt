@@ -2,6 +2,7 @@ package com.example.desk_companion
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.Category
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
@@ -31,6 +32,8 @@ class MediaPipeVisionManager(context: Context) {
     private val headOffsetBaselineSamples = mutableListOf<Float>()
     private var headOffsetBaseline: Float? = null
     private var headOffsetScoreScale = HEAD_OFFSET_RATIO_SCORE_SCALE
+    private var lastBaselineCandidateYaw: Float? = null
+    private var headMatrixDebugCounter = 0L
 
     init {
         val faceBaseOptions = BaseOptions.builder()
@@ -170,12 +173,19 @@ class MediaPipeVisionManager(context: Context) {
             val transformationMatrix = faceResult.facialTransformationMatrixes()
                 .orElse(emptyList())
                 .firstOrNull()
-            val headPose = estimateHeadPose(landmarks, transformationMatrix)
+            val leftEyeOpen = combineOpenProbability(leftBlendOpen, leftLandmarkOpen)
+            val rightEyeOpen = combineOpenProbability(rightBlendOpen, rightLandmarkOpen)
+            val headPose = estimateHeadPose(
+                landmarks = landmarks,
+                transformationMatrix = transformationMatrix,
+                leftEyeOpen = leftEyeOpen,
+                rightEyeOpen = rightEyeOpen
+            )
 
             mapOf(
                 "hasFace" to true,
-                "leftEye" to combineOpenProbability(leftBlendOpen, leftLandmarkOpen),
-                "rightEye" to combineOpenProbability(rightBlendOpen, rightLandmarkOpen),
+                "leftEye" to leftEyeOpen,
+                "rightEye" to rightEyeOpen,
                 "headYaw" to headPose.first,
                 "headPitch" to headPose.second,
                 "headOffsetScore" to headPose.third,
@@ -220,7 +230,9 @@ class MediaPipeVisionManager(context: Context) {
 
     private fun estimateHeadPose(
         landmarks: List<NormalizedLandmark>,
-        transformationMatrix: FloatArray?
+        transformationMatrix: FloatArray?,
+        leftEyeOpen: Float,
+        rightEyeOpen: Float
     ): Triple<Float, Float, Float> {
         val nose = landmarks.getOrNull(NOSE_TIP)
         val leftEyeCorner = landmarks.getOrNull(LEFT_EYE_OUTER_CORNER)
@@ -245,14 +257,23 @@ class MediaPipeVisionManager(context: Context) {
             return Triple(smoothedHeadYaw, smoothedHeadPitch, headOffsetScore)
         }
         val yawRatio = (distToLeft - distToRight) / eyeDistanceSum
+        transformationMatrix?.let { logHeadMatrixDebug(it) }
         val matrixYaw = transformationMatrix?.let { extractYawFromMatrix(it) }
+        val matrixPitch = transformationMatrix?.let { extractPitchFromMatrix(it) }
         val yawMetric = matrixYaw ?: yawRatio
         val scoreScale = if (matrixYaw != null) {
             HEAD_OFFSET_MATRIX_SCORE_SCALE
         } else {
             HEAD_OFFSET_RATIO_SCORE_SCALE
         }
-        val headOffsetScore = updateHeadOffsetScore(yawMetric, scoreScale)
+        val headOffsetScore = updateHeadOffsetScore(
+            yawMetric = yawMetric,
+            scoreScale = scoreScale,
+            matrixYaw = matrixYaw,
+            matrixPitch = matrixPitch,
+            leftEyeOpen = leftEyeOpen,
+            rightEyeOpen = rightEyeOpen
+        )
         if (headOffsetBaseline == null) {
             return Triple(0.0f, 0.0f, headOffsetScore)
         }
@@ -265,7 +286,7 @@ class MediaPipeVisionManager(context: Context) {
         }
         val rawYaw = clamp(rawYawValue, -MAX_HEAD_YAW, MAX_HEAD_YAW)
 
-        val rawPitch = transformationMatrix?.let { extractPitchFromMatrix(it) } ?: run {
+        val rawPitch = matrixPitch ?: run {
             val normalizedNoseY = (nose.y() - forehead.y()) / (chin.y() - forehead.y())
             clamp(
                 value = (normalizedNoseY - NEUTRAL_NOSE_VERTICAL_RATIO) * HEAD_PITCH_SCALE,
@@ -282,9 +303,20 @@ class MediaPipeVisionManager(context: Context) {
         return smoothHeadPose(rawYaw, calibratedPitch, headOffsetScore)
     }
 
-    private fun updateHeadOffsetScore(yawMetric: Float, scoreScale: Float): Float {
+    private fun updateHeadOffsetScore(
+        yawMetric: Float,
+        scoreScale: Float,
+        matrixYaw: Float?,
+        matrixPitch: Float?,
+        leftEyeOpen: Float,
+        rightEyeOpen: Float
+    ): Float {
         if (headOffsetBaseline == null) {
-            headOffsetBaselineSamples.add(yawMetric)
+            if (canUseForHeadBaseline(matrixYaw, matrixPitch, leftEyeOpen, rightEyeOpen) &&
+                isYawStableForBaseline(yawMetric)
+            ) {
+                headOffsetBaselineSamples.add(yawMetric)
+            }
             headOffsetScore = 0.0f
             if (headOffsetBaselineSamples.size >= HEAD_OFFSET_BASELINE_SAMPLES) {
                 headOffsetBaseline = median(headOffsetBaselineSamples)
@@ -316,6 +348,27 @@ class MediaPipeVisionManager(context: Context) {
         return headOffsetScore
     }
 
+    private fun canUseForHeadBaseline(
+        matrixYaw: Float?,
+        matrixPitch: Float?,
+        leftEyeOpen: Float,
+        rightEyeOpen: Float
+    ): Boolean {
+        if (matrixYaw == null || matrixPitch == null) return false
+        if (abs(matrixPitch) > HEAD_BASELINE_MAX_ABS_PITCH) return false
+        val averageEyeOpen = (leftEyeOpen + rightEyeOpen) / 2.0f
+        val maxEyeOpen = max(leftEyeOpen, rightEyeOpen)
+        if (averageEyeOpen < HEAD_BASELINE_MIN_AVG_EYE_OPEN) return false
+        if (maxEyeOpen < HEAD_BASELINE_MIN_SINGLE_EYE_OPEN) return false
+        return true
+    }
+
+    private fun isYawStableForBaseline(currentYaw: Float): Boolean {
+        val last = lastBaselineCandidateYaw
+        lastBaselineCandidateYaw = currentYaw
+        return last == null || abs(currentYaw - last) < HEAD_BASELINE_MAX_YAW_DELTA
+    }
+
     private fun extractYawFromMatrix(matrix: FloatArray): Float? {
         if (matrix.size < 11) return null
         return Math.toDegrees(atan2(matrix[8].toDouble(), matrix[10].toDouble())).toFloat()
@@ -326,6 +379,33 @@ class MediaPipeVisionManager(context: Context) {
         val y = -matrix[9].toDouble()
         val x = sqrt(matrix[8] * matrix[8] + matrix[10] * matrix[10]).toDouble()
         return Math.toDegrees(atan2(y, x)).toFloat()
+    }
+
+    private fun logHeadMatrixDebug(matrix: FloatArray) {
+        if (!DEBUG_HEAD_MATRIX_LOG || matrix.size < 16) return
+        headMatrixDebugCounter++
+        if (headMatrixDebugCounter % HEAD_MATRIX_DEBUG_INTERVAL != 0L) return
+
+        val yawA = Math.toDegrees(atan2(matrix[8].toDouble(), matrix[10].toDouble()))
+        val yawB = Math.toDegrees(atan2(-matrix[2].toDouble(), matrix[0].toDouble()))
+        val pitchA = Math.toDegrees(
+            atan2(
+                -matrix[9].toDouble(),
+                sqrt(matrix[8] * matrix[8] + matrix[10] * matrix[10]).toDouble()
+            )
+        )
+        val pitchB = Math.toDegrees(atan2(matrix[6].toDouble(), matrix[5].toDouble()))
+
+        Log.d(
+            "HeadMatrix",
+            """
+            m00=${matrix[0]}, m01=${matrix[1]}, m02=${matrix[2]}, m03=${matrix[3]}
+            m10=${matrix[4]}, m11=${matrix[5]}, m12=${matrix[6]}, m13=${matrix[7]}
+            m20=${matrix[8]}, m21=${matrix[9]}, m22=${matrix[10]}, m23=${matrix[11]}
+            m30=${matrix[12]}, m31=${matrix[13]}, m32=${matrix[14]}, m33=${matrix[15]}
+            yawA=$yawA, yawB=$yawB, pitchA=$pitchA, pitchB=$pitchB
+            """.trimIndent()
+        )
     }
 
     private fun smoothHeadPose(rawYaw: Float, rawPitch: Float, headOffsetScore: Float): Triple<Float, Float, Float> {
@@ -386,6 +466,8 @@ class MediaPipeVisionManager(context: Context) {
         headOffsetBaselineSamples.clear()
         headOffsetBaseline = null
         headOffsetScoreScale = HEAD_OFFSET_RATIO_SCORE_SCALE
+        lastBaselineCandidateYaw = null
+        headMatrixDebugCounter = 0L
     }
 
     companion object {
@@ -408,12 +490,18 @@ class MediaPipeVisionManager(context: Context) {
         private const val HEAD_POSE_SMOOTHING = 0.45f
         private const val HEAD_OFFSET_METRIC_SMOOTHING = 0.55f
         private const val HEAD_PITCH_SCALE = 120.0f
-        private const val HEAD_OFFSET_BASELINE_SAMPLES = 5
+        private const val HEAD_OFFSET_BASELINE_SAMPLES = 12
+        private const val HEAD_BASELINE_MAX_ABS_PITCH = 30.0f
+        private const val HEAD_BASELINE_MIN_AVG_EYE_OPEN = 0.25f
+        private const val HEAD_BASELINE_MIN_SINGLE_EYE_OPEN = 0.35f
+        private const val HEAD_BASELINE_MAX_YAW_DELTA = 12.0f
         private const val HEAD_OFFSET_MATRIX_SCORE_SCALE = 2.4f
         private const val HEAD_OFFSET_RATIO_SCORE_SCALE = 180.0f
         private const val HEAD_YAW_RATIO_DISPLAY_SCALE = 120.0f
         private const val MAX_HEAD_YAW = 45.0f
         private const val MAX_HEAD_PITCH = 45.0f
         private const val NEUTRAL_NOSE_VERTICAL_RATIO = 0.52f
+        private const val DEBUG_HEAD_MATRIX_LOG = true
+        private const val HEAD_MATRIX_DEBUG_INTERVAL = 15L
     }
 }
