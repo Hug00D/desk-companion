@@ -176,9 +176,7 @@ class CompanionStateEvaluator {
     final hasStrongPostureDownEvidence = _hasStrongPostureDownEvidence(
       postureDownResult,
     );
-    final shouldLatchPostureDown =
-        baseStatus == CompanionStatus.postureDown ||
-        hasStrongPostureDownEvidence;
+    final shouldLatchPostureDown = hasStrongPostureDownEvidence;
     if (shouldLatchPostureDown) {
       _isPostureDownLatched = true;
       _postureDownRecoveryFrames = 0;
@@ -215,14 +213,36 @@ class CompanionStateEvaluator {
         _postureDownRecoveryFrames = 0;
         return CompanionStatus.postureDown;
       }
+      if (!result.hasPose && _recentDeepHeadDropFrames > 0) {
+        _isPostureDownLatched = true;
+        _postureDownRecoveryFrames = 0;
+        _lastFaceMissingContext = CompanionStatus.postureDown;
+        return CompanionStatus.postureDown;
+      }
 
       _faceMissingFrameCount = 0;
       _lastFaceMissingContext = null;
+      final visibleStatus =
+          baseStatus == CompanionStatus.postureDown &&
+              !hasStrongPostureDownEvidence
+          ? _faceVisibleContext(
+              result: result,
+              postureDownResult: postureDownResult,
+              baseStatus: CompanionStatus.normal,
+            )
+          : baseStatus;
       _lastFaceVisibleContext = _faceVisibleContext(
         result: result,
         postureDownResult: postureDownResult,
-        baseStatus: baseStatus,
+        baseStatus: visibleStatus,
       );
+      if (baseStatus == CompanionStatus.postureDown &&
+          !hasStrongPostureDownEvidence) {
+        return visibleStatus == CompanionStatus.postureDown
+            ? CompanionStatus.drowsy
+            : visibleStatus;
+      }
+
       return baseStatus;
     }
 
@@ -235,27 +255,36 @@ class CompanionStateEvaluator {
     final headDropLikely = headLowScore >= 40 && noseDropScore >= 60;
     final currentShouldersNearBaseline =
         result.hasPose && shoulderDropScore < 18 && shoulderShrinkScore < 35;
-    final currentShouldersLowered =
-        result.hasPose && shoulderDropScore >= 24 && shoulderShrinkScore < 45;
     final shouldersNearBaseline =
         currentShouldersNearBaseline || _recentStableShoulderFrames > 0;
-    final shouldersLowered =
-        currentShouldersLowered || _recentLoweredShoulderFrames > 0;
+    final hasRecentProneEvidence =
+        _recentPostureDownEvidenceFrames > 0 ||
+        _recentProneTransitionEvidenceFrames > 0;
     final recentlyHeadDropped = _recentHeadDropFrames > 0;
-
-    if (shouldersLowered && _lastFaceVisibleContext == CompanionStatus.drowsy) {
-      _lastFaceMissingContext = CompanionStatus.drowsy;
-      return CompanionStatus.drowsy;
-    }
+    final recentlyDeepHeadDropped = _recentDeepHeadDropFrames > 0;
 
     if (!result.hasPose &&
         recentlyHeadDropped &&
-        (_recentPostureDownEvidenceFrames > 0 ||
-            _recentProneTransitionEvidenceFrames > 0) &&
+        hasRecentProneEvidence &&
         _faceMissingFrameCount >= 2) {
       _isPostureDownLatched = true;
       _postureDownRecoveryFrames = 0;
       return CompanionStatus.postureDown;
+    }
+
+    if (!result.hasPose &&
+        recentlyDeepHeadDropped &&
+        _faceMissingFrameCount >= 2) {
+      _isPostureDownLatched = true;
+      _postureDownRecoveryFrames = 0;
+      _lastFaceMissingContext = CompanionStatus.postureDown;
+      return CompanionStatus.postureDown;
+    }
+
+    if (_lastFaceVisibleContext == CompanionStatus.drowsy &&
+        !hasRecentProneEvidence) {
+      _lastFaceMissingContext = CompanionStatus.drowsy;
+      return CompanionStatus.drowsy;
     }
 
     if (shouldersNearBaseline) {
@@ -270,7 +299,7 @@ class CompanionStateEvaluator {
     if (!result.hasPose && _lastFaceMissingContext != null) {
       if (_lastFaceMissingContext == CompanionStatus.drowsy &&
           _faceMissingFrameCount >= 4 &&
-          _recentLoweredShoulderFrames > 0) {
+          hasRecentProneEvidence) {
         _lastFaceMissingContext = CompanionStatus.postureDown;
         return CompanionStatus.postureDown;
       }
@@ -337,16 +366,6 @@ class CompanionStateEvaluator {
         shoulderShrinkScore != null &&
         headLowScore != null &&
         noseDropScore != null) {
-      if (_hasClearPostureDownRecovery(
-        result: result,
-        postureDownResult: postureDownResult,
-      )) {
-        _recentHeadDropFrames = 0;
-        _recentDeepHeadDropFrames = 0;
-        _recentPostureDownEvidenceFrames = 0;
-        _recentProneTransitionEvidenceFrames = 0;
-      }
-
       if (shoulderDropScore < 18 && shoulderShrinkScore < 35) {
         _recentStableShoulderFrames = 8;
       } else if (_recentStableShoulderFrames > 0) {
@@ -410,11 +429,15 @@ class CompanionStateEvaluator {
   ) {
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
+    final sideProneScore = postureDownResult.sideProneScore ?? 0;
     final headLowScore = postureDownResult.headLowScore ?? 0;
     final noseDropScore = postureDownResult.noseDropScore ?? 0;
 
     final headCollapsed = headLowScore >= 70 && noseDropScore >= 90;
-    final bodyMoved = shoulderDropScore >= 26 || shoulderShrinkScore >= 55;
+    final bodyMoved =
+        shoulderDropScore >= 34 ||
+        shoulderShrinkScore >= 55 ||
+        (sideProneScore >= 90 && shoulderDropScore >= 40);
     return headCollapsed && bodyMoved;
   }
 

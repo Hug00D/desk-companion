@@ -316,13 +316,19 @@ class PostureDownDetector {
         ? sideProneScore
         : 0.0;
 
-    final total = [
+    final rawTotal = [
       gatedShoulderDropScore,
       shoulderShrinkScore,
       gatedHeadDropScore,
       visibilityScore,
       gatedSideProneScore,
     ].reduce(math.max);
+    final bodyCollapseScore = math.max(shoulderDropScore, shoulderShrinkScore);
+    final faceVisibleWithoutBodyCollapse =
+        result.hasFace && bodyCollapseScore < 45;
+    final total = faceVisibleWithoutBodyCollapse
+        ? math.min(rawTotal, downScoreThreshold - 1)
+        : rawTotal;
 
     return _PostureScore(
       total: total,
