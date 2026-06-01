@@ -120,7 +120,6 @@ class PostureDownDetector {
       );
     }
     _missingPoseFrameCount = 0;
-    _lastScore = score;
 
     return _evaluateScore(
       score: score,
@@ -163,6 +162,7 @@ class PostureDownDetector {
       _recoveryFrameCount++;
       if (_recoveryFrameCount < recoveryFrames) {
         final heldScore = _lastDownScore ?? score;
+        _lastScore = heldScore;
         return _buildResultFromScore(
           score: heldScore,
           downFrameCount: previousDownFrameCount,
@@ -174,6 +174,7 @@ class PostureDownDetector {
     }
 
     final downFrameCount = isDown ? previousDownFrameCount + 1 : 0;
+    _lastScore = score;
     if (downFrameCount >= downFrames) {
       return _buildResultFromScore(
         score: score,

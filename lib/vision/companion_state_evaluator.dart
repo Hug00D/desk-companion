@@ -61,11 +61,12 @@ class CompanionAnalysis {
 class CompanionStateEvaluator {
   CompanionStateEvaluator({
     this.eyeStateDetector = const EyeStateDetector(),
-    this.headOffsetDetector = const HeadOffsetDetector(),
+    HeadOffsetDetector? headOffsetDetector,
     PostureDownDetector? postureDownDetector,
     this.poseStateDetector = const PoseStateDetector(),
     this.presenceDetector = const PresenceDetector(),
-  }) : postureDownDetector = postureDownDetector ?? PostureDownDetector();
+  })  : headOffsetDetector = headOffsetDetector ?? HeadOffsetDetector(),
+        postureDownDetector = postureDownDetector ?? PostureDownDetector();
 
   final EyeStateDetector eyeStateDetector;
   final HeadOffsetDetector headOffsetDetector;
@@ -135,6 +136,7 @@ class CompanionStateEvaluator {
   }
 
   void reset() {
+    headOffsetDetector.reset();
     postureDownDetector.reset();
   }
 }

@@ -17,14 +17,14 @@ class EyeStateDetector {
     this.eyeClosedThreshold = 0.2,
     this.attentionClosedFrames = 1,
     this.fatigueClosedFrames = 3,
-    this.maxReliableHeadYaw = 25,
+    this.maxReliableHeadOffsetScore = 55,
     this.maxReliableHeadPitch = 28,
   });
 
   final double eyeClosedThreshold;
   final int attentionClosedFrames;
   final int fatigueClosedFrames;
-  final double maxReliableHeadYaw;
+  final double maxReliableHeadOffsetScore;
   final double maxReliableHeadPitch;
 
   EyeDetectionResult evaluate({
@@ -38,9 +38,10 @@ class EyeStateDetector {
       );
     }
 
-    final headYaw = result.headYaw?.abs();
+    final headOffsetScore = result.headOffsetScore;
     final headPitch = result.headPitch?.abs();
-    if ((headYaw != null && headYaw > maxReliableHeadYaw) ||
+    if ((headOffsetScore != null &&
+            headOffsetScore > maxReliableHeadOffsetScore) ||
         (headPitch != null && headPitch > maxReliableHeadPitch)) {
       return const EyeDetectionResult(
         state: EyeState.noFace,
