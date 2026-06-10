@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val channel = "com.example.desk_companion/cv_channel"
+    private val voiceChannel = "com.example.desk_companion/voice_channel"
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var visionExecutor: ExecutorService
     private var frameCounter = 0L
@@ -57,6 +58,44 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, voiceChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "formatVoiceResult" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val transcript = arguments?.get("transcript") as? String
+                    if (transcript.isNullOrBlank()) {
+                        result.error("INVALID_ARGUMENT", "transcript is required", null)
+                    } else {
+                        result.success(formatVoiceResult(arguments, transcript))
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun formatVoiceResult(arguments: Map<*, *>?, transcript: String): String {
+        val confidence = (arguments?.get("confidence") as? Number)?.toDouble()
+        val rmsDb = (arguments?.get("rmsDb") as? Number)?.toDouble()
+
+        return VoiceResultJsonFormatter.formatFinalResult(
+            transcript = transcript,
+            formattedTranscript = arguments?.get("formattedTranscript") as? String ?: transcript,
+            source = arguments?.get("source") as? String ?: "android",
+            caseId = arguments?.get("caseId") as? String ?: "voice_result",
+            sessionId = arguments?.get("sessionId") as? String ?: "voice-session-${System.currentTimeMillis()}",
+            candidates = listOf(VoiceCandidate(text = transcript, confidence = confidence)),
+            audio = VoiceAudioInfo(
+                rmsDb = rmsDb,
+                isSpeechDetected = arguments?.get("isSpeechDetected") as? Boolean ?: transcript.isNotBlank()
+            ),
+            language = VoiceLanguageInfo(
+                tag = arguments?.get("languageTag") as? String ?: "zh-TW",
+                confidenceLevel = arguments?.get("languageConfidenceLevel") as? String ?: "confident"
+            )
+        )
     }
 
     private fun processImage(data: ByteArray, result: MethodChannel.Result) {
