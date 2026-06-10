@@ -59,6 +59,8 @@ analysis_benchmark.json
 /build/
 /coverage/
 output/
+tools/voice/input/*
+!tools/voice/input/.gitkeep
 build/
 flutter_*.png
 linked_*.ds
