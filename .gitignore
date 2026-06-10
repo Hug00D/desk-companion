@@ -58,6 +58,7 @@ analysis_benchmark.json
 .pub/
 /build/
 /coverage/
+output/
 build/
 flutter_*.png
 linked_*.ds

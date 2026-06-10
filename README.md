@@ -42,3 +42,31 @@ This formatter does not transcribe MP3 files by itself. Android's built-in
 speech recognizer is designed for live microphone input, so arbitrary MP3 file
 transcription still needs a separate recognition engine later, such as an
 offline model, a cloud recognizer, or a custom model integration.
+
+### Local Whisper MP3 test
+
+For closed MP3 transcription tests, use the local Whisper helper:
+
+```powershell
+python -m pip install -r tools\voice\requirements.txt
+python tools\voice\transcribe_with_whisper.py C:\path\to\voice.mp3 -o output\voice_result.json --model base --language zh
+```
+
+The helper uses `faster-whisper` and writes the same JSON result shape. The
+first run downloads the selected Whisper model into the local model cache; after
+that, the cached model can run without a transcription API.
+
+The default closed-test output location is the repository `output/` folder. For
+example, this command writes `output/test_voice_result.json`:
+
+```powershell
+python tools\voice\transcribe_with_whisper.py C:\Users\陳景琳\Downloads\test-voice.mp3 `
+  -o output\test_voice_result.json `
+  --model base `
+  --language zh `
+  --case-id test_voice
+```
+
+The `output/` folder is ignored by Git because it contains generated test
+results. Keep using `base` for the current test flow; smaller models are faster
+but less accurate, and larger models are slower but usually more stable.
