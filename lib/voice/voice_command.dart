@@ -4,6 +4,11 @@ enum VoiceCommandType {
   resumePomodoro,
   stopPomodoro,
   requestFocusSummary,
+  requestTimerStatus,
+  reportTired,
+  reportDistracted,
+  requestBreak,
+  confirmStartPomodoro,
   unknown,
   ignored,
 }

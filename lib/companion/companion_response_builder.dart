@@ -11,7 +11,7 @@ class CompanionResponseBuilder {
         return const CompanionResponse(
           source: CompanionResponseSource.vision,
           tone: CompanionResponseTone.warning,
-          message: '偵測到持續閉眼，建議先休息一下。',
+          message: '偵測到持續閉眼，建議先讓眼睛休息 5 分鐘。',
           actionLabel: 'start_break',
           shouldNotify: true,
         );
@@ -19,7 +19,7 @@ class CompanionResponseBuilder {
         return const CompanionResponse(
           source: CompanionResponseSource.vision,
           tone: CompanionResponseTone.supportive,
-          message: '似乎有些疲倦了，記得留意狀態。',
+          message: '看起來有點分神或疲倦，要不要下一輪改成 15 分鐘短專注？',
           actionLabel: 'soft_attention_reminder',
         );
       case CompanionStatus.userMissing:
@@ -76,6 +76,42 @@ class CompanionResponseBuilder {
           tone: CompanionResponseTone.action,
           message: '我可以幫你整理今天的專注狀態。',
           actionLabel: 'show_focus_summary',
+        );
+      case VoiceCommandType.requestTimerStatus:
+        return const CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.neutral,
+          message: '我幫你看一下目前番茄鐘狀態。',
+          actionLabel: 'show_timer_status',
+        );
+      case VoiceCommandType.reportTired:
+        return const CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.supportive,
+          message: '收到，你覺得累了。我會建議先讓眼睛休息一下。',
+          actionLabel: 'self_report_tired',
+        );
+      case VoiceCommandType.reportDistracted:
+        return const CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.supportive,
+          message: '收到，你剛剛有點分心。我們可以把節奏切小一點。',
+          actionLabel: 'self_report_distracted',
+        );
+      case VoiceCommandType.requestBreak:
+        return const CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.action,
+          message: '好，可以先休息 5 分鐘，讓眼睛和注意力回來。',
+          actionLabel: 'request_break',
+        );
+      case VoiceCommandType.confirmStartPomodoro:
+        return const CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.supportive,
+          message: '我聽起來像是你想開始番茄鐘，是嗎？',
+          actionLabel: 'confirm_start_pomodoro',
+          shouldNotify: true,
         );
       case VoiceCommandType.unknown:
         return CompanionResponse(

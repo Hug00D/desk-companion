@@ -231,6 +231,136 @@
       "alternatives": []
     },
     {
+      "caseId": "final_timer_status",
+      "sessionId": "voice-session-009",
+      "eventType": "final",
+      "timestampMs": 1710000006000,
+      "transcript": "現在番茄鐘還剩多久",
+      "formattedTranscript": "現在番茄鐘還剩多久？",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "現在番茄鐘還剩多久",
+          "confidence": 0.9
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.8,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_report_tired",
+      "sessionId": "voice-session-010",
+      "eventType": "final",
+      "timestampMs": 1710000007000,
+      "transcript": "我有點累，眼睛也有點酸",
+      "formattedTranscript": "我有點累，眼睛也有點酸。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我有點累，眼睛也有點酸",
+          "confidence": 0.92
+        }
+      ],
+      "audio": {
+        "rmsDb": -11.1,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_report_distracted",
+      "sessionId": "voice-session-011",
+      "eventType": "final",
+      "timestampMs": 1710000008000,
+      "transcript": "我剛剛分心了，有點難以專心",
+      "formattedTranscript": "我剛剛分心了，有點難以專心。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我剛剛分心了，有點難以專心",
+          "confidence": 0.89
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.9,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_request_break",
+      "sessionId": "voice-session-012",
+      "eventType": "final",
+      "timestampMs": 1710000009000,
+      "transcript": "我想休息一下",
+      "formattedTranscript": "我想休息一下。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我想休息一下",
+          "confidence": 0.91
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.2,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_low_confidence_pomodoro",
+      "sessionId": "voice-session-013",
+      "eventType": "final",
+      "timestampMs": 1710000010000,
+      "transcript": "幫我設定番茄鐘",
+      "formattedTranscript": "幫我設定番茄鐘。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "幫我設定番茄鐘",
+          "confidence": 0.38
+        }
+      ],
+      "audio": {
+        "rmsDb": -14.0,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "not_confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
       "caseId": "error_no_match",
       "sessionId": "voice-session-008",
       "eventType": "error",

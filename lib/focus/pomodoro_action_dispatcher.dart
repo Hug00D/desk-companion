@@ -1,6 +1,7 @@
 import '../companion/companion_response.dart';
 import '../voice/voice_command.dart';
 import 'pomodoro_controller.dart';
+import 'study_session_controller.dart';
 
 class PomodoroActionResult {
   const PomodoroActionResult({
@@ -20,6 +21,7 @@ class PomodoroActionDispatcher {
   PomodoroActionResult dispatch({
     required VoiceCommand command,
     required PomodoroController controller,
+    StudySessionController? studySession,
   }) {
     switch (command.type) {
       case VoiceCommandType.startPomodoro:
@@ -31,12 +33,61 @@ class PomodoroActionDispatcher {
       case VoiceCommandType.stopPomodoro:
         return _stop(controller);
       case VoiceCommandType.requestFocusSummary:
-        return const PomodoroActionResult(
+        return PomodoroActionResult(
           response: CompanionResponse(
             source: CompanionResponseSource.voice,
             tone: CompanionResponseTone.action,
-            message: '我可以幫你整理今天的專注狀態。',
+            message:
+                studySession?.buildSummary(controller) ?? '我可以幫你整理今天的專注狀態。',
             actionLabel: 'show_focus_summary',
+          ),
+          shouldStartTimer: false,
+          shouldStopTimer: false,
+        );
+      case VoiceCommandType.requestTimerStatus:
+        return PomodoroActionResult(
+          response: CompanionResponse(
+            source: CompanionResponseSource.voice,
+            tone: CompanionResponseTone.neutral,
+            message:
+                studySession?.buildTimerStatus(controller) ?? '我幫你看一下目前番茄鐘狀態。',
+            actionLabel: 'show_timer_status',
+          ),
+          shouldStartTimer: false,
+          shouldStopTimer: false,
+        );
+      case VoiceCommandType.reportTired:
+        return const PomodoroActionResult(
+          response: CompanionResponse(
+            source: CompanionResponseSource.voice,
+            tone: CompanionResponseTone.supportive,
+            message: '收到，你覺得累了。建議先休息 5 分鐘，讓眼睛放鬆一下。',
+            actionLabel: 'self_report_tired',
+          ),
+          shouldStartTimer: false,
+          shouldStopTimer: false,
+        );
+      case VoiceCommandType.reportDistracted:
+        return const PomodoroActionResult(
+          response: CompanionResponse(
+            source: CompanionResponseSource.voice,
+            tone: CompanionResponseTone.supportive,
+            message: '收到，你剛剛有點分心。要不要下一輪改成 15 分鐘短專注？',
+            actionLabel: 'self_report_distracted',
+          ),
+          shouldStartTimer: false,
+          shouldStopTimer: false,
+        );
+      case VoiceCommandType.requestBreak:
+        return _requestBreak(controller);
+      case VoiceCommandType.confirmStartPomodoro:
+        return const PomodoroActionResult(
+          response: CompanionResponse(
+            source: CompanionResponseSource.voice,
+            tone: CompanionResponseTone.supportive,
+            message: '我聽起來像是你想開始番茄鐘，是嗎？',
+            actionLabel: 'confirm_start_pomodoro',
+            shouldNotify: true,
           ),
           shouldStartTimer: false,
           shouldStopTimer: false,
@@ -207,6 +258,33 @@ class PomodoroActionDispatcher {
       ),
       shouldStartTimer: false,
       shouldStopTimer: true,
+    );
+  }
+
+  PomodoroActionResult _requestBreak(PomodoroController controller) {
+    if (controller.status == PomodoroStatus.running) {
+      controller.pause();
+      return const PomodoroActionResult(
+        response: CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.action,
+          message: '好，先幫你暫停這輪。可以休息 5 分鐘，讓眼睛放鬆一下。',
+          actionLabel: 'start_eye_break',
+        ),
+        shouldStartTimer: false,
+        shouldStopTimer: false,
+      );
+    }
+
+    return const PomodoroActionResult(
+      response: CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.supportive,
+        message: '可以，先休息 5 分鐘。等等準備好再回來繼續。',
+        actionLabel: 'start_eye_break',
+      ),
+      shouldStartTimer: false,
+      shouldStopTimer: false,
     );
   }
 }

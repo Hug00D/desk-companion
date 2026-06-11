@@ -33,11 +33,46 @@ class VoiceCommandParser {
     final bestConfidence = result.bestConfidence;
 
     if (bestConfidence != null && bestConfidence < minimumConfidence) {
+      if (_looksLikePomodoroRequest(textPool)) {
+        return VoiceCommand(
+          type: VoiceCommandType.confirmStartPomodoro,
+          sourceText: sourceText,
+          confidence: bestConfidence,
+          reason: 'Low confidence result resembles a pomodoro request.',
+          durationMinutes:
+              _extractDurationMinutes(textPool) ?? defaultPomodoroMinutes,
+        );
+      }
+
       return VoiceCommand(
         type: VoiceCommandType.unknown,
         sourceText: sourceText,
         confidence: bestConfidence,
         reason: 'Recognition confidence is too low.',
+      );
+    }
+
+    if (_containsAny(textPool, _tiredSelfReportKeywords)) {
+      return VoiceCommand(
+        type: VoiceCommandType.reportTired,
+        sourceText: sourceText,
+        confidence: bestConfidence,
+      );
+    }
+
+    if (_containsAny(textPool, _distractedSelfReportKeywords)) {
+      return VoiceCommand(
+        type: VoiceCommandType.reportDistracted,
+        sourceText: sourceText,
+        confidence: bestConfidence,
+      );
+    }
+
+    if (_containsAny(textPool, _breakRequestKeywords)) {
+      return VoiceCommand(
+        type: VoiceCommandType.requestBreak,
+        sourceText: sourceText,
+        confidence: bestConfidence,
       );
     }
 
@@ -60,6 +95,14 @@ class VoiceCommandParser {
     if (_containsAny(textPool, _resumeKeywords)) {
       return VoiceCommand(
         type: VoiceCommandType.resumePomodoro,
+        sourceText: sourceText,
+        confidence: bestConfidence,
+      );
+    }
+
+    if (_containsAny(textPool, _timerStatusKeywords)) {
+      return VoiceCommand(
+        type: VoiceCommandType.requestTimerStatus,
         sourceText: sourceText,
         confidence: bestConfidence,
       );
@@ -129,6 +172,12 @@ class VoiceCommandParser {
     return null;
   }
 
+  bool _looksLikePomodoroRequest(List<String> textPool) {
+    return _containsAny(textPool, _pomodoroKeywords) ||
+        (_containsAny(textPool, _startKeywords) &&
+            _containsAny(textPool, _focusProblemKeywords));
+  }
+
   String _normalize(String value) {
     return value
         .toLowerCase()
@@ -143,6 +192,15 @@ const List<String> _pauseKeywords = [
   '\u5148\u7b49\u4e00\u4e0b',
   '\u4f11\u606f\u4e00\u4e0b',
   '\u5148\u4f11\u606f',
+];
+
+const List<String> _breakRequestKeywords = [
+  '\u6211\u60f3\u4f11\u606f',
+  '\u60f3\u4f11\u606f',
+  '\u8b93\u6211\u4f11\u606f',
+  '\u53ef\u4ee5\u4f11\u606f\u55ce',
+  '\u4f11\u606f\u4e94\u5206\u9418',
+  '\u4f11\u606f5\u5206',
 ];
 
 const List<String> _stopKeywords = [
@@ -166,6 +224,17 @@ const List<String> _summaryKeywords = [
   '\u72c0\u614b',
   '\u4eca\u5929',
   '\u5c08\u6ce8\u72c0\u614b',
+  '\u505a\u5e7e\u8f2a',
+  '\u5e7e\u8f2a',
+  '\u6709\u6c92\u6709\u5206\u5fc3',
+];
+
+const List<String> _timerStatusKeywords = [
+  '\u5269\u591a\u4e45',
+  '\u9084\u5269\u591a\u4e45',
+  '\u5269\u5e7e\u5206\u9418',
+  '\u9084\u5269\u5e7e\u5206\u9418',
+  '\u73fe\u5728\u5269',
 ];
 
 const List<String> _pomodoroKeywords = [
@@ -183,6 +252,23 @@ const List<String> _startKeywords = [
 ];
 
 const List<String> _focusProblemKeywords = ['\u5c08\u6ce8', '\u5206\u5fc3'];
+
+const List<String> _tiredSelfReportKeywords = [
+  '\u6211\u7d2f\u4e86',
+  '\u6709\u9ede\u7d2f',
+  '\u6211\u6709\u9ede\u7d2f',
+  '\u6211\u597d\u7d2f',
+  '\u773c\u775b\u7d2f',
+  '\u773c\u775b\u9178',
+];
+
+const List<String> _distractedSelfReportKeywords = [
+  '\u6211\u5206\u5fc3\u4e86',
+  '\u6709\u9ede\u5206\u5fc3',
+  '\u6211\u525b\u525b\u5206\u5fc3',
+  '\u96e3\u4ee5\u5c08\u5fc3',
+  '\u4e0d\u592a\u80fd\u5c08\u5fc3',
+];
 
 const Map<String, int> _chineseMinuteValues = {
   '\u4e94\u5206\u9418': 5,
