@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "source": "demo",
+  "description": "Single voice result for the main screen Demo button.",
+  "results": [
+    {
+      "caseId": "demo_start_pomodoro",
+      "sessionId": "demo-voice-session-001",
+      "eventType": "final",
+      "timestampMs": 1710000001000,
+      "transcript": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce",
+      "formattedTranscript": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce\uff1f",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce",
+          "confidence": 0.91
+        },
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u4e2d\u55ce",
+          "confidence": 0.63
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.7,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": ["zh-CN", "en-US"]
+      },
+      "recognitionParts": [],
+      "alternatives": [
+        {
+          "startIndex": 18,
+          "endIndex": 21,
+          "texts": [
+            "\u756a\u8304\u9418",
+            "\u756a\u8304\u4e2d",
+            "\u5c08\u6ce8\u9418"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "source": "mock",
+  "description": "Sample Android SpeechRecognizer-style payloads. Kotlin sends speech text and recognition metadata; Flutter decides the app action.",
+  "results": [
+    {
+      "caseId": "partial_start_pomodoro",
+      "sessionId": "voice-session-001",
+      "eventType": "partial",
+      "timestampMs": 1710000000800,
+      "transcript": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3",
+      "formattedTranscript": null,
+      "isFinal": false,
+      "candidates": [
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3",
+          "confidence": null
+        }
+      ],
+      "audio": {
+        "rmsDb": -12.4,
+        "isSpeechDetected": true
+      },
+      "language": null,
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_start_pomodoro",
+      "sessionId": "voice-session-001",
+      "eventType": "final",
+      "timestampMs": 1710000001000,
+      "transcript": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce",
+      "formattedTranscript": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce\uff1f",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce",
+          "confidence": 0.91
+        },
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3\uff0c\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u4e2d\u55ce",
+          "confidence": 0.63
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.7,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": ["zh-CN", "en-US"]
+      },
+      "recognitionParts": [
+        {
+          "text": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3",
+          "formattedText": "\u6211\u611f\u89ba\u6211\u597d\u5bb9\u6613\u5206\u5fc3",
+          "timestampMs": 1710000000200,
+          "confidence": null
+        },
+        {
+          "text": "\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce",
+          "formattedText": "\u4f60\u80fd\u5e6b\u6211\u8a2d\u7f6e\u756a\u8304\u9418\u55ce\uff1f",
+          "timestampMs": 1710000000700,
+          "confidence": null
+        }
+      ],
+      "alternatives": [
+        {
+          "startIndex": 18,
+          "endIndex": 21,
+          "texts": ["\u756a\u8304\u9418", "\u756a\u8304\u4e2d", "\u5c08\u6ce8\u9418"]
+        }
+      ]
+    },
+    {
+      "caseId": "final_start_custom_pomodoro",
+      "sessionId": "voice-session-002",
+      "eventType": "final",
+      "timestampMs": 1710000002000,
+      "transcript": "\u5e6b\u6211\u958b\u59cb\u5341\u4e94\u5206\u9418\u7684\u5c08\u6ce8\u6642\u9593",
+      "formattedTranscript": "\u5e6b\u6211\u958b\u59cb\u5341\u4e94\u5206\u9418\u7684\u5c08\u6ce8\u6642\u9593\u3002",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u5e6b\u6211\u958b\u59cb\u5341\u4e94\u5206\u9418\u7684\u5c08\u6ce8\u6642\u9593",
+          "confidence": 0.94
+        }
+      ],
+      "audio": {
+        "rmsDb": -9.8,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_pause_timer",
+      "sessionId": "voice-session-003",
+      "eventType": "final",
+      "timestampMs": 1710000003000,
+      "transcript": "\u5148\u5e6b\u6211\u66ab\u505c\u4e00\u4e0b",
+      "formattedTranscript": "\u5148\u5e6b\u6211\u66ab\u505c\u4e00\u4e0b\u3002",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u5148\u5e6b\u6211\u66ab\u505c\u4e00\u4e0b",
+          "confidence": 0.88
+        }
+      ],
+      "audio": {
+        "rmsDb": -11.2,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_resume_timer",
+      "sessionId": "voice-session-004",
+      "eventType": "final",
+      "timestampMs": 1710000003500,
+      "transcript": "\u6211\u56de\u4f86\u4e86\uff0c\u7e7c\u7e8c\u525b\u525b\u7684\u756a\u8304\u9418",
+      "formattedTranscript": "\u6211\u56de\u4f86\u4e86\uff0c\u7e7c\u7e8c\u525b\u525b\u7684\u756a\u8304\u9418\u3002",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u6211\u56de\u4f86\u4e86\uff0c\u7e7c\u7e8c\u525b\u525b\u7684\u756a\u8304\u9418",
+          "confidence": 0.9
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.9,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_stop_timer",
+      "sessionId": "voice-session-005",
+      "eventType": "final",
+      "timestampMs": 1710000003600,
+      "transcript": "\u4e0d\u8981\u8a08\u6642\u4e86\uff0c\u5e6b\u6211\u4e2d\u6b62\u756a\u8304\u9418",
+      "formattedTranscript": "\u4e0d\u8981\u8a08\u6642\u4e86\uff0c\u5e6b\u6211\u4e2d\u6b62\u756a\u8304\u9418\u3002",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u4e0d\u8981\u8a08\u6642\u4e86\uff0c\u5e6b\u6211\u4e2d\u6b62\u756a\u8304\u9418",
+          "confidence": 0.89
+        },
+        {
+          "text": "\u4e0d\u8981\u8a08\u6642\u4e86\uff0c\u5e6b\u6211\u505c\u6b62\u756a\u8304\u9418",
+          "confidence": 0.81
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.4,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_summary_timer",
+      "sessionId": "voice-session-006",
+      "eventType": "final",
+      "timestampMs": 1710000003700,
+      "transcript": "\u5e6b\u6211\u770b\u4e00\u4e0b\u4eca\u5929\u5c08\u6ce8\u72c0\u614b\u600e\u9ebc\u6a23",
+      "formattedTranscript": "\u5e6b\u6211\u770b\u4e00\u4e0b\u4eca\u5929\u5c08\u6ce8\u72c0\u614b\u600e\u9ebc\u6a23\uff1f",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u5e6b\u6211\u770b\u4e00\u4e0b\u4eca\u5929\u5c08\u6ce8\u72c0\u614b\u600e\u9ebc\u6a23",
+          "confidence": 0.86
+        }
+      ],
+      "audio": {
+        "rmsDb": -12.1,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_unknown_low_confidence",
+      "sessionId": "voice-session-007",
+      "eventType": "final",
+      "timestampMs": 1710000004000,
+      "transcript": "\u6211\u525b\u525b\u60f3\u5230\u4e00\u4e9b\u4e8b\u60c5\u4f46\u662f\u9084\u6c92\u6574\u7406\u597d",
+      "formattedTranscript": "\u6211\u525b\u525b\u60f3\u5230\u4e00\u4e9b\u4e8b\u60c5\uff0c\u4f46\u662f\u9084\u6c92\u6574\u7406\u597d\u3002",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "\u6211\u525b\u525b\u60f3\u5230\u4e00\u4e9b\u4e8b\u60c5\u4f46\u662f\u9084\u6c92\u6574\u7406\u597d",
+          "confidence": 0.42
+        }
+      ],
+      "audio": {
+        "rmsDb": -14.5,
+        "isSpeechDetected": false
+      },
+      "language": null,
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_timer_status",
+      "sessionId": "voice-session-009",
+      "eventType": "final",
+      "timestampMs": 1710000006000,
+      "transcript": "現在番茄鐘還剩多久",
+      "formattedTranscript": "現在番茄鐘還剩多久？",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "現在番茄鐘還剩多久",
+          "confidence": 0.9
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.8,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_report_tired",
+      "sessionId": "voice-session-010",
+      "eventType": "final",
+      "timestampMs": 1710000007000,
+      "transcript": "我有點累，眼睛也有點酸",
+      "formattedTranscript": "我有點累，眼睛也有點酸。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我有點累，眼睛也有點酸",
+          "confidence": 0.92
+        }
+      ],
+      "audio": {
+        "rmsDb": -11.1,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_report_distracted",
+      "sessionId": "voice-session-011",
+      "eventType": "final",
+      "timestampMs": 1710000008000,
+      "transcript": "我剛剛分心了，有點難以專心",
+      "formattedTranscript": "我剛剛分心了，有點難以專心。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我剛剛分心了，有點難以專心",
+          "confidence": 0.89
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.9,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_request_break",
+      "sessionId": "voice-session-012",
+      "eventType": "final",
+      "timestampMs": 1710000009000,
+      "transcript": "我想休息一下",
+      "formattedTranscript": "我想休息一下。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "我想休息一下",
+          "confidence": 0.91
+        }
+      ],
+      "audio": {
+        "rmsDb": -10.2,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "final_low_confidence_pomodoro",
+      "sessionId": "voice-session-013",
+      "eventType": "final",
+      "timestampMs": 1710000010000,
+      "transcript": "幫我設定番茄鐘",
+      "formattedTranscript": "幫我設定番茄鐘。",
+      "isFinal": true,
+      "candidates": [
+        {
+          "text": "幫我設定番茄鐘",
+          "confidence": 0.38
+        }
+      ],
+      "audio": {
+        "rmsDb": -14.0,
+        "isSpeechDetected": false
+      },
+      "language": {
+        "tag": "zh-TW",
+        "confidenceLevel": "not_confident",
+        "alternatives": []
+      },
+      "recognitionParts": [],
+      "alternatives": []
+    },
+    {
+      "caseId": "error_no_match",
+      "sessionId": "voice-session-008",
+      "eventType": "error",
+      "timestampMs": 1710000005000,
+      "error": {
+        "code": "NO_MATCH",
+        "message": "No speech recognition result was matched."
+      }
+    }
+  ],
+  "flutterIntentExamples": [
+    {
+      "intent": "START_POMODORO",
+      "matchKeywords": ["\u756a\u8304\u9418", "\u5c08\u6ce8", "\u958b\u59cb"],
+      "slotHints": {
+        "durationMinutes": ["\u5341\u4e94\u5206\u9418", "15\u5206\u9418", "\u4e8c\u5341\u4e94\u5206\u9418", "25\u5206\u9418"]
+      }
+    },
+    {
+      "intent": "PAUSE_POMODORO",
+      "matchKeywords": ["\u66ab\u505c", "\u505c\u4e00\u4e0b", "\u5148\u7b49\u4e00\u4e0b"]
+    }
+  ]
+}

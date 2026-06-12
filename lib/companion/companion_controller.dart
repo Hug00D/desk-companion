@@ -22,7 +22,10 @@ class CompanionController {
   CompanionAnalysis analyze(VisionResult result) {
     final poseSequence = result.poseSequence;
     final shouldUpdatePostureDown =
-        poseSequence != null && poseSequence != _lastPoseSequence;
+        result.hasPose &&
+        poseSequence != null &&
+        (poseSequence != _lastPoseSequence ||
+            _lastAnalysis?.visionResult.hasPose != true);
     final analysis = evaluator.evaluate(
       result: result,
       previousClosedFrameCount: _closedEyeFrameCount,
@@ -33,7 +36,7 @@ class CompanionController {
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
-    if (shouldUpdatePostureDown) {
+    if (result.hasPose && shouldUpdatePostureDown) {
       _lastPoseSequence = poseSequence;
     }
     _lastAnalysis = analysis;

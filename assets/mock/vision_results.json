@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "source": "mock",
+  "description": "Sample vision results that mirror the future Kotlin payload contract.",
+  "frames": [
+    {
+      "caseId": "focused_normal",
+      "timestampMs": 1710000000000,
+      "hasPose": true,
+      "lsX": 123.4,
+      "lsY": 256.7,
+      "rsX": 345.6,
+      "rsY": 258.9,
+      "hasFace": true,
+      "leftEye": 0.82,
+      "rightEye": 0.79
+    },
+    {
+      "caseId": "eyes_nearly_closed",
+      "timestampMs": 1710000000200,
+      "hasPose": true,
+      "lsX": 121.8,
+      "lsY": 257.1,
+      "rsX": 346.2,
+      "rsY": 259.4,
+      "hasFace": true,
+      "leftEye": 0.14,
+      "rightEye": 0.11
+    },
+    {
+      "caseId": "no_pose_face_visible",
+      "timestampMs": 1710000000400,
+      "hasPose": false,
+      "hasFace": true,
+      "leftEye": 0.76,
+      "rightEye": 0.74
+    },
+    {
+      "caseId": "pose_visible_face_missing",
+      "timestampMs": 1710000000600,
+      "hasPose": true,
+      "lsX": 123.4,
+      "lsY": 256.7,
+      "rsX": 345.6,
+      "rsY": 258.9,
+      "hasFace": false
+    },
+    {
+      "caseId": "away",
+      "timestampMs": 1710000000800,
+      "hasPose": false,
+      "hasFace": false
+    }
+  ],
+  "futureOptionalFields": {
+    "imageWidth": 1280,
+    "imageHeight": 720,
+    "faceConfidence": 0.92,
+    "poseConfidence": 0.88,
+    "faceCenterX": 640.0,
+    "faceCenterY": 320.0,
+    "faceWidth": 180.0,
+    "faceHeight": 220.0,
+    "headYaw": 5.2,
+    "headPitch": -3.1,
+    "headRoll": 1.4
+  }
+}
