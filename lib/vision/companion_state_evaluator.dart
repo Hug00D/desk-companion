@@ -155,11 +155,8 @@ class CompanionStateEvaluator {
     required PresenceState presenceState,
   }) {
     if (poseState == PoseState.postureDown) return CompanionStatus.postureDown;
-    if (poseState == PoseState.drowsy && eyeState == EyeState.fatigue) {
-      return CompanionStatus.drowsy;
-    }
+    if (poseState == PoseState.drowsy) return CompanionStatus.drowsy;
     if (eyeState == EyeState.fatigue) return CompanionStatus.fatigue;
-    if (poseState == PoseState.drowsy) return CompanionStatus.attention;
     if (eyeState == EyeState.attention) return CompanionStatus.attention;
     if (headOffsetState == HeadOffsetState.distracted) {
       return CompanionStatus.distracted;

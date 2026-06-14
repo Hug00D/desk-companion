@@ -1,11 +1,11 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:rive/rive.dart' as rv;
 
 import '../api/api_client.dart';
 import '../api/auth_api.dart';
 import '../auth/auth_session.dart';
+import '../widgets/rive_asset_background.dart';
 import 'face_detection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -92,11 +92,12 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF10283D),
       body: Stack(
         children: [
           // 1. 動態背景
           const SizedBox.expand(
-            child: rv.RiveAnimation.asset('assets/test.riv', fit: BoxFit.cover),
+            child: RiveAssetBackground(assetPath: 'assets/test2.riv'),
           ),
           Positioned.fill(
             child: BackdropFilter(

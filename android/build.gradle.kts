@@ -17,6 +17,13 @@ allprojects {
                 compileSdkVersion(36)
                 buildToolsVersion("34.0.0")
             }
+
+            if (name == "camera_android_camerax") {
+                dependencies.add(
+                    "implementation",
+                    "androidx.concurrent:concurrent-futures:1.2.0"
+                )
+            }
         }
     }
 }

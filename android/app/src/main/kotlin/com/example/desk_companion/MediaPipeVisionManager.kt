@@ -490,7 +490,7 @@ class MediaPipeVisionManager(context: Context) {
         private const val HEAD_POSE_SMOOTHING = 0.45f
         private const val HEAD_OFFSET_METRIC_SMOOTHING = 0.55f
         private const val HEAD_PITCH_SCALE = 120.0f
-        private const val HEAD_OFFSET_BASELINE_SAMPLES = 12
+        private const val HEAD_OFFSET_BASELINE_SAMPLES = 5
         private const val HEAD_BASELINE_MAX_ABS_PITCH = 30.0f
         private const val HEAD_BASELINE_MIN_AVG_EYE_OPEN = 0.25f
         private const val HEAD_BASELINE_MIN_SINGLE_EYE_OPEN = 0.35f
