@@ -74,6 +74,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isUserStatusExpanded = false;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
+  static const Duration _idleChatterInterval = Duration(seconds: 35);
+  static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
+  static const bool _preferFallbackVideoForLocalTest = false;
+  static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
+  static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
+  static const List<String> _idleChatterMessages = <String>[
+    '今天節奏不錯，繼續保持。',
+    '我在旁邊看著，有需要再叫我。',
+    '專注條件良好，可以放心往下做。',
+  ];
 
   int _closedEyeFrameCount = 0;
   int _distractedFrameCount = 0;
@@ -163,6 +173,101 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   // --- 核心偵測函式 ---
+  Future<void> _initializeFallbackVideo({String? reason}) async {
+    _detectionTimer?.cancel();
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final videoFile = io.File('${tempDir.path}/$_fallbackVideoFileName');
+      if (!await videoFile.exists()) {
+        final assetData = await rootBundle.load(_fallbackVideoAssetPath);
+        await videoFile.writeAsBytes(
+          assetData.buffer.asUint8List(
+            assetData.offsetInBytes,
+            assetData.lengthInBytes,
+          ),
+          flush: true,
+        );
+      }
+
+      final controller = VideoPlayerController.file(videoFile);
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.play();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      await _fallbackVideoController?.dispose();
+      _fallbackVideoController = controller;
+      _fallbackVideoPath = videoFile.path;
+      _isUsingFallbackVideo = true;
+      _isCameraInitializing = false;
+      _cameraErrorMessage = null;
+      _status = '本地測試模式：使用 test_face.mp4。';
+      _startFallbackVideoDetectionLoop();
+      setState(() {});
+    } catch (fallbackError) {
+      debugPrint('測試影片模式啟動失敗: $fallbackError');
+      _isUsingFallbackVideo = false;
+      _isCameraInitializing = false;
+      _cameraErrorMessage = '相機啟動失敗，測試影片也無法啟動: ${reason ?? fallbackError}';
+      _status = _cameraErrorMessage!;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _startFallbackVideoDetectionLoop() {
+    _detectionTimer?.cancel();
+
+    _detectionTimer = Timer.periodic(const Duration(milliseconds: 800), (
+      timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final controller = _fallbackVideoController;
+      if (_isUsingFallbackVideo &&
+          controller != null &&
+          controller.value.isInitialized) {
+        _detectFaceFromFallbackVideo();
+      }
+    });
+  }
+
+  Future<void> _detectFaceFromFallbackVideo() async {
+    final controller = _fallbackVideoController;
+    final videoPath = _fallbackVideoPath;
+    if (_isProcessing ||
+        controller == null ||
+        videoPath == null ||
+        !controller.value.isInitialized) {
+      return;
+    }
+
+    _isProcessing = true;
+
+    try {
+      final thumbnailBytes = await video_thumbnail.VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: video_thumbnail.ImageFormat.JPEG,
+        timeMs: controller.value.position.inMilliseconds,
+        quality: 85,
+      );
+      if (thumbnailBytes == null) return;
+
+      final visionResult = await _visionChannel.analyzeFrame(thumbnailBytes);
+      _handleVisionResult(visionResult);
+    } catch (e) {
+      debugPrint('測試影片偵測失敗: $e');
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
   Future<void> _detectFaceFromCamera() async {
     final controller = _cameraController;
     if (_isProcessing ||
@@ -655,19 +760,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildTopHud() {
-    return Positioned(
-      top: 18,
-      left: 18,
-      right: 18,
+    return Positioned.fill(
       child: SafeArea(
         bottom: false,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            _buildUserStatusCard(),
-            const Spacer(),
-            const SizedBox(width: 12),
-            _buildAiPreferenceButton(),
+            Positioned(
+              top: 18,
+              left: 18,
+              child: RepaintBoundary(child: _buildUserStatusCard()),
+            ),
+            Positioned(
+              top: 18,
+              right: 18,
+              child: RepaintBoundary(child: _buildAiPreferenceButton()),
+            ),
           ],
         ),
       ),
@@ -881,6 +988,177 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     });
   }
 
+  void _showHomeToolSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        final maxSheetHeight = MediaQuery.sizeOf(context).height * 0.82;
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxSheetHeight),
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x22000000),
+                    blurRadius: 22,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.smart_toy_rounded, color: Color(0xFF2F7ED8)),
+                        SizedBox(width: 10),
+                        Text(
+                          '工具與偏好',
+                          style: TextStyle(
+                            color: Color(0xFF20324D),
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _buildToolSheetAction(
+                      icon: Icons.record_voice_over_rounded,
+                      title: '語音 Demo',
+                      subtitle: '開發測試用，正式版會拿掉。',
+                      isActive: _showVoiceDemoPanel,
+                      onTap: () {
+                        Navigator.pop(context);
+                        setState(() {
+                          _showVoiceDemoPanel = !_showVoiceDemoPanel;
+                          if (_showVoiceDemoPanel) _showDebugPanel = false;
+                        });
+                      },
+                    ),
+                    _buildToolSheetAction(
+                      icon: Icons.visibility_rounded,
+                      title: '視覺 Debug',
+                      subtitle: '查看眼睛、頭部與趴下偵測數據。',
+                      isActive: _showDebugPanel,
+                      onTap: () {
+                        Navigator.pop(context);
+                        setState(() {
+                          _showDebugPanel = !_showDebugPanel;
+                          if (_showDebugPanel) _showVoiceDemoPanel = false;
+                          _showVisionSourcePreview = _showDebugPanel;
+                        });
+                      },
+                    ),
+                    _buildToolSheetAction(
+                      icon: Icons.videocam_rounded,
+                      title: '視覺來源預覽',
+                      subtitle: '只給 Debug 看目前送進偵測的相機或影片畫面。',
+                      isActive: _showVisionSourcePreview,
+                      onTap: () {
+                        Navigator.pop(context);
+                        setState(() {
+                          _showVisionSourcePreview = !_showVisionSourcePreview;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    const Divider(height: 1, color: Color(0x1A20324D)),
+                    const SizedBox(height: 14),
+                    _buildAiPreferenceTile('安靜模式', '只記錄狀態，不主動打擾。'),
+                    _buildAiPreferenceTile('回覆語氣', '之後可切換溫和、嚴格或鼓勵。'),
+                    _buildAiPreferenceTile('提醒敏感度', '調整疲勞與分心提醒頻率。'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildToolSheetAction({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isActive
+                ? const Color(0xFFEAF7FF)
+                : Colors.white.withValues(alpha: 0.62),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isActive
+                  ? const Color(0xFFB7E3F7)
+                  : const Color(0x1420324D),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: isActive
+                    ? const Color(0xFF2F7ED8)
+                    : const Color(0xFF63758C),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFF20324D),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF63758C),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isActive)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF2F7ED8),
+                  size: 20,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
   void _showAiPreferenceSheet() {
     showModalBottomSheet<void>(
       context: context,
@@ -1567,6 +1845,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                 setState(() {
                   _showDebugPanel = !_showDebugPanel;
                   if (_showDebugPanel) _showVoiceDemoPanel = false;
+                  _showVisionSourcePreview = _showDebugPanel;
+                });
+              },
+            ),
+            const SizedBox(width: 10),
+            _buildToolDockButton(
+              icon: Icons.videocam_rounded,
+              label: '來源',
+              isActive: _showVisionSourcePreview,
+              onTap: () {
+                setState(() {
+                  _showVisionSourcePreview = !_showVisionSourcePreview;
                 });
               },
             ),
@@ -1647,24 +1937,112 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildCameraBackground() {
+    return RiveAssetBackground(
+      assetPath: 'assets/test2.riv',
+      motionIntensity: _companionMotionIntensity,
+    );
+  }
+
+  Widget _buildVisionSourcePreview() {
+    if (!_showVisionSourcePreview) return const SizedBox.shrink();
+
+    return Positioned(
+      right: 18,
+      bottom: GlassBottomNavBar.contentBottomPadding + 16,
+      width: 168,
+      child: SafeArea(top: false, child: _buildVisionSourcePreviewCard()),
+    );
+  }
+
+  Widget _buildVisionSourcePreviewCard() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 18,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.visibility_rounded,
+                    size: 18,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _isUsingFallbackVideo ? '測試影片預覽' : '相機預覽',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '隱藏預覽',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      setState(() => _showVisionSourcePreview = false);
+                    },
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: AspectRatio(
+                  aspectRatio: 3 / 4,
+                  child: _buildVisionSourcePreviewContent(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVisionSourcePreviewContent() {
     final controller = _cameraController;
     if (controller != null && controller.value.isInitialized) {
       final previewSize = controller.value.previewSize;
       if (previewSize == null) {
-        return CameraPreview(controller);
+        return _buildCoveredPreview(CameraPreview(controller), 9 / 16);
       }
 
-      return ClipRect(
-        child: SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: previewSize.height,
-              height: previewSize.width,
-              child: CameraPreview(controller),
-            ),
-          ),
-        ),
+      final sourceAspectRatio = previewSize.height / previewSize.width;
+      return _buildCoveredPreview(CameraPreview(controller), sourceAspectRatio);
+    }
+
+    final fallbackVideoController = _fallbackVideoController;
+    if (_isUsingFallbackVideo &&
+        fallbackVideoController != null &&
+        fallbackVideoController.value.isInitialized) {
+      final videoSize = fallbackVideoController.value.size;
+      return _buildCoveredPreview(
+        VideoPlayer(fallbackVideoController),
+        videoSize.width / videoSize.height,
       );
     }
 
@@ -1692,6 +2070,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCoveredPreview(Widget child, double sourceAspectRatio) {
+    return ClipRect(
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(width: sourceAspectRatio, height: 1, child: child),
+        ),
       ),
     );
   }
@@ -1766,7 +2155,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           _buildVoiceDialogPanel(),
           _buildVoiceDemoButtons(),
           _buildDebugPanel(),
-          _buildDebugToggleButton(),
+          _buildVisionSourcePreview(),
         ],
       ),
     );

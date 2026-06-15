@@ -1,0 +1,17 @@
+.env
+*.log
+
+desk_companion_backend/target/
+desk_companion_backend/.mvn/wrapper/
+desk_companion_backend/mvnw
+desk_companion_backend/mvnw.cmd
+
+../.git
+../.dart_tool
+../build
+../android
+../ios
+../lib
+../web
+../assets
+../out
