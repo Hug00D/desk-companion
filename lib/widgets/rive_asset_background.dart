@@ -87,6 +87,8 @@ class _RiveAssetBackgroundState extends State<RiveAssetBackground> {
     final input = _motionInput;
     if (input == null) return;
     input.value = widget.motionIntensity.clamp(0, 20).toDouble();
-    debugPrint('Rive motion intensity: ${input.value.toStringAsFixed(1)}');
+    debugPrint(
+      'Rive motion intensity: ${input.value.toStringAsFixed(1)}',
+    );
   }
 }
