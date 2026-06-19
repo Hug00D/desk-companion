@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../auth/auth_session.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
+import 'profile_detail_screen.dart';
 import 'statistics_screen.dart';
 
 class ProfileHubScreen extends StatelessWidget {
@@ -54,61 +55,10 @@ class ProfileHubScreen extends StatelessWidget {
                       children: [
                         _buildPageHeader(),
                         const SizedBox(height: 18),
-                        _GlassPanel(
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 62,
-                                height: 62,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.18),
-                                  borderRadius: BorderRadius.circular(22),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.24),
-                                  ),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    displayName.characters.first.toUpperCase(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      displayName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 5),
-                                    Text(
-                                      email,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: Color(0xCCFFFFFF),
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+                        _buildProfileEntryCard(
+                          context: context,
+                          displayName: displayName,
+                          email: email,
                         ),
                         const SizedBox(height: 14),
                         _SettingsSection(
@@ -229,6 +179,101 @@ class ProfileHubScreen extends StatelessWidget {
       },
       onTasksTap: () => _showComingSoon(context, '任務'),
       onSettingsTap: () {},
+    );
+  }
+
+  Widget _buildProfileEntryCard({
+    required BuildContext context,
+    required String displayName,
+    required String email,
+  }) {
+    return _GlassPanel(
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ProfileDetailScreen(),
+              ),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 62,
+                  height: 62,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.24),
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      displayName.characters.first.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xCCFFFFFF),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '查看與編輯個人檔案',
+                        style: TextStyle(
+                          color: Color(0xAAFFFFFF),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xCCFFFFFF),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -430,9 +475,13 @@ class _DemoSwitch extends StatelessWidget {
 }
 
 class _GlassPanel extends StatelessWidget {
-  const _GlassPanel({required this.child});
+  const _GlassPanel({
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+  });
 
   final Widget child;
+  final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
@@ -442,7 +491,7 @@ class _GlassPanel extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(16),
+          padding: padding,
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.13),
             borderRadius: BorderRadius.circular(24),

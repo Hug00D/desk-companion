@@ -25,6 +25,7 @@ import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
+import 'profile_detail_screen.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
 
@@ -89,8 +90,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
   static const bool _preferFallbackVideoForLocalTest = false;
-  static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
-  static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
+  static const String _fallbackVideoAssetPath = 'assets/test.mp4';
+  static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
   static const List<String> _idleChatterMessages = <String>[
     '今天節奏不錯，繼續保持。',
     '我在旁邊看著，有需要再叫我。',
@@ -258,7 +259,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = true;
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
-      _status = '本地測試模式：使用 test_face.mp4。';
+      _status = '本地測試模式：使用 test.mp4。';
       _startFallbackVideoDetectionLoop();
       setState(() {});
     } catch (fallbackError) {
@@ -1193,7 +1194,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       setState(() => _isUserStatusExpanded = false);
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const ProfileHubScreen()),
+        MaterialPageRoute(builder: (context) => const ProfileDetailScreen()),
       ).then((_) {
         if (!mounted || !_isUserStatusExpanded) return;
         setState(() => _isUserStatusExpanded = false);
