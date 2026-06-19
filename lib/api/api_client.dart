@@ -3,10 +3,13 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  ApiClient({
-    http.Client? httpClient,
-    this.baseUrl = 'http://10.0.2.2:8080/api/v1',
-  }) : _httpClient = httpClient ?? http.Client();
+  static const defaultBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://100.119.136.81:8080/api/v1',
+  );
+
+  ApiClient({http.Client? httpClient, this.baseUrl = defaultBaseUrl})
+    : _httpClient = httpClient ?? http.Client();
 
   final http.Client _httpClient;
   final String baseUrl;

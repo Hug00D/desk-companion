@@ -39,7 +39,7 @@ dependencies:
   video_player: ^2.8.1              # 用來播你的測試影片
   path_provider: ^2.1.2             # 用來處理暫存檔案
   video_thumbnail: ^0.5.3
-  rive: ^0.13.0
+  rive: ^0.14.8
   http: ^1.6.0
 
 dev_dependencies:
@@ -65,8 +65,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/test_face.mp4
-    - assets/test.riv
     - assets/mock/
+    - assets/test2.riv
 
   # To add assets to your application, add an assets section, like this:
   # assets:

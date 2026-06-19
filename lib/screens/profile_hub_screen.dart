@@ -1,6 +1,11 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
 import '../auth/auth_session.dart';
+import '../widgets/glass_bottom_nav_bar.dart';
+import '../widgets/rive_asset_background.dart';
+import 'statistics_screen.dart';
 
 class ProfileHubScreen extends StatelessWidget {
   const ProfileHubScreen({super.key});
@@ -12,355 +17,338 @@ class ProfileHubScreen extends StatelessWidget {
     final displayName = email.split('@').first;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4FAFD),
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            pinned: true,
-            expandedHeight: 250,
-            elevation: 0,
-            backgroundColor: const Color(0xFF12304A),
-            foregroundColor: Colors.white,
-            title: const Text(
-              '我的',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
-            flexibleSpace: FlexibleSpaceBar(
-              background: _buildHero(displayName: displayName, email: email),
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 30),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildStatStrip(),
-                  const SizedBox(height: 22),
-                  _buildSection(
-                    title: '讀書狀態',
-                    children: [
-                      _buildOptionTile(
-                        icon: Icons.insights_rounded,
-                        title: '專注報告',
-                        subtitle: '查看分數、疲勞與離開紀錄',
-                        color: const Color(0xFF2F7ED8),
-                        onTap: () => _showComingSoon(context, '專注報告'),
-                      ),
-                      _buildOptionTile(
-                        icon: Icons.history_rounded,
-                        title: '歷史紀錄',
-                        subtitle: '回顧番茄鐘、語音互動與視覺事件',
-                        color: const Color(0xFF57BEEB),
-                        onTap: () => _showComingSoon(context, '歷史紀錄'),
-                      ),
-                      _buildOptionTile(
-                        icon: Icons.emoji_events_rounded,
-                        title: '成就與習慣',
-                        subtitle: '整理連續讀書天數與完成輪數',
-                        color: const Color(0xFFFFB648),
-                        onTap: () => _showComingSoon(context, '成就與習慣'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  _buildSection(
-                    title: '個人與偏好',
-                    children: [
-                      _buildOptionTile(
-                        icon: Icons.person_rounded,
-                        title: '個人資料',
-                        subtitle: '編輯暱稱、頭像與基本資料',
-                        color: const Color(0xFF8A8EF2),
-                        onTap: () => _showComingSoon(context, '個人資料'),
-                      ),
-                      _buildOptionTile(
-                        icon: Icons.smart_toy_rounded,
-                        title: 'AI 偏好',
-                        subtitle: '設定陪伴語氣、安靜模式與提醒敏感度',
-                        color: const Color(0xFF2F7ED8),
-                        onTap: () => _showComingSoon(context, 'AI 偏好'),
-                      ),
-                      _buildOptionTile(
-                        icon: Icons.notifications_active_rounded,
-                        title: '提醒設定',
-                        subtitle: '調整疲勞、休息與番茄鐘提醒',
-                        color: const Color(0xFFE85D75),
-                        onTap: () => _showComingSoon(context, '提醒設定'),
-                      ),
-                      _buildOptionTile(
-                        icon: Icons.privacy_tip_rounded,
-                        title: '隱私與權限',
-                        subtitle: '管理鏡頭、語音與資料保存設定',
-                        color: const Color(0xFF4FB998),
-                        onTap: () => _showComingSoon(context, '隱私與權限'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  _buildSection(
-                    title: '帳號',
-                    children: [
-                      _buildOptionTile(
-                        icon: Icons.logout_rounded,
-                        title: '登出',
-                        subtitle: '離開目前帳號',
-                        color: const Color(0xFFE85D75),
-                        isDestructive: true,
-                        onTap: () => _showComingSoon(context, '登出'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHero({required String displayName, required String email}) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF10283D), Color(0xFF1D6B8F), Color(0xFF79D2F5)],
-        ),
-      ),
-      child: Stack(
+      backgroundColor: const Color(0xFF10283D),
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          Positioned(
-            right: -40,
-            top: 44,
-            child: Container(
-              width: 150,
-              height: 150,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-            ),
+          const RiveAssetBackground(
+            assetPath: 'assets/test2.riv',
+            motionIntensity: 4,
           ),
-          Positioned(
-            left: -60,
-            bottom: -45,
-            child: Container(
-              width: 180,
-              height: 180,
-              decoration: BoxDecoration(
-                color: const Color(0xFF57BEEB).withOpacity(0.22),
-                shape: BoxShape.circle,
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0x7710283D),
+                  Color(0x3310283D),
+                  Color(0xBB10283D),
+                ],
               ),
             ),
           ),
           SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 74, 22, 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 74,
-                        height: 74,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.22),
-                          borderRadius: BorderRadius.circular(26),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.3),
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      18,
+                      14,
+                      18,
+                      GlassBottomNavBar.contentBottomPadding,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildPageHeader(),
+                        const SizedBox(height: 18),
+                        _GlassPanel(
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 62,
+                                height: 62,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.18),
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.24),
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    displayName.characters.first.toUpperCase(),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      displayName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      email,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xCCFFFFFF),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x26000000),
-                              blurRadius: 22,
-                              offset: Offset(0, 12),
-                            ),
-                          ],
                         ),
-                        child: Center(
-                          child: Text(
-                            displayName.characters.first.toUpperCase(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 30,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 14),
+                        _SettingsSection(
+                          title: '提醒與陪伴',
                           children: [
-                            Text(
-                              displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                              ),
+                            _SettingsTile(
+                              icon: Icons.notifications_active_rounded,
+                              title: '提醒敏感度',
+                              subtitle: '調整分心、疲勞與趴下提醒門檻。',
+                              color: const Color(0xFFFFD36B),
+                              onTap: () => _showComingSoon(context, '提醒敏感度'),
                             ),
-                            const SizedBox(height: 5),
-                            Text(
-                              email,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.76),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
+                            _SettingsTile(
+                              icon: Icons.smart_toy_rounded,
+                              title: 'AI 回覆語氣',
+                              subtitle: '之後可切換溫和、嚴格或鼓勵。',
+                              color: const Color(0xFF79D2F5),
+                              onTap: () => _showComingSoon(context, 'AI 回覆語氣'),
+                            ),
+                            _SettingsTile(
+                              icon: Icons.bedtime_rounded,
+                              title: '安靜模式',
+                              subtitle: '只記錄狀態，不主動跳出提醒。',
+                              color: const Color(0xFF9FF3D0),
+                              trailing: const _DemoSwitch(value: false),
+                              onTap: () => _showComingSoon(context, '安靜模式'),
                             ),
                           ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 14),
+                        _SettingsSection(
+                          title: '偵測與資料',
+                          children: [
+                            _SettingsTile(
+                              icon: Icons.center_focus_strong_rounded,
+                              title: '重新校正基準',
+                              subtitle: '換成看書、看電腦或換角度時使用。',
+                              color: const Color(0xFF9AC7FF),
+                              onTap: () => _showComingSoon(context, '重新校正基準'),
+                            ),
+                            _SettingsTile(
+                              icon: Icons.videocam_rounded,
+                              title: '鏡頭與測試來源',
+                              subtitle: '之後接相機、測試影片與權限設定。',
+                              color: const Color(0xFF8A8EF2),
+                              onTap: () => _showComingSoon(context, '鏡頭與測試來源'),
+                            ),
+                            _SettingsTile(
+                              icon: Icons.privacy_tip_rounded,
+                              title: '資料與隱私',
+                              subtitle: '管理本機紀錄、同步與資料保存方式。',
+                              color: const Color(0xFF4FB998),
+                              onTap: () => _showComingSoon(context, '資料與隱私'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _SettingsSection(
+                          title: '帳號',
+                          children: [
+                            _SettingsTile(
+                              icon: Icons.logout_rounded,
+                              title: '登出',
+                              subtitle: '離開目前帳號，回到登入畫面。',
+                              color: const Color(0xFFFF7A3D),
+                              isDestructive: true,
+                              onTap: () => _showComingSoon(context, '登出'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 18),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.18),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white.withOpacity(0.2)),
-                    ),
-                    child: const Text(
-                      '今天先保持節奏，讓每一輪專注都有跡可循。',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
+          _buildBottomNavBar(context),
         ],
       ),
     );
   }
 
-  Widget _buildStatStrip() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFD8EEF8)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x10000000),
-            blurRadius: 18,
-            offset: Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          _buildStatItem('今日', '0m'),
-          _buildStatDivider(),
-          _buildStatItem('完成', '0 輪'),
-          _buildStatDivider(),
-          _buildStatItem('提醒', '0 次'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatItem(String label, String value) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Color(0xFF20324D),
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF63758C),
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatDivider() {
-    return Container(width: 1, height: 30, color: const Color(0xFFE1F0F7));
-  }
-
-  Widget _buildSection({
-    required String title,
-    required List<Widget> children,
-  }) {
-    return Column(
+  Widget _buildPageHeader() {
+    return const Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFF63758C),
-              fontSize: 13,
-              fontWeight: FontWeight.w900,
-            ),
+        Text(
+          '設定',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 28,
+            fontWeight: FontWeight.w900,
           ),
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: const Color(0xFFDDEEF6)),
+        SizedBox(height: 4),
+        Text(
+          '先整理成 Demo 入口，後續再接實際功能。',
+          style: TextStyle(
+            color: Color(0xCCFFFFFF),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
           ),
-          child: Column(children: children),
         ),
       ],
     );
   }
 
-  Widget _buildOptionTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required Color color,
-    required VoidCallback onTap,
-    bool isDestructive = false,
-  }) {
+  Widget _buildBottomNavBar(BuildContext context) {
+    return GlassBottomNavBar(
+      activeTab: AppNavTab.settings,
+      onHomeTap: () => Navigator.popUntil(context, (route) => route.isFirst),
+      onStatisticsTap: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const StatisticsScreen()),
+        );
+      },
+      onTasksTap: () => _showComingSoon(context, '任務'),
+      onSettingsTap: () {},
+    );
+  }
+
+  // ignore: unused_element
+  Widget _buildHeader(BuildContext context) {
+    return Row(
+      children: [
+        _GlassIconButton(
+          icon: Icons.arrow_back_rounded,
+          onTap: () => Navigator.pop(context),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '設定',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                '先整理成 Demo 入口，後續再接實際功能。',
+                style: TextStyle(
+                  color: Color(0xCCFFFFFF),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showComingSoon(BuildContext context, String title) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$title 之後會接上正式功能。'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i != children.length - 1)
+              Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+    this.trailing,
+    this.isDestructive = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+  final Widget? trailing;
+  final bool isDestructive;
+
+  @override
+  Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(
             children: [
               Container(
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(14),
+                  color: color.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(15),
                 ),
                 child: Icon(icon, color: color, size: 22),
               ),
@@ -371,10 +359,12 @@ class ProfileHubScreen extends StatelessWidget {
                   children: [
                     Text(
                       title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: isDestructive
-                            ? const Color(0xFFE85D75)
-                            : const Color(0xFF20324D),
+                            ? const Color(0xFFFFB19A)
+                            : Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
                       ),
@@ -382,28 +372,119 @@ class ProfileHubScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Color(0xFF63758C),
+                        color: Color(0xCCFFFFFF),
                         fontSize: 12,
                         height: 1.35,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: Color(0xFF9EB2C5)),
+              const SizedBox(width: 10),
+              trailing ??
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xAAFFFFFF),
+                  ),
             ],
           ),
         ),
       ),
     );
   }
+}
 
-  void _showComingSoon(BuildContext context, String title) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$title 頁面之後會接上正式功能。'),
-        duration: const Duration(seconds: 2),
+class _DemoSwitch extends StatelessWidget {
+  const _DemoSwitch({required this.value});
+
+  final bool value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 46,
+      height: 28,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: value
+            ? const Color(0xFF9FF3D0)
+            : Colors.white.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        width: 22,
+        height: 22,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassPanel extends StatelessWidget {
+  const _GlassPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.13),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 22,
+                offset: Offset(0, 12),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassIconButton extends StatelessWidget {
+  const _GlassIconButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Material(
+          color: Colors.white.withValues(alpha: 0.16),
+          child: InkWell(
+            onTap: onTap,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Icon(icon, color: Colors.white),
+            ),
+          ),
+        ),
       ),
     );
   }
