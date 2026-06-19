@@ -1,0 +1,2 @@
+# No external dependencies for the mock service.
+# GPT-SoVITS integration will add torch / fastapi / uvicorn later.

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' as io;
 import 'dart:ui' show ImageFilter;
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,6 +24,7 @@ import '../vision/vision_result.dart';
 import '../voice/voice_command.dart';
 import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
+import '../voice/voice_service_client.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_detail_screen.dart';
@@ -46,6 +48,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   Timer? _userStatusCollapseTimer;
   Timer? _idleBubbleTimer;
   Timer? _idleBubbleHideTimer;
+  StreamSubscription<PlayerState>? _voicePlayerStateSubscription;
   late final AnimationController _breathingController;
   bool _isProcessing = false;
   bool _isCameraInitializing = true;
@@ -62,6 +65,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
   final VoiceInteractionController _voiceInteractionController =
       const VoiceInteractionController();
+  final VoiceServiceClient _voiceServiceClient = VoiceServiceClient();
+  final AudioPlayer _voiceAudioPlayer = AudioPlayer();
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
@@ -87,6 +92,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isUserStatusExpanded = false;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
+  static const Duration _voiceServiceReminderCooldown = Duration(seconds: 30);
+  static const Duration _voiceServiceStatusSwitchCooldown = Duration(
+    seconds: 4,
+  );
+  static const Duration _voiceServiceRetryCooldown = Duration(seconds: 3);
+  static const int _voiceServiceStableFrames = 2;
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
   static const bool _preferFallbackVideoForLocalTest = false;
@@ -104,6 +115,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   int _idleChatterIndex = 0;
   DateTime? _idleBubbleVisibleUntil;
   DateTime? _voiceMessagePinnedUntil;
+  DateTime? _lastVoiceServiceAttemptAt;
+  DateTime? _lastVoiceServiceReminderAt;
+  final Map<CompanionStatus, DateTime> _lastVoiceServiceReminderByStatus =
+      <CompanionStatus, DateTime>{};
+  bool _isVoiceServiceReminderInFlight = false;
+  CompanionStatus? _lastVoiceServiceReminderStatus;
+  CompanionStatus? _currentVoicePlaybackStatus;
+  CompanionStatus? _pendingVoiceReminderStatus;
+  String? _pendingVoiceReminderActionLabel;
+  CompanionStatus? _voiceReminderCandidateStatus;
+  int _voiceReminderCandidateFrames = 0;
   CompanionStatus _companionStatus = CompanionStatus.normal;
   String _fatigueLevel = CompanionStatus.normal.label;
   String _companionMessage = "目前狀態穩定，請保持節奏。";
@@ -121,6 +143,30 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       lowerBound: 0,
       upperBound: 1,
     )..repeat(reverse: true);
+    unawaited(
+      _voiceAudioPlayer.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            isSpeakerphoneOn: false,
+            stayAwake: false,
+            contentType: AndroidContentType.speech,
+            usageType: AndroidUsageType.assistanceSonification,
+            audioFocus: AndroidAudioFocus.none,
+          ),
+        ),
+      ),
+    );
+    unawaited(_voiceAudioPlayer.setReleaseMode(ReleaseMode.stop));
+    _voicePlayerStateSubscription = _voiceAudioPlayer.onPlayerStateChanged
+        .listen((PlayerState state) {
+          debugPrint('Voice player state: $state');
+          if (state == PlayerState.completed) {
+            _currentVoicePlaybackStatus = null;
+            unawaited(_resumeFallbackVideoAfterVoiceIfNeeded());
+          } else if (state == PlayerState.stopped) {
+            _currentVoicePlaybackStatus = null;
+          }
+        });
     _initializeCamera();
     _startIdleBubbleTimer();
   }
@@ -426,11 +472,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     if (!_isVoiceMessagePinned &&
         (analysis.status != previousCompanionStatus ||
             trackingResult.shouldUpdateMessage)) {
-      _companionMessage = _messageForVisionTrackingResult(
+      final nextMessage = _messageForVisionTrackingResult(
         trackingResult,
         _messageForCompanionStatus(analysis.status),
       );
+      _companionMessage = nextMessage;
     }
+
+    _maybeSendVisionReminderToVoiceService(
+      message: _voiceReminderMessageForStatus(analysis.status),
+      analysis: analysis,
+      trackingResult: trackingResult,
+    );
 
     if (trackingResult.shouldNotify &&
         trackingResult.event.type == VisionEventType.fatigueDetected &&
@@ -465,6 +518,304 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       return '剛剛離開了一下，要繼續這輪專注嗎？';
     }
     return fallbackMessage;
+  }
+
+  void _maybeSendVisionReminderToVoiceService({
+    required String message,
+    required CompanionAnalysis analysis,
+    required VisionEventTrackingResult trackingResult,
+  }) {
+    final status = analysis.status;
+    if (!_shouldSpeakStatus(status)) {
+      _resetVoiceReminderCandidate();
+      return;
+    }
+    if (!_isVoiceReminderStatusStable(status)) return;
+
+    final now = DateTime.now();
+    if (!_shouldSpeakStatusNow(status, now)) {
+      return;
+    }
+
+    final lastAttemptAt = _lastVoiceServiceAttemptAt;
+    if (lastAttemptAt != null &&
+        now.difference(lastAttemptAt) < _voiceServiceRetryCooldown) {
+      return;
+    }
+
+    if (_isVoiceServiceReminderInFlight) {
+      _queuePendingVoiceReminder(status, trackingResult.event.actionTriggered);
+      return;
+    }
+
+    _sendVoiceReminderForStatus(
+      status: status,
+      message: message,
+      actionLabel: trackingResult.event.actionTriggered,
+    );
+  }
+
+  void _sendVoiceReminderForStatus({
+    required CompanionStatus status,
+    required String message,
+    String? actionLabel,
+    bool fromPending = false,
+  }) {
+    final now = DateTime.now();
+    if (!_shouldSpeakStatusNow(status, now)) return;
+    if (!fromPending) {
+      final lastAttemptAt = _lastVoiceServiceAttemptAt;
+      if (lastAttemptAt != null &&
+          now.difference(lastAttemptAt) < _voiceServiceRetryCooldown) {
+        return;
+      }
+    }
+    if (_isVoiceServiceReminderInFlight) {
+      _queuePendingVoiceReminder(status, actionLabel);
+      return;
+    }
+
+    _lastVoiceServiceAttemptAt = now;
+    _isVoiceServiceReminderInFlight = true;
+
+    unawaited(_sendVoiceReminderRequest(status, message, actionLabel));
+  }
+
+  Future<void> _sendVoiceReminderRequest(
+    CompanionStatus status,
+    String message,
+    String? actionLabel,
+  ) async {
+    try {
+      await _interruptLowerPriorityVoicePlaybackIfNeeded(status);
+      final result = await _voiceServiceClient.sendReminder(
+        text: message,
+        status: status.name,
+        eventType: _voiceEventTypeForStatus(status),
+        actionLabel: actionLabel,
+      );
+      if (result.generated) {
+        final now = DateTime.now();
+        _lastVoiceServiceReminderAt = now;
+        _lastVoiceServiceReminderStatus = status;
+        _lastVoiceServiceReminderByStatus[status] = now;
+        await _playVoiceServiceAudio(result.audioBytes, status);
+        return;
+      }
+      debugPrint(
+        'Voice service skipped: mode=${result.mode} reason=${result.reason}',
+      );
+    } catch (error) {
+      debugPrint('Voice service unavailable: $error');
+    } finally {
+      _isVoiceServiceReminderInFlight = false;
+      _sendPendingVoiceReminderIfReady();
+    }
+  }
+
+  bool _isVoiceReminderStatusStable(CompanionStatus status) {
+    if (!_shouldSpeakStatus(status)) {
+      _voiceReminderCandidateStatus = null;
+      _voiceReminderCandidateFrames = 0;
+      return false;
+    }
+
+    if (_voiceReminderCandidateStatus != status) {
+      _voiceReminderCandidateStatus = status;
+      _voiceReminderCandidateFrames = 1;
+    } else {
+      _voiceReminderCandidateFrames += 1;
+    }
+
+    final requiredFrames = _voiceStableFramesForStatus(status);
+    final isStable = _voiceReminderCandidateFrames >= requiredFrames;
+    if (!isStable) {
+      debugPrint(
+        'Voice service waiting: status=${status.name} '
+        'frames=$_voiceReminderCandidateFrames/$requiredFrames',
+      );
+    }
+    return isStable;
+  }
+
+  void _resetVoiceReminderCandidate() {
+    _voiceReminderCandidateStatus = null;
+    _voiceReminderCandidateFrames = 0;
+  }
+
+  int _voiceStableFramesForStatus(CompanionStatus status) {
+    return _voicePriority(status) >= 3 ? 1 : _voiceServiceStableFrames;
+  }
+
+  bool _shouldSpeakStatusNow(CompanionStatus status, DateTime now) {
+    final lastSameStatusAt = _lastVoiceServiceReminderByStatus[status];
+    if (lastSameStatusAt != null &&
+        now.difference(lastSameStatusAt) < _voiceServiceReminderCooldown) {
+      debugPrint(
+        'Voice service suppressed: same status cooldown ${status.name}',
+      );
+      return false;
+    }
+
+    final lastAnyStatusAt = _lastVoiceServiceReminderAt;
+    if (lastAnyStatusAt == null) return true;
+
+    final lastStatus = _lastVoiceServiceReminderStatus;
+    if (lastStatus != null &&
+        _voicePriority(status) > _voicePriority(lastStatus)) {
+      return true;
+    }
+
+    final canSwitchStatus =
+        now.difference(lastAnyStatusAt) >= _voiceServiceStatusSwitchCooldown;
+    if (!canSwitchStatus) {
+      debugPrint(
+        'Voice service suppressed: switch cooldown '
+        '${_lastVoiceServiceReminderStatus?.name ?? 'unknown'} -> ${status.name}',
+      );
+    }
+    return canSwitchStatus;
+  }
+
+  int _voicePriority(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.postureDown:
+      case CompanionStatus.drowsy:
+      case CompanionStatus.fatigue:
+        return 3;
+      case CompanionStatus.distracted:
+        return 2;
+      case CompanionStatus.attention:
+        return 1;
+      case CompanionStatus.normal:
+      case CompanionStatus.userMissing:
+        return 0;
+    }
+  }
+
+  void _queuePendingVoiceReminder(CompanionStatus status, String? actionLabel) {
+    final pending = _pendingVoiceReminderStatus;
+    if (pending == null || _voicePriority(status) >= _voicePriority(pending)) {
+      _pendingVoiceReminderStatus = status;
+      _pendingVoiceReminderActionLabel = actionLabel;
+      debugPrint('Voice service pending: ${status.name}');
+    }
+  }
+
+  void _sendPendingVoiceReminderIfReady() {
+    final pendingStatus = _pendingVoiceReminderStatus;
+    if (pendingStatus == null) return;
+
+    final actionLabel = _pendingVoiceReminderActionLabel;
+    _pendingVoiceReminderStatus = null;
+    _pendingVoiceReminderActionLabel = null;
+
+    _sendVoiceReminderForStatus(
+      status: pendingStatus,
+      message: _voiceReminderMessageForStatus(pendingStatus),
+      actionLabel: actionLabel,
+      fromPending: true,
+    );
+  }
+
+  String _voiceEventTypeForStatus(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.attention:
+        return 'vision.attention_warning';
+      case CompanionStatus.fatigue:
+        return 'vision.fatigue_detected';
+      case CompanionStatus.distracted:
+        return 'vision.distracted';
+      case CompanionStatus.drowsy:
+        return 'vision.drowsy';
+      case CompanionStatus.postureDown:
+        return 'vision.posture_down';
+      case CompanionStatus.normal:
+      case CompanionStatus.userMissing:
+        return 'vision.normal';
+    }
+  }
+
+  String _voiceReminderMessageForStatus(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.attention:
+        return '眼睛有點累了，先眨眨眼休息一下。';
+      case CompanionStatus.fatigue:
+        return '你看起來很累，先停一下，讓眼睛休息。';
+      case CompanionStatus.distracted:
+        return '注意力跑掉了，先回來專注一下。';
+      case CompanionStatus.drowsy:
+        return '快睡著了喔，坐直一點，醒一下。';
+      case CompanionStatus.postureDown:
+        return '你趴下了，先坐起來再繼續。';
+      case CompanionStatus.normal:
+      case CompanionStatus.userMissing:
+        return '';
+    }
+  }
+
+  Future<void> _interruptLowerPriorityVoicePlaybackIfNeeded(
+    CompanionStatus nextStatus,
+  ) async {
+    final currentStatus = _currentVoicePlaybackStatus;
+    if (currentStatus == null) return;
+    if (_voicePriority(nextStatus) <= _voicePriority(currentStatus)) return;
+
+    try {
+      await _voiceAudioPlayer.stop();
+      _currentVoicePlaybackStatus = null;
+      debugPrint(
+        'Voice playback interrupted: ${currentStatus.name} -> ${nextStatus.name}',
+      );
+    } catch (error) {
+      debugPrint('Voice playback interrupt failed: $error');
+    }
+  }
+
+  Future<void> _playVoiceServiceAudio(
+    Uint8List? audioBytes,
+    CompanionStatus status,
+  ) async {
+    if (audioBytes == null || audioBytes.isEmpty) {
+      debugPrint('Voice playback skipped: empty audio bytes');
+      return;
+    }
+    try {
+      await _voiceAudioPlayer.stop();
+      _currentVoicePlaybackStatus = status;
+      debugPrint('Voice playback starting: ${audioBytes.length} bytes');
+      await _voiceAudioPlayer.play(BytesSource(audioBytes));
+    } catch (error) {
+      _currentVoicePlaybackStatus = null;
+      debugPrint('Voice playback failed: $error');
+    }
+  }
+
+  Future<void> _resumeFallbackVideoAfterVoiceIfNeeded() async {
+    final controller = _fallbackVideoController;
+    if (!_isUsingFallbackVideo || controller == null) return;
+    if (!controller.value.isInitialized || controller.value.isPlaying) return;
+
+    try {
+      await controller.play();
+      debugPrint('Fallback video resumed after voice playback');
+    } catch (error) {
+      debugPrint('Fallback video resume failed: $error');
+    }
+  }
+
+  bool _shouldSpeakStatus(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.attention:
+      case CompanionStatus.fatigue:
+      case CompanionStatus.distracted:
+      case CompanionStatus.drowsy:
+      case CompanionStatus.postureDown:
+        return true;
+      case CompanionStatus.normal:
+      case CompanionStatus.userMissing:
+        return false;
+    }
   }
 
   String _messageForCompanionStatus(CompanionStatus status) {
@@ -2403,6 +2754,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _breathingController.dispose();
     _cameraController?.dispose();
     _fallbackVideoController?.dispose();
+    _voiceServiceClient.close();
+    _voicePlayerStateSubscription?.cancel();
+    _voiceAudioPlayer.dispose();
     super.dispose();
   }
 
