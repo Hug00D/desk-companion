@@ -8,17 +8,20 @@ class ApiClient {
     defaultValue: 'http://100.119.136.81:8080/api/v1',
   );
 
-  ApiClient({http.Client? httpClient, this.baseUrl = defaultBaseUrl})
-    : _httpClient = httpClient ?? http.Client();
+  ApiClient({
+    http.Client? httpClient,
+    this.baseUrl = defaultBaseUrl,
+    this.requestTimeout = const Duration(seconds: 10),
+  }) : _httpClient = httpClient ?? http.Client();
 
   final http.Client _httpClient;
   final String baseUrl;
+  final Duration requestTimeout;
 
   Future<Map<String, dynamic>> get(String path, {String? accessToken}) async {
-    final response = await _httpClient.get(
-      _uri(path),
-      headers: _headers(accessToken),
-    );
+    final response = await _httpClient
+        .get(_uri(path), headers: _headers(accessToken))
+        .timeout(requestTimeout);
     return _decodeResponse(response);
   }
 
@@ -27,11 +30,13 @@ class ApiClient {
     Map<String, dynamic>? body,
     String? accessToken,
   }) async {
-    final response = await _httpClient.post(
-      _uri(path),
-      headers: _headers(accessToken),
-      body: jsonEncode(body ?? <String, dynamic>{}),
-    );
+    final response = await _httpClient
+        .post(
+          _uri(path),
+          headers: _headers(accessToken),
+          body: jsonEncode(body ?? <String, dynamic>{}),
+        )
+        .timeout(requestTimeout);
     return _decodeResponse(response);
   }
 
@@ -40,11 +45,13 @@ class ApiClient {
     Map<String, dynamic>? body,
     String? accessToken,
   }) async {
-    final response = await _httpClient.put(
-      _uri(path),
-      headers: _headers(accessToken),
-      body: jsonEncode(body ?? <String, dynamic>{}),
-    );
+    final response = await _httpClient
+        .put(
+          _uri(path),
+          headers: _headers(accessToken),
+          body: jsonEncode(body ?? <String, dynamic>{}),
+        )
+        .timeout(requestTimeout);
     return _decodeResponse(response);
   }
 
@@ -52,10 +59,9 @@ class ApiClient {
     String path, {
     String? accessToken,
   }) async {
-    final response = await _httpClient.delete(
-      _uri(path),
-      headers: _headers(accessToken),
-    );
+    final response = await _httpClient
+        .delete(_uri(path), headers: _headers(accessToken))
+        .timeout(requestTimeout);
     return _decodeResponse(response);
   }
 
