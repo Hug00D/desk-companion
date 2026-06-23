@@ -7,9 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 
+import '../ai/claude_intent_service.dart';
+import '../ai/companion_ai_command_mapper.dart';
+import '../ai/companion_ai_decision.dart';
+import '../ai/pending_action_controller.dart';
 import '../auth/auth_session.dart';
+import '../companion/companion_response.dart';
 import '../companion/companion_controller.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
@@ -23,6 +27,7 @@ import '../vision/vision_result.dart';
 import '../voice/voice_command.dart';
 import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
+import '../voice/voice_result.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_detail_screen.dart';
@@ -62,6 +67,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
   final VoiceInteractionController _voiceInteractionController =
       const VoiceInteractionController();
+  final ClaudeIntentService _claudeIntentService = ClaudeIntentService();
+  final CompanionAiCommandMapper _aiCommandMapper =
+      const CompanionAiCommandMapper();
+  final PendingActionController _pendingActionController =
+      PendingActionController();
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
@@ -80,18 +90,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isHeadOffsetCalibrating = true;
   final List<double> _headOffsetSamples = <double>[];
   bool _hasFace = false;
+  bool _hasPose = false;
 
   bool _showDebugPanel = false;
   bool _showVoiceDemoPanel = false;
   bool _showVisionSourcePreview = false;
   bool _isUserStatusExpanded = false;
+  bool _isAiThinking = false;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
   static const bool _preferFallbackVideoForLocalTest = false;
-  static const String _fallbackVideoAssetPath = 'assets/test.mp4';
-  static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
+  static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
+  static const String _fallbackNativeVideoAssetName = 'test_face.mp4';
+  static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
   static const List<String> _idleChatterMessages = <String>[
     '今天節奏不錯，繼續保持。',
     '我在旁邊看著，有需要再叫我。',
@@ -231,17 +244,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
     try {
       final tempDir = await getTemporaryDirectory();
-      final videoFile = io.File('${tempDir.path}/$_fallbackVideoFileName');
-      if (!await videoFile.exists()) {
-        final assetData = await rootBundle.load(_fallbackVideoAssetPath);
-        await videoFile.writeAsBytes(
-          assetData.buffer.asUint8List(
-            assetData.offsetInBytes,
-            assetData.lengthInBytes,
-          ),
-          flush: true,
-        );
-      }
+      final nativeVideoPath = await _copyNativeFallbackVideoToCache();
+      final videoFile = nativeVideoPath != null
+          ? io.File(nativeVideoPath)
+          : await _copyFlutterFallbackVideoToCache(tempDir);
 
       final controller = VideoPlayerController.file(videoFile);
       await controller.initialize();
@@ -259,7 +265,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = true;
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
-      _status = '本地測試模式：使用 test.mp4。';
+      _status = '本地測試模式：使用 test_face.mp4。';
       _startFallbackVideoDetectionLoop();
       setState(() {});
     } catch (fallbackError) {
@@ -270,6 +276,31 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _status = _cameraErrorMessage!;
       if (mounted) setState(() {});
     }
+  }
+
+  Future<String?> _copyNativeFallbackVideoToCache() async {
+    try {
+      return await _visionChannel.copyNativeAssetToCache(
+        assetName: _fallbackNativeVideoAssetName,
+        outputFileName: _fallbackVideoFileName,
+      );
+    } catch (e) {
+      debugPrint('Android assets 測試影片讀取失敗，改用 Flutter assets: $e');
+      return null;
+    }
+  }
+
+  Future<io.File> _copyFlutterFallbackVideoToCache(io.Directory tempDir) async {
+    final videoFile = io.File('${tempDir.path}/$_fallbackVideoFileName');
+    final assetData = await rootBundle.load(_fallbackVideoAssetPath);
+    await videoFile.writeAsBytes(
+      assetData.buffer.asUint8List(
+        assetData.offsetInBytes,
+        assetData.lengthInBytes,
+      ),
+      flush: true,
+    );
+    return videoFile;
   }
 
   void _startFallbackVideoDetectionLoop() {
@@ -304,9 +335,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _isProcessing = true;
 
     try {
-      final thumbnailBytes = await video_thumbnail.VideoThumbnail.thumbnailData(
-        video: videoPath,
-        imageFormat: video_thumbnail.ImageFormat.JPEG,
+      final thumbnailBytes = await _visionChannel.extractVideoFrame(
+        videoPath: videoPath,
         timeMs: controller.value.position.inMilliseconds,
         quality: 85,
       );
@@ -411,6 +441,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _isHeadOffsetCalibrating = visionResult.isHeadOffsetCalibrating;
     _recordHeadOffsetSample(visionResult);
     _hasFace = visionResult.hasFace;
+    _hasPose = visionResult.hasPose;
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
@@ -538,11 +569,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (selectedResult?.caseId != caseId) {
         selectedResult = null;
       }
-      final selectedInteraction = selectedResult == null
-          ? null
-          : _voiceInteractionController.handle(selectedResult);
-
-      if (selectedInteraction == null) {
+      if (selectedResult == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -553,7 +580,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return;
       }
 
-      _applyVoiceInteraction(selectedInteraction);
+      await _applyVoiceResult(selectedResult);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -568,6 +595,184 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           _isVoiceDemoLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _applyVoiceResult(VoiceRecognitionResult result) async {
+    final pendingResolution = _pendingActionController.resolve(result.bestText);
+    if (pendingResolution != null) {
+      _applyPendingActionResolution(result, pendingResolution);
+      return;
+    }
+
+    if (_pendingActionController.pending != null) {
+      _pendingActionController.clear();
+    }
+
+    if (!result.isFinal || result.hasError) {
+      _applyVoiceInteraction(_voiceInteractionController.handle(result));
+      return;
+    }
+
+    if (!_claudeIntentService.isEnabled) {
+      _applyVoiceInteraction(_voiceInteractionController.handle(result));
+      return;
+    }
+
+    setState(() {
+      _isAiThinking = true;
+    });
+
+    try {
+      final aiDecision = await _claudeIntentService.decide(
+        userText: result.bestText,
+        context: ClaudeIntentContext(
+          pomodoroStatus: _pomodoroController.status.name,
+          pomodoroRemaining: _pomodoroController.formattedRemaining,
+          companionStatus: _companionStatus.name,
+          visionEvent: _lastVisionEventType.storageValue,
+          hasFace: _hasFace,
+          focusSummary: _studySessionController.buildSummary(
+            _pomodoroController,
+          ),
+        ),
+      );
+
+      if (aiDecision == null) {
+        _applyVoiceInteraction(_voiceInteractionController.handle(result));
+        return;
+      }
+
+      _applyAiDecision(result, aiDecision);
+    } catch (e) {
+      debugPrint('Claude 意圖判斷失敗，改用本地規則: $e');
+      _applyVoiceInteraction(_voiceInteractionController.handle(result));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAiThinking = false;
+        });
+      }
+    }
+  }
+
+  void _applyPendingActionResolution(
+    VoiceRecognitionResult result,
+    PendingActionResolution resolution,
+  ) {
+    if (resolution.type == PendingActionResolutionType.declined) {
+      _showVoiceReply(
+        result: result,
+        command: VoiceCommand(
+          type: VoiceCommandType.unknown,
+          sourceText: result.bestText,
+        ),
+        message: '好，那我先不執行，陪你聊聊也可以。',
+        actionLabel: 'decline_pending_action',
+      );
+      return;
+    }
+
+    final interaction = VoiceInteraction(
+      result: result,
+      command: resolution.action.command,
+      response: CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.action,
+        message: resolution.action.confirmationText,
+        actionLabel: 'confirm_pending_action',
+      ),
+    );
+    _applyVoiceInteraction(interaction);
+  }
+
+  void _applyAiDecision(
+    VoiceRecognitionResult result,
+    CompanionAiDecision decision,
+  ) {
+    final command = _aiCommandMapper.toVoiceCommand(
+      sourceText: result.bestText,
+      decision: decision,
+    );
+
+    if (command == null ||
+        decision.mode == CompanionAiMode.chat ||
+        decision.mode == CompanionAiMode.clarify) {
+      _showVoiceReply(
+        result: result,
+        command: VoiceCommand(
+          type: VoiceCommandType.unknown,
+          sourceText: result.bestText,
+          confidence: decision.confidence,
+        ),
+        message: decision.chatReply.isNotEmpty
+            ? decision.chatReply
+            : '我聽到了，我們可以慢慢聊。',
+        actionLabel: decision.mode == CompanionAiMode.clarify
+            ? 'ai_ask_clarification'
+            : 'ai_chat',
+      );
+      return;
+    }
+
+    final shouldConfirm =
+        decision.needsConfirmation ||
+        _aiCommandMapper.requiresConfirmation(command.type);
+    if (shouldConfirm) {
+      final confirmationText = decision.confirmationText.isNotEmpty
+          ? decision.confirmationText
+          : _aiCommandMapper.defaultConfirmationText(command);
+      _pendingActionController.set(
+        PendingCompanionAction(
+          command: command,
+          confirmationText: confirmationText,
+        ),
+      );
+      _showVoiceReply(
+        result: result,
+        command: command,
+        message: confirmationText,
+        actionLabel: 'ai_confirm_${command.type.name}',
+      );
+      return;
+    }
+
+    _applyVoiceInteraction(
+      VoiceInteraction(
+        result: result,
+        command: command,
+        response: CompanionResponse(
+          source: CompanionResponseSource.voice,
+          tone: CompanionResponseTone.action,
+          message: decision.chatReply,
+          actionLabel: 'ai_${command.type.name}',
+        ),
+      ),
+    );
+  }
+
+  void _showVoiceReply({
+    required VoiceRecognitionResult result,
+    required VoiceCommand command,
+    required String message,
+    String? actionLabel,
+  }) {
+    _lastVoiceInteraction = VoiceInteraction(
+      result: result,
+      command: command,
+      response: CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.supportive,
+        message: message,
+        actionLabel: actionLabel,
+      ),
+    );
+    _companionMessage = message;
+    _lastVoiceResponseMessage = message;
+    _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -1891,10 +2096,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildVoiceDemoChip(String label, String caseId) {
+    final isBusy = _isVoiceDemoLoading || _isAiThinking;
     return SizedBox(
       height: 36,
       child: ElevatedButton(
-        onPressed: _isVoiceDemoLoading ? null : () => _runVoiceDemo(caseId),
+        onPressed: isBusy ? null : () => _runVoiceDemo(caseId),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFEAF7FF),
           foregroundColor: const Color(0xFF2F7ED8),
@@ -1905,7 +2111,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             side: BorderSide(color: Colors.white.withValues(alpha: 0.24)),
           ),
         ),
-        child: _isVoiceDemoLoading
+        child: isBusy
             ? const SizedBox(
                 width: 14,
                 height: 14,
@@ -2015,8 +2221,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                 runSpacing: 8,
                 children: [
                   _buildVoiceMetaChip(confidenceText),
+                  _buildVoiceMetaChip(
+                    _claudeIntentService.isEnabled
+                        ? "Claude: 啟用"
+                        : "Claude: fallback",
+                  ),
                   _buildVoiceMetaChip("視覺狀態: $_fatigueLevel"),
                   _buildVoiceMetaChip("畫面: ${_hasFace ? "有人臉" : "未見人臉"}"),
+                  _buildVoiceMetaChip("Pose: ${_hasPose ? "有" : "無"}"),
                 ],
               ),
             ],
