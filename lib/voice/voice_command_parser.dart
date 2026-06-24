@@ -164,7 +164,9 @@ class VoiceCommandParser {
         return int.tryParse(digitMatch.group(1)!);
       }
 
-      for (final entry in _chineseMinuteValues.entries) {
+      final minuteEntries = _chineseMinuteValues.entries.toList()
+        ..sort((a, b) => b.key.length.compareTo(a.key.length));
+      for (final entry in minuteEntries) {
         if (text.contains(entry.key)) return entry.value;
       }
     }

@@ -6,6 +6,9 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:speech_to_text/speech_recognition_error.dart' as speech_error;
+import 'package:speech_to_text/speech_recognition_result.dart' as speech_result;
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:video_player/video_player.dart';
 
 import '../ai/claude_intent_service.dart';
@@ -67,6 +70,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
   final VoiceInteractionController _voiceInteractionController =
       const VoiceInteractionController();
+  final stt.SpeechToText _speechToText = stt.SpeechToText();
   final ClaudeIntentService _claudeIntentService = ClaudeIntentService();
   final CompanionAiCommandMapper _aiCommandMapper =
       const CompanionAiCommandMapper();
@@ -97,6 +101,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _showVisionSourcePreview = false;
   bool _isUserStatusExpanded = false;
   bool _isAiThinking = false;
+  bool _speechAvailable = false;
+  bool _isSpeechInitializing = false;
+  bool _isListeningToUser = false;
+  bool _isSubmittingLiveVoice = false;
+  String _liveVoiceText = '';
+  String _speechStatus = '語音尚未啟動';
+  String? _speechErrorMessage;
+  String? _speechLocaleId = _defaultSpeechLocaleId;
+  String? _lastSubmittedLiveVoiceText;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
   static const Duration _idleChatterInterval = Duration(seconds: 35);
@@ -105,6 +118,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
   static const String _fallbackNativeVideoAssetName = 'test_face.mp4';
   static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
+  static const String _defaultSpeechLocaleId = 'zh_TW';
+  static const List<String> _preferredSpeechLocaleIds = <String>[
+    'zh_TW',
+    'zh_Hant_TW',
+    'cmn_Hant_TW',
+    'zh_HK',
+    'zh_CN',
+    'cmn_Hans_CN',
+  ];
   static const List<String> _idleChatterMessages = <String>[
     '今天節奏不錯，繼續保持。',
     '我在旁邊看著，有需要再叫我。',
@@ -115,6 +137,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   int _distractedFrameCount = 0;
   int _postureDownFrameCount = 0;
   int _idleChatterIndex = 0;
+  int _liveVoiceSessionCounter = 0;
   DateTime? _idleBubbleVisibleUntil;
   DateTime? _voiceMessagePinnedUntil;
   CompanionStatus _companionStatus = CompanionStatus.normal;
@@ -550,6 +573,249 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
+  Future<void> _toggleLiveVoiceInput() async {
+    if (_isListeningToUser) {
+      await _stopLiveVoiceInput();
+      return;
+    }
+
+    await _startLiveVoiceInput();
+  }
+
+  Future<bool> _ensureSpeechReady() async {
+    if (_speechAvailable) return true;
+    if (_isSpeechInitializing) return false;
+
+    setState(() {
+      _isSpeechInitializing = true;
+      _speechErrorMessage = null;
+      _speechStatus = '正在啟動語音辨識...';
+    });
+
+    try {
+      final available = await _speechToText.initialize(
+        onStatus: _handleSpeechStatus,
+        onError: _handleSpeechError,
+        options: [stt.SpeechToText.androidNoBluetooth],
+      );
+      if (!mounted) return available;
+
+      String? localeId;
+      if (available) {
+        localeId = await _selectSpeechLocale();
+      }
+
+      if (!mounted) return available;
+      setState(() {
+        _speechAvailable = available;
+        _speechLocaleId = localeId;
+        _speechStatus = available
+            ? '語音待命${localeId == null ? '' : ' ($localeId)'}'
+            : '此裝置沒有可用的語音辨識服務';
+      });
+      return available;
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _speechAvailable = false;
+          _speechErrorMessage = e.toString();
+          _speechStatus = '語音啟動失敗';
+        });
+      }
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSpeechInitializing = false;
+        });
+      }
+    }
+  }
+
+  Future<String?> _selectSpeechLocale() async {
+    try {
+      final locales = await _speechToText.locales();
+      if (locales.isEmpty) return _defaultSpeechLocaleId;
+
+      bool matches(stt.LocaleName locale, String expected) {
+        final normalized = locale.localeId.toLowerCase().replaceAll('-', '_');
+        final expectedNormalized = expected.toLowerCase().replaceAll('-', '_');
+        return normalized == expectedNormalized;
+      }
+
+      for (final preferredLocaleId in _preferredSpeechLocaleIds) {
+        for (final locale in locales) {
+          if (matches(locale, preferredLocaleId)) return locale.localeId;
+        }
+      }
+      for (final locale in locales) {
+        final normalized = locale.localeId.toLowerCase().replaceAll('-', '_');
+        if (normalized.startsWith('zh')) return locale.localeId;
+      }
+    } catch (e) {
+      debugPrint('讀取語音語系失敗: $e');
+    }
+    return _defaultSpeechLocaleId;
+  }
+
+  Future<void> _startLiveVoiceInput() async {
+    if (_isSubmittingLiveVoice || _isAiThinking) return;
+
+    final ready = await _ensureSpeechReady();
+    if (!mounted) return;
+    if (!ready) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('目前無法啟動語音辨識，請確認麥克風權限與系統語音服務。'),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    try {
+      setState(() {
+        _isListeningToUser = true;
+        _liveVoiceText = '';
+        _speechErrorMessage = null;
+        _speechStatus = '正在聆聽...';
+        _lastSubmittedLiveVoiceText = null;
+      });
+
+      await _speechToText.listen(
+        onResult: _handleSpeechResult,
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: stt.ListenMode.confirmation,
+          listenFor: const Duration(seconds: 12),
+          pauseFor: const Duration(seconds: 3),
+          localeId: _speechLocaleId,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isListeningToUser = false;
+        _speechErrorMessage = e.toString();
+        _speechStatus = '聆聽啟動失敗';
+      });
+    }
+  }
+
+  Future<void> _stopLiveVoiceInput() async {
+    try {
+      await _speechToText.stop();
+    } catch (e) {
+      debugPrint('停止語音辨識失敗: $e');
+    }
+    if (mounted) {
+      setState(() {
+        _isListeningToUser = false;
+        _speechStatus = '語音待命';
+      });
+    }
+  }
+
+  void _handleSpeechStatus(String status) {
+    if (!mounted) return;
+    setState(() {
+      _speechStatus = _speechStatusLabel(status);
+      if (status == stt.SpeechToText.notListeningStatus ||
+          status == stt.SpeechToText.doneStatus) {
+        _isListeningToUser = false;
+      } else if (status == stt.SpeechToText.listeningStatus) {
+        _isListeningToUser = true;
+      }
+    });
+  }
+
+  void _handleSpeechError(speech_error.SpeechRecognitionError error) {
+    if (!mounted) return;
+    setState(() {
+      _isListeningToUser = false;
+      _speechErrorMessage = error.errorMsg;
+      _speechStatus = error.permanent ? '語音錯誤，需要重新授權' : '語音辨識未成功';
+    });
+  }
+
+  void _handleSpeechResult(speech_result.SpeechRecognitionResult result) {
+    final text = result.recognizedWords.trim();
+    final confidence = result.hasConfidenceRating && result.confidence > 0
+        ? result.confidence
+        : null;
+
+    if (mounted) {
+      setState(() {
+        _liveVoiceText = text;
+        if (result.finalResult) {
+          _isListeningToUser = false;
+          _speechStatus = text.isEmpty ? '沒有聽到可辨識內容' : '已收到語音';
+        }
+      });
+    }
+
+    if (!result.finalResult || text.isEmpty) return;
+    if (_lastSubmittedLiveVoiceText == text) return;
+    _lastSubmittedLiveVoiceText = text;
+    unawaited(_submitLiveVoiceText(text, confidence));
+  }
+
+  Future<void> _submitLiveVoiceText(String text, double? confidence) async {
+    if (_isSubmittingLiveVoice) return;
+    if (text.trim().isEmpty) return;
+    if (!mounted) return;
+
+    setState(() {
+      _isSubmittingLiveVoice = true;
+      _speechStatus = '正在交給 AI 判斷...';
+    });
+
+    try {
+      await _applyVoiceResult(_voiceResultFromLiveSpeech(text, confidence));
+      if (mounted) {
+        setState(() {
+          _speechStatus = '語音待命';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmittingLiveVoice = false;
+        });
+      }
+    }
+  }
+
+  VoiceRecognitionResult _voiceResultFromLiveSpeech(
+    String text,
+    double? confidence,
+  ) {
+    return VoiceRecognitionResult(
+      sessionId: 'live_voice_${++_liveVoiceSessionCounter}',
+      eventType: VoiceEventType.finalResult,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      transcript: text,
+      formattedTranscript: text,
+      isFinal: true,
+      candidates: [VoiceCandidate(text: text, confidence: confidence)],
+      audio: const VoiceAudioInfo(isSpeechDetected: true),
+      language: VoiceLanguageInfo(tag: _speechLocaleId),
+    );
+  }
+
+  String _speechStatusLabel(String status) {
+    switch (status) {
+      case stt.SpeechToText.listeningStatus:
+        return '正在聆聽...';
+      case stt.SpeechToText.notListeningStatus:
+      case stt.SpeechToText.doneStatus:
+        return '語音待命';
+      default:
+        return status;
+    }
+  }
+
   Future<void> _runVoiceDemo(String caseId) async {
     if (_isVoiceDemoLoading) return;
 
@@ -573,7 +839,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("找不到語音 Demo 資料: $caseId"),
+            content: Text("找不到語音測試資料: $caseId"),
             duration: const Duration(seconds: 4),
           ),
         );
@@ -585,7 +851,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("語音 Demo 載入失敗: $e"),
+          content: Text("語音測試資料載入失敗: $e"),
           duration: const Duration(seconds: 4),
         ),
       );
@@ -1469,13 +1735,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                     const SizedBox(height: 14),
                     _buildToolSheetAction(
                       icon: Icons.record_voice_over_rounded,
-                      title: '語音 Demo',
-                      subtitle: '開發測試用，正式版會拿掉。',
+                      title: '語音輸入',
+                      subtitle: '即時麥克風與開發測試案例。',
                       isActive: _showVoiceDemoPanel,
                       onTap: () {
                         Navigator.pop(context);
+                        final nextValue = !_showVoiceDemoPanel;
+                        if (!nextValue && _isListeningToUser) {
+                          unawaited(_stopLiveVoiceInput());
+                        }
                         setState(() {
-                          _showVoiceDemoPanel = !_showVoiceDemoPanel;
+                          _showVoiceDemoPanel = nextValue;
                           if (_showVoiceDemoPanel) _showDebugPanel = false;
                         });
                       },
@@ -1487,6 +1757,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                       isActive: _showDebugPanel,
                       onTap: () {
                         Navigator.pop(context);
+                        if (_isListeningToUser) {
+                          unawaited(_stopLiveVoiceInput());
+                        }
                         setState(() {
                           _showDebugPanel = !_showDebugPanel;
                           if (_showDebugPanel) _showVoiceDemoPanel = false;
@@ -1979,6 +2252,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return _statusPulseValue();
       },
       onHomeTap: () {
+        if (_isListeningToUser) {
+          unawaited(_stopLiveVoiceInput());
+        }
         setState(() {
           _showVoiceDemoPanel = false;
           _showDebugPanel = false;
@@ -2049,7 +2325,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
-                      '語音 Demo',
+                      '語音輸入',
                       style: TextStyle(
                         color: Color(0xFF20324D),
                         fontSize: 15,
@@ -2060,6 +2336,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                   IconButton(
                     tooltip: '關閉',
                     onPressed: () {
+                      if (_isListeningToUser) {
+                        unawaited(_stopLiveVoiceInput());
+                      }
                       setState(() => _showVoiceDemoPanel = false);
                     },
                     icon: const Icon(Icons.close_rounded),
@@ -2070,6 +2349,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                 ],
               ),
               const SizedBox(height: 8),
+              _buildLiveVoiceInputCard(),
+              const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -2095,8 +2376,128 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     );
   }
 
+  Widget _buildLiveVoiceInputCard() {
+    final isBusy =
+        _isSpeechInitializing || _isSubmittingLiveVoice || _isAiThinking;
+    final canToggle = _isListeningToUser || !isBusy;
+    final buttonLabel = _isListeningToUser
+        ? '停止聆聽'
+        : _isSubmittingLiveVoice || _isAiThinking
+        ? '判斷中'
+        : '開始聆聽';
+    final icon = _isListeningToUser
+        ? Icons.stop_rounded
+        : _isSubmittingLiveVoice || _isAiThinking
+        ? Icons.hourglass_top_rounded
+        : Icons.mic_rounded;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6FBFF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFD8EEF8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: canToggle ? _toggleLiveVoiceInput : null,
+                  icon: Icon(icon, size: 18),
+                  label: Text(buttonLabel),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isListeningToUser
+                        ? const Color(0xFFE85D75)
+                        : const Color(0xFF57BEEB),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: _isListeningToUser
+                      ? const Color(0xFFE85D75)
+                      : _speechAvailable
+                      ? const Color(0xFF37B26C)
+                      : const Color(0xFF9FB0C2),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _speechStatus,
+            style: const TextStyle(
+              color: Color(0xFF3F607D),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (_liveVoiceText.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '目前聽到：$_liveVoiceText',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF31465F),
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ],
+          if (_speechErrorMessage != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _speechErrorMessage!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFE85D75),
+                fontSize: 12,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          if (_lastVoiceResponseMessage != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              '回覆：$_lastVoiceResponseMessage',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF20324D),
+                fontSize: 13,
+                height: 1.35,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildVoiceDemoChip(String label, String caseId) {
-    final isBusy = _isVoiceDemoLoading || _isAiThinking;
+    final isBusy =
+        _isVoiceDemoLoading ||
+        _isAiThinking ||
+        _isSubmittingLiveVoice ||
+        _isListeningToUser;
     return SizedBox(
       height: 36,
       child: ElevatedButton(
@@ -2124,6 +2525,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Widget _buildVoiceDialogPanel() {
     final interaction = _lastVoiceInteraction;
+    if (_showVoiceDemoPanel) return const SizedBox.shrink();
     if (interaction == null) return const SizedBox.shrink();
     final responseMessage =
         _lastVoiceResponseMessage ?? interaction.response.message;
@@ -2178,7 +2580,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Text(
-                      "語音 Demo",
+                      "語音輸入",
                       style: TextStyle(
                         color: Color(0xFF20324D),
                         fontSize: 16,
@@ -2229,6 +2631,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                   _buildVoiceMetaChip("視覺狀態: $_fatigueLevel"),
                   _buildVoiceMetaChip("畫面: ${_hasFace ? "有人臉" : "未見人臉"}"),
                   _buildVoiceMetaChip("Pose: ${_hasPose ? "有" : "無"}"),
+                  _buildVoiceMetaChip(
+                    _isListeningToUser ? "Mic: 聆聽中" : "Mic: 待命",
+                  ),
                 ],
               ),
             ],
@@ -2407,11 +2812,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           children: [
             _buildToolDockButton(
               icon: Icons.record_voice_over_rounded,
-              label: '語音 Demo',
+              label: '語音',
               isActive: _showVoiceDemoPanel,
               onTap: () {
+                final nextValue = !_showVoiceDemoPanel;
+                if (!nextValue && _isListeningToUser) {
+                  unawaited(_stopLiveVoiceInput());
+                }
                 setState(() {
-                  _showVoiceDemoPanel = !_showVoiceDemoPanel;
+                  _showVoiceDemoPanel = nextValue;
                   if (_showVoiceDemoPanel) _showDebugPanel = false;
                 });
               },
@@ -2422,6 +2831,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
               label: '視覺 Demo',
               isActive: _showDebugPanel,
               onTap: () {
+                if (_isListeningToUser) {
+                  unawaited(_stopLiveVoiceInput());
+                }
                 setState(() {
                   _showDebugPanel = !_showDebugPanel;
                   if (_showDebugPanel) _showVoiceDemoPanel = false;
@@ -2612,6 +3024,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _userStatusCollapseTimer?.cancel();
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();
+    _speechToText.cancel();
     _breathingController.dispose();
     _cameraController?.dispose();
     _fallbackVideoController?.dispose();
