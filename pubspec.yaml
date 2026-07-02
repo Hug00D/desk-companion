@@ -68,6 +68,7 @@ flutter:
     - assets/test.mp4
     - assets/test_face.mp4
     - assets/mock/
+    - assets/audio/reminders/
     - assets/test2.riv
 
   # To add assets to your application, add an assets section, like this:

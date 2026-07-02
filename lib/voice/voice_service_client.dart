@@ -73,8 +73,16 @@ class VoiceServiceClient {
     final mode = body['mode']?.toString();
     final audioPath = body['audioPath']?.toString();
     final audioUrl = body['audioUrl']?.toString();
+    final spokenText = body['text']?.toString();
+    final durationMsValue = body['durationMs'];
+    final durationMs = durationMsValue is num
+        ? durationMsValue.round()
+        : int.tryParse(durationMsValue?.toString() ?? '');
     final generated =
-        (mode == 'mock_wav' || mode == 'windows_tts' || mode == 'cached_wav') &&
+        (mode == 'gpt_sovits' ||
+            mode == 'mock_wav' ||
+            mode == 'windows_tts' ||
+            mode == 'cached_wav') &&
         audioPath != null &&
         audioPath.isNotEmpty &&
         audioUrl != null &&
@@ -95,6 +103,8 @@ class VoiceServiceClient {
       audioPath: audioPath,
       audioUrl: audioUrl,
       audioBytes: audioBytes,
+      spokenText: spokenText,
+      duration: durationMs == null ? null : Duration(milliseconds: durationMs),
     );
   }
 
@@ -123,6 +133,8 @@ class VoiceServiceSendResult {
     this.audioPath,
     this.audioUrl,
     this.audioBytes,
+    this.spokenText,
+    this.duration,
   });
 
   final bool generated;
@@ -131,6 +143,8 @@ class VoiceServiceSendResult {
   final String? audioPath;
   final String? audioUrl;
   final Uint8List? audioBytes;
+  final String? spokenText;
+  final Duration? duration;
 }
 
 class VoiceServiceException implements Exception {

@@ -1,57 +1,92 @@
-# Desk Companion Python Voice Service
+# Desk Companion Voice Service
 
-Local voice service for testing the reminder-to-voice pipeline.
+Local reminder voice service used by the Flutter app. The public API remains
+`POST /tts`; the service now prefers the licensed Staff A GPT-SoVITS
+v2ProPlus model and falls back to Windows System.Speech when GPT-SoVITS is not
+available.
 
-This first version does not run GPT-SoVITS yet. It receives reminder text,
-prints it in the terminal, and writes a WAV file to
-`backend/python_voice_service/output/`. On Windows it tries the local
-System.Speech TTS voice first, then falls back to a small mock WAV.
+## Local-only files
 
-Repeated reminder text is cached as `cached_voice_*.wav`, so the same sentence
-is generated once and reused on later calls. The service keeps the newest 120
-cached voice files.
+The following directories are intentionally ignored by Git because they hold
+large runtime files, generated audio, or a model that cannot be redistributed:
+
+```text
+models/
+runtime/
+output/
+```
+
+Expected Staff A model layout:
+
+```text
+models/staff_a/Staff_A_GPT-SoVITS_v2ProPlus/
+  Staff_A+hlw-e15.ckpt
+  Staff_A+hlw_e8_s392.pth
+  rec257_normal.opus
+  emo039_low01.opus
+  emo052_whisper.opus
+  emo069_high.opus
+```
+
+The model license permits commercial and non-commercial use without credit,
+but prohibits redistribution of the model files.
 
 ## Run
 
 From the project root:
 
 ```powershell
-& "C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" backend\python_voice_service\app\main.py --host 0.0.0.0 --port 8001
+.\backend\python_voice_service\start.ps1
 ```
 
-If you install Python locally later, this also works:
+Useful options:
 
 ```powershell
-python backend\python_voice_service\app\main.py --host 0.0.0.0 --port 8001
+.\backend\python_voice_service\start.ps1 -SkipPrewarm
+.\backend\python_voice_service\start.ps1 -DisableGptSoVits
 ```
 
-## Test
+The first normal launch starts GPT-SoVITS on `127.0.0.1:9880`, starts the app
+voice API on port `8001`, and pre-generates three fixed reminders for each
+supported vision status. Later launches reuse cached WAV files.
 
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8001/tts `
-  -ContentType "application/json" `
-  -Body '{"text":"先回來專注一下。","source":"manual-test","status":"distracted"}'
-```
-
-Android emulator should call the host machine through:
+Android emulator URL:
 
 ```text
 http://10.0.2.2:8001
 ```
 
-Physical phone should use your PC LAN IP instead, for example:
+Physical phone example:
 
 ```powershell
 flutter run --dart-define=VOICE_SERVICE_URL=http://192.168.1.23:8001
 ```
 
-## GPT-SoVITS Later
-
-Replace `_generate_speech_wav(...)` in `app/main.py` with the GPT-SoVITS
-inference call. The HTTP contract can stay the same:
+## API
 
 ```text
+GET  /health
+GET  /voices
 POST /tts
-{ "text": "...", "source": "vision", "status": "drowsy" }
+GET  /audio/<filename>
 ```
+
+Example:
+
+```powershell
+$body = @{
+  text = "Focus reminder"
+  source = "vision"
+  status = "distracted"
+  eventType = "vision.distracted"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8001/tts `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+For `source=vision`, the service chooses one of three fixed messages for the
+status and avoids repeating the immediately previous message. Dynamic LLM
+responses keep the supplied `text` unchanged.
