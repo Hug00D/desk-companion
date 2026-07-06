@@ -3,7 +3,9 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../focus/focus_session_monitor.dart';
 import '../focus/pomodoro_controller.dart';
+import '../vision/companion_state_evaluator.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_hub_screen.dart';
@@ -18,7 +20,18 @@ class TasksScreen extends StatefulWidget {
 
 class _TasksScreenState extends State<TasksScreen> {
   final PomodoroController _pomodoroController = PomodoroController();
+  final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
+  late final Listenable _pageListenable;
   int _selectedMinutes = 25;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageListenable = Listenable.merge([
+      _pomodoroController,
+      _focusSessionMonitor,
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +59,7 @@ class _TasksScreenState extends State<TasksScreen> {
           ),
           SafeArea(
             child: AnimatedBuilder(
-              animation: _pomodoroController,
+              animation: _pageListenable,
               builder: (context, _) {
                 return CustomScrollView(
                   slivers: [
@@ -64,6 +77,8 @@ class _TasksScreenState extends State<TasksScreen> {
                             _buildHeader(),
                             const SizedBox(height: 18),
                             _buildPomodoroPanel(),
+                            const SizedBox(height: 14),
+                            _buildFocusPolicyPanel(),
                             const SizedBox(height: 20),
                             const Text(
                               '專注模式',
@@ -204,6 +219,125 @@ class _TasksScreenState extends State<TasksScreen> {
           _buildDurationSelector(enabled: !isActive),
           const SizedBox(height: 18),
           _buildTimerControls(status),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFocusPolicyPanel() {
+    final episodeStatus = _focusSessionMonitor.activeEpisodeStatus;
+    return _GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.shield_outlined, color: Color(0xFF9FF3D0), size: 22),
+              SizedBox(width: 10),
+              Text(
+                '專注保護',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _SessionMetric(
+                label: '有效專注',
+                value: _compactDuration(
+                  _focusSessionMonitor.effectiveFocusDuration,
+                ),
+                color: const Color(0xFF9FF3D0),
+              ),
+              const SizedBox(width: 8),
+              _SessionMetric(
+                label: '分心時間',
+                value: _compactDuration(
+                  _focusSessionMonitor.distractedDuration,
+                ),
+                color: const Color(0xFFFFC36B),
+              ),
+              const SizedBox(width: 8),
+              _SessionMetric(
+                label: '事件',
+                value: '${_focusSessionMonitor.totalEventCount}',
+                color: const Color(0xFF79D2F5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            episodeStatus == null
+                ? '只在番茄鐘進行時記錄，不會因短暫動作立刻暫停。'
+                : '正在觀察：${_focusStatusLabel(episodeStatus)}',
+            style: const TextStyle(
+              color: Color(0xCCFFFFFF),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
+          _buildPolicyToggle(
+            title: '嚴重狀況自動暫停',
+            subtitle: '趴下 8 秒；打瞌睡或離席 10 秒。',
+            value: _focusSessionMonitor.severeAutoPauseEnabled,
+            onChanged: _focusSessionMonitor.setSevereAutoPauseEnabled,
+          ),
+          Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
+          _buildPolicyToggle(
+            title: '長時間分心自動暫停',
+            subtitle: '關閉時，分心 15 秒只會詢問是否暫停。',
+            value: _focusSessionMonitor.longDistractionAutoPauseEnabled,
+            onChanged: _focusSessionMonitor.setLongDistractionAutoPauseEnabled,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPolicyToggle({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Color(0xBFFFFFFF),
+                    fontSize: 11,
+                    height: 1.35,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Switch(value: value, onChanged: onChanged),
         ],
       ),
     );
@@ -371,6 +505,31 @@ class _TasksScreenState extends State<TasksScreen> {
     return hours > 0 ? '$hours:$remainingMinutes:00' : '$remainingMinutes:00';
   }
 
+  String _compactDuration(Duration duration) {
+    final minutes = duration.inMinutes.toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  String _focusStatusLabel(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.normal:
+        return '正常';
+      case CompanionStatus.attention:
+        return '頻繁眨眼';
+      case CompanionStatus.fatigue:
+        return '長時間閉眼';
+      case CompanionStatus.distracted:
+        return '分心';
+      case CompanionStatus.drowsy:
+        return '打瞌睡';
+      case CompanionStatus.postureDown:
+        return '趴下';
+      case CompanionStatus.userMissing:
+        return '離席';
+    }
+  }
+
   String _statusLabel(PomodoroStatus status) {
     switch (status) {
       case PomodoroStatus.idle:
@@ -391,10 +550,71 @@ class _TasksScreenState extends State<TasksScreen> {
       case PomodoroStatus.running:
         return '保持現在的節奏';
       case PomodoroStatus.paused:
-        return '休息一下再繼續';
+        return _pauseCaption();
       case PomodoroStatus.completed:
         return '這輪做得很好';
     }
+  }
+
+  String _pauseCaption() {
+    switch (_pomodoroController.pauseReason) {
+      case PomodoroPauseReason.distracted:
+        return '分心過久，已自動暫停';
+      case PomodoroPauseReason.fatigue:
+        return '閉眼過久，已自動暫停';
+      case PomodoroPauseReason.drowsy:
+        return '打瞌睡，已自動暫停';
+      case PomodoroPauseReason.postureDown:
+        return '趴下過久，已自動暫停';
+      case PomodoroPauseReason.userMissing:
+        return '離席過久，已自動暫停';
+      case PomodoroPauseReason.manual:
+      case null:
+        return '休息一下再繼續';
+    }
+  }
+}
+
+class _SessionMetric extends StatelessWidget {
+  const _SessionMetric({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            style: TextStyle(
+              color: color,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xBFFFFFFF),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -1,5 +1,6 @@
 import '../vision/vision_event.dart';
 import '../vision/vision_event_tracker.dart';
+import '../vision/companion_state_evaluator.dart';
 import '../voice/voice_command.dart';
 import 'pomodoro_controller.dart';
 
@@ -9,12 +10,17 @@ class StudySessionController {
 
   Duration focusedDuration = Duration.zero;
   Duration awayDuration = Duration.zero;
+  Duration distractedDuration = Duration.zero;
 
   int attentionWarningCount = 0;
   int fatigueEventCount = 0;
   int partialUserDetectedCount = 0;
   int userAwayCount = 0;
   int userReturnedCount = 0;
+  int distractedEventCount = 0;
+  int drowsyEventCount = 0;
+  int postureDownEventCount = 0;
+  int focusUserMissingEventCount = 0;
 
   int pomodoroStartedCount = 0;
   int pomodoroPausedCount = 0;
@@ -121,14 +127,41 @@ class StudySessionController {
     pomodoroCompletedCount += 1;
   }
 
+  void recordFocusEvent(CompanionStatus status) {
+    ensureStarted();
+    switch (status) {
+      case CompanionStatus.distracted:
+        distractedEventCount += 1;
+        break;
+      case CompanionStatus.drowsy:
+        drowsyEventCount += 1;
+        break;
+      case CompanionStatus.postureDown:
+        postureDownEventCount += 1;
+        break;
+      case CompanionStatus.userMissing:
+        focusUserMissingEventCount += 1;
+        break;
+      case CompanionStatus.attention:
+        attentionWarningCount += 1;
+        break;
+      case CompanionStatus.fatigue:
+        fatigueEventCount += 1;
+        break;
+      case CompanionStatus.normal:
+        break;
+    }
+  }
+
   String buildSummary(PomodoroController pomodoroController) {
     final focusText = _formatDuration(focusedDuration);
     final awayText = _formatDuration(awayDuration);
+    final distractedText = _formatDuration(distractedDuration);
     final timerText = pomodoroController.isActive
         ? '目前番茄鐘還剩 ${pomodoroController.formattedRemaining}'
         : '目前沒有進行中的番茄鐘';
 
-    return '今天目前專注 $focusText，離開 $awayText。'
+    return '今天目前專注 $focusText，分心 $distractedText，離開 $awayText。'
         '疲勞提醒 $fatigueEventCount 次，注意力提醒 $attentionWarningCount 次，'
         '番茄鐘完成 $pomodoroCompletedCount 輪、暫停 $pomodoroPausedCount 次。$timerText。';
   }
@@ -167,7 +200,13 @@ class StudySessionController {
     }
 
     if (isStudying && trackingResult.isStable) {
-      focusedDuration += delta;
+      final status = trackingResult.event.status;
+      if (status == CompanionStatus.normal ||
+          status == CompanionStatus.attention) {
+        focusedDuration += delta;
+      } else {
+        distractedDuration += delta;
+      }
     }
   }
 

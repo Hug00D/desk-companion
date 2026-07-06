@@ -13,6 +13,7 @@ import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 import '../auth/auth_session.dart';
 import '../companion/companion_controller.dart';
 import '../companion/companion_response_builder.dart';
+import '../focus/focus_session_monitor.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
 import '../focus/study_session_controller.dart';
@@ -76,6 +77,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
+  final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
   PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
   final StudySessionController _studySessionController =
@@ -97,28 +99,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _showVoiceDemoPanel = false;
   bool _showVisionSourcePreview = false;
   bool _isUserStatusExpanded = false;
+  bool _isFocusPauseDialogVisible = false;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
-  static const Duration _postureReminderFollowUpDelay = Duration(seconds: 8);
-  static const int _postureReminderMaxPerEpisode = 2;
-  static const int _postureRecoveryFramesRequired = 3;
-  static const Map<CompanionStatus, Duration> _reminderEvidenceWindows = {
-    CompanionStatus.attention: Duration(seconds: 4),
-    CompanionStatus.fatigue: Duration(seconds: 3),
-    CompanionStatus.distracted: Duration(seconds: 3),
-    CompanionStatus.drowsy: Duration(seconds: 3),
-  };
-  static const Map<CompanionStatus, int> _reminderEvidenceThresholds = {
-    CompanionStatus.attention: 3,
-    CompanionStatus.fatigue: 2,
-    CompanionStatus.distracted: 2,
-    CompanionStatus.drowsy: 2,
-  };
   static const Map<CompanionStatus, Duration> _reminderCooldowns = {
     CompanionStatus.attention: Duration(seconds: 12),
     CompanionStatus.fatigue: Duration(seconds: 15),
     CompanionStatus.distracted: Duration(seconds: 12),
     CompanionStatus.drowsy: Duration(seconds: 15),
+    CompanionStatus.postureDown: Duration(seconds: 20),
   };
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
@@ -207,14 +196,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   CompanionStatus? _pendingVoiceReminderStatus;
   final Map<CompanionStatus, int> _reminderClipIndexes =
       <CompanionStatus, int>{};
-  final Map<CompanionStatus, List<DateTime>> _reminderEvidenceByStatus =
-      <CompanionStatus, List<DateTime>>{};
   final Map<CompanionStatus, DateTime> _lastReminderPlayedAt =
       <CompanionStatus, DateTime>{};
-  bool _isPostureReminderEpisodeActive = false;
-  DateTime? _postureReminderEpisodeStartedAt;
-  int _postureReminderCount = 0;
-  int _postureRecoveryFrames = 0;
   int _fallbackVideoReplayCount = 0;
   Duration? _lastFallbackVideoDetectionPosition;
   CompanionStatus _companionStatus = CompanionStatus.normal;
@@ -488,9 +471,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _resetVoiceReminderCycleForVideoReplay() {
     _fallbackVideoReplayCount += 1;
-    _reminderEvidenceByStatus.clear();
     _lastReminderPlayedAt.clear();
-    _resetPostureReminderEpisode();
     if (_pendingVoiceReminderStatus != CompanionStatus.postureDown) {
       _clearPendingVoiceReminder();
     }
@@ -629,18 +610,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       }
     }
 
-    _maybePlayVisionReminder(analysis);
-
-    if (trackingResult.shouldNotify &&
-        trackingResult.event.type == VisionEventType.fatigueDetected &&
-        _leftEyeOpenValue != null &&
-        _rightEyeOpenValue != null) {
-      _showFatigueAlert(
-        leftProbability: _leftEyeOpenValue!,
-        rightProbability: _rightEyeOpenValue!,
-        message: response.message,
-      );
-    }
+    final isPomodoroSessionActive = _pomodoroController.isActive;
+    final focusInterventions = _focusSessionMonitor.update(
+      status: analysis.status,
+      sessionActive: isPomodoroSessionActive,
+      sessionRunning: _pomodoroController.isRunning,
+      sessionAutoPaused: _pomodoroController.isAutoPaused,
+    );
+    _handleFocusInterventions(focusInterventions);
 
     if (mounted) {
       setState(() {
@@ -656,6 +633,207 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
+  void _handleFocusInterventions(List<FocusIntervention> interventions) {
+    for (final intervention in interventions) {
+      debugPrint(
+        'Focus intervention: type=${intervention.type.name} '
+        'status=${intervention.status.name} '
+        'duration=${intervention.episodeDuration.inSeconds}s',
+      );
+      switch (intervention.type) {
+        case FocusInterventionType.reminder:
+          _requestLocalReminder(intervention.status);
+          break;
+        case FocusInterventionType.eventRecorded:
+          _studySessionController.recordFocusEvent(intervention.status);
+          break;
+        case FocusInterventionType.offerPause:
+          unawaited(_showFocusPauseSuggestion(intervention.status));
+          break;
+        case FocusInterventionType.autoPause:
+          _autoPausePomodoro(intervention.status);
+          break;
+        case FocusInterventionType.recovered:
+          unawaited(_showFocusResumeSuggestion(intervention.status));
+          break;
+      }
+    }
+  }
+
+  void _autoPausePomodoro(CompanionStatus status) {
+    if (!_pomodoroController.isRunning) return;
+    _pomodoroController.pause(reason: _pauseReasonForStatus(status));
+    _studySessionController.recordPomodoroPaused();
+    _companionMessage = _autoPauseMessageForStatus(status);
+    _latestDetectedCompanionMessage = _companionMessage;
+    _lastVoiceResponseMessage = null;
+    _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _showFocusPauseSuggestion(CompanionStatus status) async {
+    if (!mounted ||
+        _isFocusPauseDialogVisible ||
+        !_pomodoroController.isRunning) {
+      return;
+    }
+
+    _isFocusPauseDialogVisible = true;
+    bool? shouldPause;
+    try {
+      shouldPause = await _showFocusDecisionDialog(
+        accentColor: const Color(0xFFFFC36B),
+        icon: Icons.pause_circle_outline_rounded,
+        eyebrow: _shortStatusLabel(status),
+        title: '需要先停一下嗎？',
+        message: _pauseSuggestionMessageForStatus(status),
+        secondaryLabel: '繼續專注',
+        primaryLabel: '暫停一下',
+        primaryIcon: Icons.pause_rounded,
+      );
+    } finally {
+      _isFocusPauseDialogVisible = false;
+    }
+
+    if (shouldPause == true && _pomodoroController.isRunning) {
+      _pomodoroController.pause();
+      _studySessionController.recordPomodoroPaused();
+    }
+  }
+
+  Future<void> _showFocusResumeSuggestion(CompanionStatus status) async {
+    if (!mounted ||
+        _isFocusPauseDialogVisible ||
+        !_pomodoroController.isAutoPaused) {
+      return;
+    }
+
+    _isFocusPauseDialogVisible = true;
+    bool? shouldResume;
+    try {
+      shouldResume = await _showFocusDecisionDialog(
+        accentColor: const Color(0xFF9FF3D0),
+        icon: Icons.auto_awesome_rounded,
+        eyebrow: '狀態已恢復',
+        title: '要接著完成這一輪嗎？',
+        message: '你已從${_shortStatusLabel(status)}恢復，番茄鐘還停在剛才的進度。',
+        secondaryLabel: '先休息',
+        primaryLabel: '繼續專注',
+        primaryIcon: Icons.play_arrow_rounded,
+      );
+    } finally {
+      _isFocusPauseDialogVisible = false;
+    }
+
+    if (shouldResume == true && _pomodoroController.isAutoPaused) {
+      _pomodoroController.resume();
+      _studySessionController.recordPomodoroResumed();
+    }
+  }
+
+  Future<bool?> _showFocusDecisionDialog({
+    required Color accentColor,
+    required IconData icon,
+    required String eyebrow,
+    required String title,
+    required String message,
+    required String secondaryLabel,
+    required String primaryLabel,
+    required IconData primaryIcon,
+  }) {
+    return showGeneralDialog<bool>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: const Color(0x7A071725),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, _, _) => _FocusDecisionDialog(
+        accentColor: accentColor,
+        icon: icon,
+        eyebrow: eyebrow,
+        title: title,
+        message: message,
+        secondaryLabel: secondaryLabel,
+        primaryLabel: primaryLabel,
+        primaryIcon: primaryIcon,
+      ),
+      transitionBuilder: (_, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.94, end: 1).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  PomodoroPauseReason _pauseReasonForStatus(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.distracted:
+        return PomodoroPauseReason.distracted;
+      case CompanionStatus.fatigue:
+        return PomodoroPauseReason.fatigue;
+      case CompanionStatus.drowsy:
+        return PomodoroPauseReason.drowsy;
+      case CompanionStatus.postureDown:
+        return PomodoroPauseReason.postureDown;
+      case CompanionStatus.userMissing:
+        return PomodoroPauseReason.userMissing;
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+        return PomodoroPauseReason.manual;
+    }
+  }
+
+  String _autoPauseMessageForStatus(CompanionStatus status) {
+    return '${_shortStatusLabel(status)}持續了一段時間，番茄鐘已自動暫停。';
+  }
+
+  String _pauseSuggestionMessageForStatus(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.distracted:
+        return '你已經分心一段時間，可以暫停整理一下再繼續。';
+      case CompanionStatus.fatigue:
+        return '眼睛持續疲勞，建議先休息一下。';
+      case CompanionStatus.drowsy:
+        return '你看起來快睡著了，建議先暫停休息。';
+      case CompanionStatus.postureDown:
+        return '目前持續趴下，建議先暫停這輪專注。';
+      case CompanionStatus.userMissing:
+        return '目前已經離席一段時間，要暫停番茄鐘嗎？';
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+        return '要暫停這輪專注嗎？';
+    }
+  }
+
+  String _shortStatusLabel(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.normal:
+        return '正常狀態';
+      case CompanionStatus.attention:
+        return '眼睛疲勞';
+      case CompanionStatus.fatigue:
+        return '長時間閉眼';
+      case CompanionStatus.distracted:
+        return '分心狀態';
+      case CompanionStatus.drowsy:
+        return '打瞌睡狀態';
+      case CompanionStatus.postureDown:
+        return '趴下狀態';
+      case CompanionStatus.userMissing:
+        return '離席狀態';
+    }
+  }
+
   String _messageForVisionTrackingResult(
     VisionEventTrackingResult trackingResult,
     String fallbackMessage,
@@ -666,113 +844,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     return fallbackMessage;
   }
 
-  void _maybePlayVisionReminder(CompanionAnalysis analysis) {
-    final status = _voiceStatusForAnalysis(analysis);
-    if (status == CompanionStatus.postureDown) {
-      _handlePostureReminderEpisode();
-      return;
-    }
-
-    _updatePostureReminderRecovery(analysis);
-    if (_isPostureReminderEpisodeActive) return;
-    if (!_shouldSpeakStatus(status)) return;
-    if (!_recordReminderEvidence(status, DateTime.now())) return;
-
-    _requestLocalReminder(status);
-  }
-
-  CompanionStatus _voiceStatusForAnalysis(CompanionAnalysis analysis) {
-    // The posture detector deliberately holds this count through short pose
-    // dropouts, so speech does not disappear when a prone face leaves frame.
-    if (analysis.postureDownResult.downFrameCount >= 2) {
-      return CompanionStatus.postureDown;
-    }
-    return analysis.status;
-  }
-
-  bool _recordReminderEvidence(CompanionStatus status, DateTime now) {
-    if (!_isReminderCooldownReady(status, now)) {
-      _reminderEvidenceByStatus.remove(status);
-      return false;
-    }
-
-    final window = _reminderEvidenceWindows[status];
-    final threshold = _reminderEvidenceThresholds[status];
-    if (window == null || threshold == null) return false;
-
-    final evidence = _reminderEvidenceByStatus.putIfAbsent(
-      status,
-      () => <DateTime>[],
-    );
-    evidence.removeWhere((sample) => now.difference(sample) > window);
-    evidence.add(now);
-    if (evidence.length < threshold) {
-      debugPrint(
-        'Reminder evidence: status=${status.name} '
-        'count=${evidence.length}/$threshold window=${window.inSeconds}s',
-      );
-      return false;
-    }
-
-    evidence.clear();
-    return true;
-  }
-
   bool _isReminderCooldownReady(CompanionStatus status, DateTime now) {
-    if (status == CompanionStatus.postureDown) return true;
     final cooldown = _reminderCooldowns[status];
     final lastPlayedAt = _lastReminderPlayedAt[status];
     if (cooldown == null || lastPlayedAt == null) return true;
     return now.difference(lastPlayedAt) >= cooldown;
-  }
-
-  void _handlePostureReminderEpisode() {
-    final now = DateTime.now();
-    _postureRecoveryFrames = 0;
-    if (!_isPostureReminderEpisodeActive) {
-      _isPostureReminderEpisodeActive = true;
-      _postureReminderEpisodeStartedAt = now;
-      _postureReminderCount = 0;
-    }
-
-    if (_postureReminderCount >= _postureReminderMaxPerEpisode) return;
-    final startedAt = _postureReminderEpisodeStartedAt ?? now;
-    final shouldPlay =
-        _postureReminderCount == 0 ||
-        now.difference(startedAt) >= _postureReminderFollowUpDelay;
-    if (!shouldPlay) return;
-
-    _postureReminderCount += 1;
-    debugPrint(
-      'Posture reminder episode: count=$_postureReminderCount/'
-      '$_postureReminderMaxPerEpisode',
-    );
-    _requestLocalReminder(CompanionStatus.postureDown);
-  }
-
-  void _updatePostureReminderRecovery(CompanionAnalysis analysis) {
-    if (!_isPostureReminderEpisodeActive) return;
-
-    final isClearlyRecovered =
-        analysis.visionResult.hasPose &&
-        analysis.postureDownResult.downFrameCount == 0;
-    if (!isClearlyRecovered) {
-      _postureRecoveryFrames = 0;
-      return;
-    }
-
-    _postureRecoveryFrames += 1;
-    if (_postureRecoveryFrames < _postureRecoveryFramesRequired) return;
-
-    debugPrint('Posture reminder episode recovered');
-    _resetPostureReminderEpisode();
-  }
-
-  void _resetPostureReminderEpisode() {
-    _isPostureReminderEpisodeActive = false;
-    _postureReminderEpisodeStartedAt = null;
-    _postureReminderCount = 0;
-    _postureRecoveryFrames = 0;
   }
 
   void _requestLocalReminder(CompanionStatus status) {
@@ -816,7 +892,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         message,
         null,
       );
-      if (played && status != CompanionStatus.postureDown) {
+      if (played) {
         _lastReminderPlayedAt[status] = DateTime.now();
       }
     } catch (error) {
@@ -998,20 +1074,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
-  bool _shouldSpeakStatus(CompanionStatus status) {
-    switch (status) {
-      case CompanionStatus.attention:
-      case CompanionStatus.fatigue:
-      case CompanionStatus.distracted:
-      case CompanionStatus.drowsy:
-      case CompanionStatus.postureDown:
-        return true;
-      case CompanionStatus.normal:
-      case CompanionStatus.userMissing:
-        return false;
-    }
-  }
-
   String _messageForCompanionStatus(CompanionStatus status) {
     switch (status) {
       case CompanionStatus.normal:
@@ -1028,31 +1090,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '偵測到疑似趴下睡覺，請確認目前狀態。';
       case CompanionStatus.userMissing:
         return '暫時沒有偵測到完整使用者。';
-    }
-  }
-
-  Future<void> _showFatigueAlert({
-    required double leftProbability,
-    required double rightProbability,
-    String? message,
-  }) async {
-    final alertMessage = message ?? "警告：偵測到連續閉眼，請立刻休息！";
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(alertMessage),
-          backgroundColor: const Color(0xFFE85D75),
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    }
-
-    try {
-      await _visionChannel.showToast(alertMessage);
-    } catch (e) {
-      debugPrint("Toast 呼叫失敗: $e");
     }
   }
 
@@ -1184,12 +1221,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _handlePomodoroControllerChanged() {
     final currentStatus = _pomodoroController.status;
+    final previousStatus = _lastObservedPomodoroStatus;
+    if (currentStatus == PomodoroStatus.running &&
+        (previousStatus == PomodoroStatus.idle ||
+            previousStatus == PomodoroStatus.completed)) {
+      _focusSessionMonitor.beginSession();
+    }
     if (currentStatus == PomodoroStatus.completed &&
-        _lastObservedPomodoroStatus != PomodoroStatus.completed) {
+        previousStatus != PomodoroStatus.completed) {
       _studySessionController.recordPomodoroCompleted();
       _companionMessage = '這輪專注完成了，先休息一下吧。';
       _lastVoiceResponseMessage = null;
       _voiceMessagePinnedUntil = null;
+    }
+    if (currentStatus == PomodoroStatus.idle ||
+        currentStatus == PomodoroStatus.completed) {
+      _focusSessionMonitor.endSession();
     }
     _lastObservedPomodoroStatus = currentStatus;
     if (mounted) setState(() {});
@@ -1202,8 +1249,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Future<void> _restartCamera() async {
     _detectionTimer?.cancel();
-    _resetPostureReminderEpisode();
-    _reminderEvidenceByStatus.clear();
+    _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
     await _cameraController?.dispose();
     _detachFallbackVideoPositionListener();
@@ -1219,8 +1265,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Future<void> _resetVisionCalibration() async {
     _companionController.reset();
-    _resetPostureReminderEpisode();
-    _reminderEvidenceByStatus.clear();
+    _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
     _headOffsetSamples.clear();
     _closedEyeFrameCount = 0;
@@ -2972,6 +3017,170 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           _buildVoiceDemoButtons(),
           _buildDebugPanel(),
         ],
+      ),
+    );
+  }
+}
+
+class _FocusDecisionDialog extends StatelessWidget {
+  const _FocusDecisionDialog({
+    required this.accentColor,
+    required this.icon,
+    required this.eyebrow,
+    required this.title,
+    required this.message,
+    required this.secondaryLabel,
+    required this.primaryLabel,
+    required this.primaryIcon,
+  });
+
+  final Color accentColor;
+  final IconData icon;
+  final String eyebrow;
+  final String title;
+  final String message;
+  final String secondaryLabel;
+  final String primaryLabel;
+  final IconData primaryIcon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      elevation: 0,
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxWidth: 390),
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17334B).withValues(alpha: 0.78),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.26)),
+              boxShadow: [
+                BoxShadow(
+                  color: accentColor.withValues(alpha: 0.24),
+                  blurRadius: 34,
+                  spreadRadius: 1,
+                ),
+                const BoxShadow(
+                  color: Color(0x52000000),
+                  blurRadius: 28,
+                  offset: Offset(0, 14),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: accentColor.withValues(alpha: 0.38),
+                        ),
+                      ),
+                      child: Icon(icon, color: accentColor, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        eyebrow,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: accentColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    height: 1.25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    fontSize: 14,
+                    height: 1.55,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white.withValues(alpha: 0.82),
+                          minimumSize: const Size.fromHeight(48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.22),
+                            ),
+                          ),
+                        ),
+                        child: Text(
+                          secondaryLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.pop(context, true),
+                        icon: Icon(primaryIcon, size: 20),
+                        label: Text(
+                          primaryLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accentColor,
+                          foregroundColor: const Color(0xFF17334B),
+                          minimumSize: const Size.fromHeight(48),
+                          textStyle: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

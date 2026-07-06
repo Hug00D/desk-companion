@@ -5,6 +5,15 @@ import 'package:flutter/foundation.dart';
 
 enum PomodoroStatus { idle, running, paused, completed }
 
+enum PomodoroPauseReason {
+  manual,
+  distracted,
+  fatigue,
+  drowsy,
+  postureDown,
+  userMissing,
+}
+
 class PomodoroController extends ChangeNotifier {
   PomodoroController._();
 
@@ -13,6 +22,7 @@ class PomodoroController extends ChangeNotifier {
   factory PomodoroController() => instance;
 
   PomodoroStatus status = PomodoroStatus.idle;
+  PomodoroPauseReason? pauseReason;
   Duration totalDuration = Duration.zero;
   Duration remaining = Duration.zero;
 
@@ -22,6 +32,10 @@ class PomodoroController extends ChangeNotifier {
   bool get isRunning => status == PomodoroStatus.running;
   bool get isActive =>
       status == PomodoroStatus.running || status == PomodoroStatus.paused;
+  bool get isAutoPaused =>
+      status == PomodoroStatus.paused &&
+      pauseReason != null &&
+      pauseReason != PomodoroPauseReason.manual;
 
   double get progress {
     if (totalDuration.inMilliseconds <= 0) return 0;
@@ -34,15 +48,17 @@ class PomodoroController extends ChangeNotifier {
     totalDuration = Duration(minutes: safeMinutes);
     remaining = totalDuration;
     status = PomodoroStatus.running;
+    pauseReason = null;
     _deadline = DateTime.now().add(remaining);
     _startTicker();
     notifyListeners();
   }
 
-  void pause() {
+  void pause({PomodoroPauseReason reason = PomodoroPauseReason.manual}) {
     if (status != PomodoroStatus.running) return;
     _refreshRemaining();
     status = PomodoroStatus.paused;
+    pauseReason = reason;
     _deadline = null;
     _ticker?.cancel();
     notifyListeners();
@@ -51,6 +67,7 @@ class PomodoroController extends ChangeNotifier {
   void resume() {
     if (status != PomodoroStatus.paused || remaining <= Duration.zero) return;
     status = PomodoroStatus.running;
+    pauseReason = null;
     _deadline = DateTime.now().add(remaining);
     _startTicker();
     notifyListeners();
@@ -60,6 +77,7 @@ class PomodoroController extends ChangeNotifier {
     _ticker?.cancel();
     _deadline = null;
     status = PomodoroStatus.idle;
+    pauseReason = null;
     totalDuration = Duration.zero;
     remaining = Duration.zero;
     notifyListeners();
@@ -84,6 +102,7 @@ class PomodoroController extends ChangeNotifier {
     if (milliseconds <= 0) {
       remaining = Duration.zero;
       status = PomodoroStatus.completed;
+      pauseReason = null;
       _deadline = null;
       _ticker?.cancel();
       return;
