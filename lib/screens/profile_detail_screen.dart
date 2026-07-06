@@ -9,6 +9,7 @@ import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
+import 'tasks_screen.dart';
 
 class ProfileDetailScreen extends StatefulWidget {
   const ProfileDetailScreen({super.key});
@@ -131,10 +132,6 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
         duration: const Duration(seconds: 2),
       ),
     );
-  }
-
-  void _showComingSoon(String title) {
-    _showSnackBar('$title 之後會接上正式頁面。');
   }
 
   @override
@@ -400,7 +397,12 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
         );
       },
-      onTasksTap: () => _showComingSoon('任務'),
+      onTasksTap: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const TasksScreen()),
+        );
+      },
       onSettingsTap: () {
         Navigator.pushReplacement(
           context,

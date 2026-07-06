@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_hub_screen.dart';
+import 'tasks_screen.dart';
 
 class StatisticsScreen extends StatelessWidget {
   const StatisticsScreen({super.key});
@@ -150,24 +151,18 @@ class StatisticsScreen extends StatelessWidget {
       activeTab: AppNavTab.statistics,
       onHomeTap: () => Navigator.popUntil(context, (route) => route.isFirst),
       onStatisticsTap: () {},
-      onTasksTap: () => _showComingSoon(context, '任務'),
+      onTasksTap: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const TasksScreen()),
+        );
+      },
       onSettingsTap: () {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const ProfileHubScreen()),
         );
       },
-    );
-  }
-
-  void _showComingSoon(BuildContext context, String title) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$title 之後會接上正式頁面。'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
     );
   }
 

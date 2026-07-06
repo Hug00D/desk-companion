@@ -7,6 +7,7 @@ import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
 import 'profile_detail_screen.dart';
 import 'statistics_screen.dart';
+import 'tasks_screen.dart';
 
 class ProfileHubScreen extends StatelessWidget {
   const ProfileHubScreen({super.key});
@@ -177,7 +178,12 @@ class ProfileHubScreen extends StatelessWidget {
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
         );
       },
-      onTasksTap: () => _showComingSoon(context, '任務'),
+      onTasksTap: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const TasksScreen()),
+        );
+      },
       onSettingsTap: () {},
     );
   }

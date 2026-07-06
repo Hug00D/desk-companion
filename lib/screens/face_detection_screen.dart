@@ -29,6 +29,7 @@ import '../widgets/rive_asset_background.dart';
 import 'profile_detail_screen.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
+import 'tasks_screen.dart';
 
 class _ReminderClip {
   const _ReminderClip(this.assetPath, this.message);
@@ -51,7 +52,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   VoidCallback? _fallbackVideoPositionListener;
 
   Timer? _detectionTimer;
-  Timer? _pomodoroTimer;
   Timer? _userStatusCollapseTimer;
   Timer? _idleBubbleTimer;
   Timer? _idleBubbleHideTimer;
@@ -76,6 +76,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
+  PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
   final StudySessionController _studySessionController =
       StudySessionController();
@@ -229,6 +230,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _lastObservedPomodoroStatus = _pomodoroController.status;
+    _pomodoroController.addListener(_handlePomodoroControllerChanged);
     _breathingController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
@@ -1131,14 +1134,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _lastVoiceResponseMessage = actionResult.response.message;
     _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
 
-    if (actionResult.shouldStopTimer) {
-      _pomodoroTimer?.cancel();
-    }
-
-    if (actionResult.shouldStartTimer) {
-      _startPomodoroTicker();
-    }
-
     if (mounted) {
       setState(() {});
     }
@@ -1187,27 +1182,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
-  void _startPomodoroTicker() {
-    _pomodoroTimer?.cancel();
-    _pomodoroTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-
-      setState(() {
-        _pomodoroController.tick();
-      });
-
-      if (_pomodoroController.status == PomodoroStatus.completed) {
-        timer.cancel();
-        _studySessionController.recordPomodoroCompleted();
-        _companionMessage = "這輪專注時間結束了，休息一下吧。";
-        _lastVoiceResponseMessage = null;
-        _voiceMessagePinnedUntil = null;
-        if (mounted) setState(() {});
-      }
-    });
+  void _handlePomodoroControllerChanged() {
+    final currentStatus = _pomodoroController.status;
+    if (currentStatus == PomodoroStatus.completed &&
+        _lastObservedPomodoroStatus != PomodoroStatus.completed) {
+      _studySessionController.recordPomodoroCompleted();
+      _companionMessage = '這輪專注完成了，先休息一下吧。';
+      _lastVoiceResponseMessage = null;
+      _voiceMessagePinnedUntil = null;
+    }
+    _lastObservedPomodoroStatus = currentStatus;
+    if (mounted) setState(() {});
   }
 
   bool get _isVoiceMessagePinned {
@@ -2337,24 +2322,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
         );
       },
-      onTasksTap: () => _showBottomNavComingSoon('任務'),
+      onTasksTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const TasksScreen()),
+        );
+      },
       onSettingsTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const ProfileHubScreen()),
         );
       },
-    );
-  }
-
-  void _showBottomNavComingSoon(String title) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$title 功能之後會接上正式頁面。'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
     );
   }
 
@@ -2947,7 +2926,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     WidgetsBinding.instance.removeObserver(this);
     _printHeadOffsetStats();
     _detectionTimer?.cancel();
-    _pomodoroTimer?.cancel();
     _userStatusCollapseTimer?.cancel();
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();
@@ -2958,6 +2936,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _completeVoicePlayback();
     _voicePlayerStateSubscription?.cancel();
     _voiceAudioPlayer.dispose();
+    _pomodoroController.removeListener(_handlePomodoroControllerChanged);
     super.dispose();
   }
 
