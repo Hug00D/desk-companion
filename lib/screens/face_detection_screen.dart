@@ -242,6 +242,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = false;
       _isCameraInitializing = false;
       _status = "相機已啟動，等待辨識...";
+      await _resetVisionCalibration();
+      if (!mounted) return;
       _startCameraDetectionLoop();
       setState(() {});
     } catch (e) {
@@ -307,6 +309,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
       _status = '本地測試模式：使用 test.mp4。';
+      await _resetVisionCalibration();
+      if (!mounted) return;
       _startFallbackVideoDetectionLoop();
       setState(() {});
     } catch (fallbackError) {
@@ -1101,19 +1105,32 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Future<void> _resetVisionCalibration() async {
     _companionController.reset();
+    _visionEventTracker.reset();
     _headOffsetSamples.clear();
     _closedEyeFrameCount = 0;
     _distractedFrameCount = 0;
     _postureDownFrameCount = 0;
     _headOffsetScore = null;
     _postureDownScore = null;
+    _leftEyeOpenValue = null;
+    _rightEyeOpenValue = null;
+    _headYaw = null;
+    _headPitch = null;
+    _poseNoseY = null;
+    _hasFace = false;
     _isHeadOffsetCalibrating = true;
+    _companionStatus = CompanionStatus.normal;
+    _fatigueLevel = CompanionStatus.normal.label;
+    _companionMessage = '正在校正視覺基準，請自然坐好並看向前方。';
+    _resetVoiceReminderCandidate();
 
     try {
       await _visionChannel.resetVision();
     } catch (e) {
       debugPrint("重設視覺校正失敗: $e");
     }
+
+    if (mounted) setState(() {});
   }
 
   Color _getStatusColor() {

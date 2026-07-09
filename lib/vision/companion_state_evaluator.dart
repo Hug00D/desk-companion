@@ -154,6 +154,7 @@ class CompanionStateEvaluator {
     required PoseState poseState,
     required PresenceState presenceState,
   }) {
+    if (presenceState == PresenceState.away) return CompanionStatus.userMissing;
     if (poseState == PoseState.postureDown) return CompanionStatus.postureDown;
     if (poseState == PoseState.drowsy) return CompanionStatus.drowsy;
     if (eyeState == EyeState.fatigue) return CompanionStatus.fatigue;
@@ -161,7 +162,6 @@ class CompanionStateEvaluator {
     if (headOffsetState == HeadOffsetState.distracted) {
       return CompanionStatus.distracted;
     }
-    if (presenceState == PresenceState.away) return CompanionStatus.userMissing;
     return CompanionStatus.normal;
   }
 
@@ -171,6 +171,18 @@ class CompanionStateEvaluator {
     required EyeState eyeState,
     required CompanionStatus baseStatus,
   }) {
+    final isFullyAway = !result.hasFace && !result.hasPose;
+    if (isFullyAway) {
+      _faceMissingFrameCount++;
+      if (_faceMissingFrameCount >= 2) {
+        _isPostureDownLatched = false;
+        _postureDownRecoveryFrames = 0;
+        _lastFaceVisibleContext = CompanionStatus.normal;
+        _lastFaceMissingContext = CompanionStatus.userMissing;
+        return CompanionStatus.userMissing;
+      }
+    }
+
     final hasStrongPostureDownEvidence = _hasStrongPostureDownEvidence(
       postureDownResult,
     );
@@ -246,7 +258,9 @@ class CompanionStateEvaluator {
       return baseStatus;
     }
 
-    _faceMissingFrameCount++;
+    if (!isFullyAway) {
+      _faceMissingFrameCount++;
+    }
 
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
@@ -288,8 +302,7 @@ class CompanionStateEvaluator {
     }
 
     if (shouldersNearBaseline) {
-      final inferred =
-          _lastFaceVisibleContext == CompanionStatus.drowsy
+      final inferred = _lastFaceVisibleContext == CompanionStatus.drowsy
           ? CompanionStatus.drowsy
           : headDropLikely
           ? CompanionStatus.attention

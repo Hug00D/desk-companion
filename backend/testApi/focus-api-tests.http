@@ -1,0 +1,204 @@
+@baseUrl = http://localhost:8080/api/v1
+@email = focus-api-demo@example.com
+@password = Password456!
+
+### 0. Register demo user
+# If this account already exists, skip this request and run login directly.
+POST {{baseUrl}}/users/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### 1. Login demo user
+# AuthResponse currently returns userId/email/message. There is no JWT yet.
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### 2. Create focus session
+# @name createFocusSession
+POST {{baseUrl}}/users/{{login.response.body.$.userId}}/focus-sessions
+Content-Type: application/json
+
+{
+  "clientSessionId": "11111111-1111-4111-8111-111111111111",
+  "startAt": "2026-07-09T08:00:00Z",
+  "status": "active",
+  "mode": "focus_monitoring",
+  "timezone": "Asia/Taipei",
+  "targetSeconds": 1500,
+  "config": {
+    "source": "http_test",
+    "quietMode": false
+  },
+  "schemaVersion": 1
+}
+
+### 3. Create pomodoro round
+# @name createFocusRound
+POST {{baseUrl}}/users/{{login.response.body.$.userId}}/focus-sessions/{{createFocusSession.response.body.$.sessionId}}/rounds
+Content-Type: application/json
+
+{
+  "clientRoundId": "22222222-2222-4222-8222-222222222222",
+  "sessionId": "{{createFocusSession.response.body.$.sessionId}}",
+  "roundNumber": 1,
+  "roundType": "focus",
+  "status": "active",
+  "targetSeconds": 1500,
+  "actualSeconds": 0,
+  "pausedSeconds": 0,
+  "startAt": "2026-07-09T08:00:00Z",
+  "schemaVersion": 1
+}
+
+### 4. Upload behavior events batch
+# @name uploadBehaviorEvents
+POST {{baseUrl}}/users/{{login.response.body.$.userId}}/focus-sessions/{{createFocusSession.response.body.$.sessionId}}/events/batch
+Content-Type: application/json
+
+{
+  "events": [
+    {
+      "clientEventId": "33333333-3333-4333-8333-333333333333",
+      "sessionId": "{{createFocusSession.response.body.$.sessionId}}",
+      "roundId": "{{createFocusRound.response.body.$.roundId}}",
+      "source": "timer",
+      "eventType": "timer.pomodoro_started",
+      "ts": "2026-07-09T08:00:00Z",
+      "severity": "info",
+      "phase": "started",
+      "actionTriggered": "start_pomodoro",
+      "outcome": "applied",
+      "signals": {
+        "targetSeconds": 1500
+      },
+      "schemaVersion": 1
+    },
+    {
+      "clientEventId": "44444444-4444-4444-8444-444444444444",
+      "sessionId": "{{createFocusSession.response.body.$.sessionId}}",
+      "roundId": "{{createFocusRound.response.body.$.roundId}}",
+      "source": "vision",
+      "eventType": "vision.fatigue_detected",
+      "ts": "2026-07-09T08:05:00Z",
+      "severity": "warning",
+      "phase": "point",
+      "durationMs": 2500,
+      "confidenceScore": 0.82,
+      "detectedObject": "eyes",
+      "actionTriggered": "fatigue_break_suggestion",
+      "outcome": "shown",
+      "signals": {
+        "leftEye": 0.12,
+        "rightEye": 0.16,
+        "closedFrameCount": 3
+      },
+      "schemaVersion": 1
+    },
+    {
+      "clientEventId": "55555555-5555-4555-8555-555555555555",
+      "sessionId": "{{createFocusSession.response.body.$.sessionId}}",
+      "source": "vision",
+      "eventType": "vision.user_away",
+      "ts": "2026-07-09T08:10:00Z",
+      "severity": "attention",
+      "phase": "started",
+      "durationMs": 30000,
+      "confidenceScore": 0.91,
+      "detectedObject": "user_presence",
+      "outcome": "observed",
+      "signals": {
+        "hasFace": false,
+        "hasPose": false
+      },
+      "schemaVersion": 1
+    }
+  ]
+}
+
+### 5. Update pomodoro round completed
+# @name updateFocusRound
+PATCH {{baseUrl}}/users/{{login.response.body.$.userId}}/focus-sessions/{{createFocusSession.response.body.$.sessionId}}/rounds/{{createFocusRound.response.body.$.roundId}}
+Content-Type: application/json
+
+{
+  "clientRoundId": "22222222-2222-4222-8222-222222222222",
+  "sessionId": "{{createFocusSession.response.body.$.sessionId}}",
+  "roundNumber": 1,
+  "roundType": "focus",
+  "status": "completed",
+  "targetSeconds": 1500,
+  "actualSeconds": 1500,
+  "pausedSeconds": 0,
+  "startAt": "2026-07-09T08:00:00Z",
+  "endAt": "2026-07-09T08:25:00Z",
+  "endReason": "completed",
+  "schemaVersion": 1
+}
+
+### 6. Update focus session completed
+# @name updateFocusSession
+PATCH {{baseUrl}}/users/{{login.response.body.$.userId}}/focus-sessions/{{createFocusSession.response.body.$.sessionId}}
+Content-Type: application/json
+
+{
+  "clientSessionId": "11111111-1111-4111-8111-111111111111",
+  "startAt": "2026-07-09T08:00:00Z",
+  "endAt": "2026-07-09T08:25:00Z",
+  "status": "completed",
+  "endReason": "completed",
+  "mode": "focus_monitoring",
+  "timezone": "Asia/Taipei",
+  "targetSeconds": 1500,
+  "monitoredSeconds": 1500,
+  "focusSeconds": 1300,
+  "attentionSeconds": 80,
+  "distractedSeconds": 80,
+  "fatigueSeconds": 40,
+  "drowsySeconds": 0,
+  "postureDownSeconds": 0,
+  "awaySeconds": 80,
+  "pausedSeconds": 0,
+  "breakSeconds": 0,
+  "reminderCount": 2,
+  "summary": {
+    "completedRounds": 1,
+    "mainIssue": "short fatigue and away events"
+  },
+  "config": {
+    "source": "http_test",
+    "quietMode": false
+  },
+  "revision": 1,
+  "schemaVersion": 1
+}
+
+### 7. Get statistics summary
+GET {{baseUrl}}/users/{{login.response.body.$.userId}}/statistics?from=2026-07-09T00:00:00Z&to=2026-07-10T00:00:00Z&timezone=Asia/Taipei
+
+### 8. Get companion preferences
+GET {{baseUrl}}/users/{{login.response.body.$.userId}}/preferences
+
+### 9. Update companion preferences
+PUT {{baseUrl}}/users/{{login.response.body.$.userId}}/preferences
+Content-Type: application/json
+
+{
+  "quietMode": true,
+  "reminderSensitivity": "normal",
+  "aiResponseTone": "supportive",
+  "timezone": "Asia/Taipei",
+  "syncEnabled": true,
+  "storeTranscript": false,
+  "storeDebugSnapshot": false,
+  "schemaVersion": 1
+}
