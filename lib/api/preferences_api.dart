@@ -1,3 +1,4 @@
+import '../auth/auth_session.dart';
 import '../preferences/companion_preferences.dart';
 import 'api_client.dart';
 
@@ -17,6 +18,13 @@ class PreferencesApi {
     return CompanionPreferences.fromJson(data);
   }
 
+  Future<CompanionPreferences> getMyPreferences(AuthSession session) {
+    return getPreferences(
+      userId: session.userId!,
+      accessToken: session.accessToken,
+    );
+  }
+
   Future<CompanionPreferences> updatePreferences({
     required String userId,
     required CompanionPreferences preferences,
@@ -28,5 +36,16 @@ class PreferencesApi {
       accessToken: accessToken,
     );
     return CompanionPreferences.fromJson(data);
+  }
+
+  Future<CompanionPreferences> updateMyPreferences({
+    required AuthSession session,
+    required CompanionPreferences preferences,
+  }) {
+    return updatePreferences(
+      userId: session.userId!,
+      preferences: preferences,
+      accessToken: session.accessToken,
+    );
   }
 }

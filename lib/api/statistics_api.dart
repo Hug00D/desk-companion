@@ -1,3 +1,4 @@
+import '../auth/auth_session.dart';
 import '../statistics/statistics_summary.dart';
 import 'api_client.dart';
 
@@ -23,5 +24,20 @@ class StatisticsApi {
       },
     );
     return StatisticsSummary.fromJson(data);
+  }
+
+  Future<StatisticsSummary> getMySummary({
+    required AuthSession authSession,
+    required DateTime from,
+    required DateTime to,
+    required String timezone,
+  }) {
+    return getSummary(
+      userId: authSession.userId!,
+      from: from,
+      to: to,
+      timezone: timezone,
+      accessToken: authSession.accessToken,
+    );
   }
 }

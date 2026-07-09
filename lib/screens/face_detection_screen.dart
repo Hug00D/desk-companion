@@ -15,7 +15,9 @@ import '../companion/companion_controller.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
+import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
+import '../vision/companion_output_gate.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../vision/vision_channel.dart';
 import '../vision/vision_event.dart';
@@ -71,9 +73,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
+  final CompanionOutputGate _companionOutputGate = CompanionOutputGate();
   final StudySessionController _studySessionController =
       StudySessionController();
   final AuthSession _authSession = AuthSession.instance;
+  late final FocusSyncController _focusSyncController;
 
   double? _leftEyeOpenValue;
   double? _rightEyeOpenValue;
@@ -90,6 +94,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _showVoiceDemoPanel = false;
   bool _showVisionSourcePreview = false;
   bool _isVoiceServiceTestInFlight = false;
+  bool _isEventUploadDemoLoading = false;
   bool _isUserStatusExpanded = false;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
@@ -132,6 +137,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   String _companionMessage = "目前狀態穩定，請保持節奏。";
   String? _lastVoiceResponseMessage;
   VoiceInteraction? _lastVoiceInteraction;
+  String? _lastEventUploadDemoMessage;
   VisionEventType _lastVisionEventType = VisionEventType.normal;
 
   @override
@@ -168,6 +174,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             _currentVoicePlaybackStatus = null;
           }
         });
+    _focusSyncController = FocusSyncController(authSession: _authSession);
+    _focusSyncController.start(
+      studySessionController: _studySessionController,
+      pomodoroController: _pomodoroController,
+    );
     _initializeCamera();
     _startIdleBubbleTimer();
   }
@@ -413,10 +424,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _handleVisionResult(VisionResult visionResult) {
     final previousCompanionStatus = _companionStatus;
     final analysis = _companionController.analyze(visionResult);
+    final outputGateResult = _companionOutputGate.evaluate(analysis.status);
+    final presentationAnalysis = CompanionAnalysis(
+      visionResult: analysis.visionResult,
+      eyeResult: analysis.eyeResult,
+      headOffsetResult: analysis.headOffsetResult,
+      postureDownResult: analysis.postureDownResult,
+      poseResult: analysis.poseResult,
+      presenceState: analysis.presenceState,
+      status: outputGateResult.status,
+    );
 
     debugPrint(
       'Vision data: '
       'status=${analysis.status.name}, '
+      'displayStatus=${outputGateResult.status.name}, '
+      'displayPending=${outputGateResult.isPending}, '
       'hasFace=${visionResult.hasFace}, '
       'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
       'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
@@ -442,14 +465,20 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       'rs=(${_formatRawValue(visionResult.raw['rsX'])}, ${_formatRawValue(visionResult.raw['rsY'])})',
     );
 
-    final response = _responseBuilder.fromVision(analysis);
+    final rawResponse = _responseBuilder.fromVision(analysis);
+    final response = _responseBuilder.fromVision(presentationAnalysis);
     final trackingResult = _visionEventTracker.track(
       analysis,
-      actionTriggered: response.actionLabel,
+      actionTriggered: rawResponse.actionLabel,
     );
     _studySessionController.recordVisionTrackingResult(
       trackingResult,
       isStudying: _pomodoroController.isRunning,
+    );
+    _focusSyncController.recordVisionTrackingResult(
+      trackingResult,
+      studySessionController: _studySessionController,
+      pomodoroController: _pomodoroController,
     );
 
     _leftEyeOpenValue = visionResult.leftEyeOpen;
@@ -465,33 +494,33 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
-    _companionStatus = analysis.status;
-    if (analysis.status != previousCompanionStatus) {
-      _syncBreathingPaceForStatus(analysis.status);
-      if (analysis.status != CompanionStatus.normal) {
+    _companionStatus = outputGateResult.status;
+    if (outputGateResult.status != previousCompanionStatus) {
+      _syncBreathingPaceForStatus(outputGateResult.status);
+      if (outputGateResult.status != CompanionStatus.normal) {
         _idleBubbleVisibleUntil = null;
       }
     }
-    _fatigueLevel = analysis.status.label;
+    _fatigueLevel = outputGateResult.status.label;
     _lastVisionEventType = trackingResult.event.type;
     if (!_isVoiceMessagePinned &&
-        (analysis.status != previousCompanionStatus ||
-            trackingResult.shouldUpdateMessage)) {
+        (outputGateResult.changed || trackingResult.shouldUpdateMessage)) {
       final nextMessage = _messageForVisionTrackingResult(
         trackingResult,
-        _messageForCompanionStatus(analysis.status),
+        _messageForCompanionStatus(outputGateResult.status),
       );
       _companionMessage = nextMessage;
     }
 
     _maybeSendVisionReminderToVoiceService(
-      message: _voiceReminderMessageForStatus(analysis.status),
-      analysis: analysis,
+      message: _voiceReminderMessageForStatus(outputGateResult.status),
+      analysis: presentationAnalysis,
       trackingResult: trackingResult,
     );
 
     if (trackingResult.shouldNotify &&
         trackingResult.event.type == VisionEventType.fatigueDetected &&
+        outputGateResult.status == CompanionStatus.fatigue &&
         _leftEyeOpenValue != null &&
         _rightEyeOpenValue != null) {
       _showFatigueAlert(
@@ -920,6 +949,43 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
+  Future<void> _runEventUploadDemo() async {
+    if (_isEventUploadDemoLoading) return;
+
+    setState(() {
+      _isEventUploadDemoLoading = true;
+      _lastEventUploadDemoMessage = '正在上傳事件 Demo...';
+    });
+
+    final result = await _focusSyncController.uploadDemoEvent(
+      studySessionController: _studySessionController,
+      pomodoroController: _pomodoroController,
+    );
+
+    if (!mounted) return;
+
+    final message = result.success
+        ? '事件上傳成功：送出 ${result.attemptedCount} 筆，新增 ${result.savedCount} 筆，重複 ${result.skippedDuplicateCount} 筆。'
+        : '事件上傳失敗：${result.message ?? '未知錯誤'}';
+    final detail = result.sessionId == null
+        ? message
+        : '$message\nSession: ${result.sessionId}';
+
+    setState(() {
+      _isEventUploadDemoLoading = false;
+      _lastEventUploadDemoMessage = detail;
+    });
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(detail),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
   void _closeVoiceDialog() {
     setState(() {
       _lastVoiceInteraction = null;
@@ -997,6 +1063,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       controller: _pomodoroController,
       studySession: _studySessionController,
     );
+    _focusSyncController.recordVoiceInteraction(
+      interaction,
+      studySessionController: _studySessionController,
+      pomodoroController: _pomodoroController,
+      actionLabel: actionResult.response.actionLabel,
+    );
     _recordPomodoroAction(
       interaction.command,
       previousStatus: previousPomodoroStatus,
@@ -1060,6 +1132,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       case VoiceCommandType.ignored:
         break;
     }
+
+    _focusSyncController.recordPomodoroAction(
+      command,
+      studySessionController: _studySessionController,
+      pomodoroController: _pomodoroController,
+      previousStatus: previousStatus,
+      actionLabel: actionLabel,
+    );
   }
 
   void _startPomodoroTicker() {
@@ -1077,6 +1157,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (_pomodoroController.status == PomodoroStatus.completed) {
         timer.cancel();
         _studySessionController.recordPomodoroCompleted();
+        _focusSyncController.recordPomodoroCompleted(
+          studySessionController: _studySessionController,
+          pomodoroController: _pomodoroController,
+        );
         _companionMessage = "這輪專注時間結束了，休息一下吧。";
         _lastVoiceResponseMessage = null;
         _voiceMessagePinnedUntil = null;
@@ -1100,12 +1184,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _isUsingFallbackVideo = false;
     _companionController.reset();
     _visionEventTracker.reset();
+    _companionOutputGate.reset();
     await _initializeCamera();
   }
 
   Future<void> _resetVisionCalibration() async {
     _companionController.reset();
     _visionEventTracker.reset();
+    _companionOutputGate.reset();
     _headOffsetSamples.clear();
     _closedEyeFrameCount = 0;
     _distractedFrameCount = 0;
@@ -2227,7 +2313,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return _statusPulseValue();
       },
       onHomeTap: _closeAllDeveloperPanels,
-      onStatisticsTap: () {
+      onStatisticsTap: () async {
+        await _focusSyncController.flushNow(
+          studySessionController: _studySessionController,
+          pomodoroController: _pomodoroController,
+        );
+        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
@@ -2341,6 +2432,43 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                       label: const Text('測試語音輸出'),
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _isEventUploadDemoLoading
+                          ? null
+                          : _runEventUploadDemo,
+                      icon: _isEventUploadDemoLoading
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cloud_upload_rounded),
+                      label: const Text('事件上傳 Demo'),
+                    ),
+                  ),
+                  if (_lastEventUploadDemoMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEAF7FF),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFD8EEF8)),
+                      ),
+                      child: Text(
+                        _lastEventUploadDemoMessage!,
+                        style: const TextStyle(
+                          color: Color(0xFF31465F),
+                          fontSize: 12,
+                          height: 1.4,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -2844,6 +2972,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _detectionTimer?.cancel();
+      unawaited(
+        _focusSyncController.flushNow(
+          studySessionController: _studySessionController,
+          pomodoroController: _pomodoroController,
+        ),
+      );
       if (controller != null && controller.value.isInitialized) {
         controller.dispose();
         _cameraController = null;
@@ -2856,6 +2990,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       } else {
         _initializeCamera();
       }
+      _focusSyncController.start(
+        studySessionController: _studySessionController,
+        pomodoroController: _pomodoroController,
+      );
     }
   }
 
@@ -3015,6 +3153,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _printHeadOffsetStats();
     _detectionTimer?.cancel();
     _pomodoroTimer?.cancel();
+    unawaited(
+      _focusSyncController.close(
+        studySessionController: _studySessionController,
+        pomodoroController: _pomodoroController,
+      ),
+    );
     _userStatusCollapseTimer?.cancel();
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();

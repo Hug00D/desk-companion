@@ -3,12 +3,14 @@ class StatisticsSummary {
     required this.today,
     required this.weeklyTrend,
     required this.stateDistribution,
+    required this.eventCounts,
     required this.recentEvents,
   });
 
   final TodayStatistics today;
   final List<WeeklyFocusPoint> weeklyTrend;
   final StateDistribution stateDistribution;
+  final Map<String, int> eventCounts;
   final List<RecentStatisticsEvent> recentEvents;
 
   factory StatisticsSummary.fromJson(Map<String, dynamic> json) {
@@ -20,6 +22,7 @@ class StatisticsSummary {
       stateDistribution: StateDistribution.fromJson(
         _map(json['stateDistribution']),
       ),
+      eventCounts: _intMap(json['eventCounts']),
       recentEvents: _listOfMaps(
         json['recentEvents'],
       ).map(RecentStatisticsEvent.fromJson).toList(growable: false),
@@ -74,17 +77,29 @@ class StateDistribution {
   const StateDistribution({
     this.focusSeconds = 0,
     this.attentionSeconds = 0,
+    this.distractedSeconds = 0,
     this.fatigueSeconds = 0,
+    this.drowsySeconds = 0,
+    this.postureDownSeconds = 0,
     this.awaySeconds = 0,
   });
 
   final int focusSeconds;
   final int attentionSeconds;
+  final int distractedSeconds;
   final int fatigueSeconds;
+  final int drowsySeconds;
+  final int postureDownSeconds;
   final int awaySeconds;
 
   int get totalSeconds =>
-      focusSeconds + attentionSeconds + fatigueSeconds + awaySeconds;
+      focusSeconds +
+      attentionSeconds +
+      distractedSeconds +
+      fatigueSeconds +
+      drowsySeconds +
+      postureDownSeconds +
+      awaySeconds;
 
   double ratioFor(int seconds) {
     if (totalSeconds == 0) return 0;
@@ -95,7 +110,10 @@ class StateDistribution {
     return StateDistribution(
       focusSeconds: _int(json['focusSeconds']),
       attentionSeconds: _int(json['attentionSeconds']),
+      distractedSeconds: _int(json['distractedSeconds']),
       fatigueSeconds: _int(json['fatigueSeconds']),
+      drowsySeconds: _int(json['drowsySeconds']),
+      postureDownSeconds: _int(json['postureDownSeconds']),
       awaySeconds: _int(json['awaySeconds']),
     );
   }
@@ -145,3 +163,10 @@ List<Map<String, dynamic>> _listOfMaps(dynamic value) {
 }
 
 int _int(dynamic value) => value is num ? value.toInt() : 0;
+
+Map<String, int> _intMap(dynamic value) {
+  if (value is! Map) return const <String, int>{};
+  return value.map(
+    (key, item) => MapEntry(key.toString(), item is num ? item.toInt() : 0),
+  );
+}

@@ -201,7 +201,7 @@ class CompanionStateEvaluator {
         postureDownResult: postureDownResult,
       )) {
         _postureDownRecoveryFrames++;
-        if (_postureDownRecoveryFrames >= 1) {
+        if (_postureDownRecoveryFrames >= 2) {
           _isPostureDownLatched = false;
           _lastFaceMissingContext = null;
           _lastFaceVisibleContext = CompanionStatus.normal;
@@ -306,7 +306,7 @@ class CompanionStateEvaluator {
           ? CompanionStatus.drowsy
           : headDropLikely
           ? CompanionStatus.attention
-          : CompanionStatus.distracted;
+          : CompanionStatus.userMissing;
       _lastFaceMissingContext = inferred;
       return inferred;
     }
@@ -336,9 +336,9 @@ class CompanionStateEvaluator {
     final strongShoulderShrinkProne =
         shoulderShrinkScore >= 80 && headLowScore >= 75 && noseDropScore >= 85;
     final strongShoulderDropProne =
-        sideProneScore >= 85 && shoulderDropScore >= 45;
+        sideProneScore >= 90 && shoulderDropScore >= 55 && noseDropScore >= 70;
     final strongSideProne =
-        sideProneScore >= 70 &&
+        sideProneScore >= 82 &&
         shoulderShrinkScore >= 70 &&
         noseDropScore >= 85;
 
@@ -360,12 +360,12 @@ class CompanionStateEvaluator {
     final headLowScore = postureDownResult.headLowScore ?? 0;
     final noseDropScore = postureDownResult.noseDropScore ?? 0;
 
-    return score < 30 &&
-        sideProneScore < 45 &&
-        shoulderDropScore < 35 &&
-        shoulderShrinkScore < 45 &&
-        headLowScore < 45 &&
-        noseDropScore < 60;
+    return score < 50 &&
+        sideProneScore < 65 &&
+        shoulderDropScore < 58 &&
+        shoulderShrinkScore < 70 &&
+        headLowScore < 68 &&
+        noseDropScore < 82;
   }
 
   void _updateRecentPoseContext({
@@ -475,11 +475,6 @@ class CompanionStateEvaluator {
       return eyeState == EyeState.fatigue
           ? CompanionStatus.drowsy
           : CompanionStatus.attention;
-    }
-
-    final headOffsetScore = result.headOffsetScore ?? 0;
-    if (headOffsetScore >= 35) {
-      return CompanionStatus.distracted;
     }
 
     return CompanionStatus.normal;

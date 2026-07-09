@@ -10,6 +10,9 @@ enum VisionEventType {
   userReturned,
   attentionWarning,
   fatigueDetected,
+  distracted,
+  drowsyDetected,
+  postureDownDetected,
 }
 
 extension VisionEventTypeStorage on VisionEventType {
@@ -27,6 +30,12 @@ extension VisionEventTypeStorage on VisionEventType {
         return 'vision.attention_warning';
       case VisionEventType.fatigueDetected:
         return 'vision.fatigue_detected';
+      case VisionEventType.distracted:
+        return 'vision.distracted';
+      case VisionEventType.drowsyDetected:
+        return 'vision.drowsy_detected';
+      case VisionEventType.postureDownDetected:
+        return 'vision.posture_down';
     }
   }
 }
@@ -129,6 +138,15 @@ class VisionEvent {
     if (analysis.status == CompanionStatus.fatigue) {
       return VisionEventType.fatigueDetected;
     }
+    if (analysis.status == CompanionStatus.drowsy) {
+      return VisionEventType.drowsyDetected;
+    }
+    if (analysis.status == CompanionStatus.postureDown) {
+      return VisionEventType.postureDownDetected;
+    }
+    if (analysis.status == CompanionStatus.distracted) {
+      return VisionEventType.distracted;
+    }
     if (analysis.status == CompanionStatus.attention) {
       return VisionEventType.attentionWarning;
     }
@@ -145,10 +163,13 @@ class VisionEvent {
   static VisionEventSeverity _severityFor(VisionEventType type) {
     switch (type) {
       case VisionEventType.fatigueDetected:
+      case VisionEventType.drowsyDetected:
+      case VisionEventType.postureDownDetected:
       case VisionEventType.userAway:
       case VisionEventType.userReturned:
         return VisionEventSeverity.warning;
       case VisionEventType.attentionWarning:
+      case VisionEventType.distracted:
       case VisionEventType.partialUserDetected:
         return VisionEventSeverity.attention;
       case VisionEventType.normal:
@@ -160,7 +181,11 @@ class VisionEvent {
     switch (type) {
       case VisionEventType.fatigueDetected:
       case VisionEventType.attentionWarning:
+      case VisionEventType.distracted:
+      case VisionEventType.drowsyDetected:
         return 'eyes';
+      case VisionEventType.postureDownDetected:
+        return 'posture';
       case VisionEventType.userAway:
       case VisionEventType.partialUserDetected:
       case VisionEventType.userReturned:
