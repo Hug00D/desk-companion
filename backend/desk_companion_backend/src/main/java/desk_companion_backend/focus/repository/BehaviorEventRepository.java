@@ -17,4 +17,10 @@ public interface BehaviorEventRepository extends JpaRepository<BehaviorEvent, Lo
             OffsetDateTime from,
             OffsetDateTime to
     );
+
+    List<BehaviorEvent> findByUserIdAndTsBetweenOrderByTsAsc(
+            UUID userId,
+            OffsetDateTime from,
+            OffsetDateTime to
+    );
 }

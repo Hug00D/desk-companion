@@ -65,40 +65,78 @@ public class StatisticsServiceImpl implements StatisticsService {
                 from,
                 to
         );
+        List<BehaviorEvent> events = behaviorEventRepository.findByUserIdAndTsBetweenOrderByTsAsc(
+                userId,
+                from,
+                to
+        );
 
-        int focusSeconds = sessions.stream().mapToInt(FocusSession::getFocusSeconds).sum();
-        int attentionSeconds = sessions.stream().mapToInt(FocusSession::getAttentionSeconds).sum();
-        int fatigueSeconds = sessions.stream().mapToInt(FocusSession::getFatigueSeconds).sum();
-        int awaySeconds = sessions.stream().mapToInt(FocusSession::getAwaySeconds).sum();
+        StateTotals eventDurationTotals = buildEventDurationTotals(events);
+        StateTotals sessionTotals = buildSessionTotals(sessions, eventDurationTotals);
         int reminderCount = sessions.stream().mapToInt(FocusSession::getReminderCount).sum();
         long completedRoundCount = rounds.stream()
                 .filter(round -> "completed".equals(round.getStatus()))
                 .count();
 
         var today = new StatisticsSummaryResponse.TodayStatistics(
-                focusSeconds,
+                sessionTotals.focusSeconds,
                 completedRoundCount,
-                reminderCount,
-                awaySeconds
+                reminderCount + Math.toIntExact(eventDurationTotals.reminderCount),
+                sessionTotals.awaySeconds
         );
 
         var stateDistribution = new StatisticsSummaryResponse.StateDistribution(
-                focusSeconds,
-                attentionSeconds,
-                fatigueSeconds,
-                awaySeconds
+                sessionTotals.focusSeconds,
+                sessionTotals.attentionSeconds,
+                sessionTotals.distractedSeconds,
+                sessionTotals.fatigueSeconds,
+                sessionTotals.drowsySeconds,
+                sessionTotals.postureDownSeconds,
+                sessionTotals.awaySeconds
         );
 
         return new StatisticsSummaryResponse(
                 today,
-                buildWeeklyTrend(sessions, from, to, zoneId),
+                buildWeeklyTrend(sessions, events, from, to, zoneId),
                 stateDistribution,
+                buildEventCounts(events),
                 recentEvents.stream().map(this::toRecentEvent).toList()
         );
     }
 
+    private StateTotals buildSessionTotals(List<FocusSession> sessions, StateTotals eventFallback) {
+        StateTotals totals = new StateTotals();
+        for (FocusSession session : sessions) {
+            totals.addSession(session);
+        }
+        totals.applyEventFallback(eventFallback);
+        return totals;
+    }
+
+    private StateTotals buildEventDurationTotals(List<BehaviorEvent> events) {
+        StateTotals totals = new StateTotals();
+        for (BehaviorEvent event : events) {
+            int seconds = durationSeconds(event);
+            totals.addEvent(event.getEventType(), seconds);
+        }
+        return totals;
+    }
+
+    private Map<String, Long> buildEventCounts(List<BehaviorEvent> events) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (BehaviorEvent event : events) {
+            String eventType = event.getEventType();
+            if (eventType == null || eventType.isBlank()) {
+                eventType = "unknown";
+            }
+            counts.put(eventType, counts.getOrDefault(eventType, 0L) + 1L);
+        }
+        return counts;
+    }
+
     private List<StatisticsSummaryResponse.WeeklyFocusPoint> buildWeeklyTrend(
             List<FocusSession> sessions,
+            List<BehaviorEvent> events,
             OffsetDateTime from,
             OffsetDateTime to,
             ZoneId zoneId
@@ -114,10 +152,13 @@ public class StatisticsServiceImpl implements StatisticsService {
         for (FocusSession session : sessions) {
             LocalDate date = session.getStartAt().atZoneSameInstant(zoneId).toLocalDate();
             DayTotals totals = totalsByDate.computeIfAbsent(date, ignored -> new DayTotals());
-            totals.focusSeconds += session.getFocusSeconds();
-            totals.attentionSeconds += session.getAttentionSeconds();
-            totals.fatigueSeconds += session.getFatigueSeconds();
-            totals.awaySeconds += session.getAwaySeconds();
+            totals.addSession(session);
+        }
+
+        for (BehaviorEvent event : events) {
+            LocalDate date = event.getTs().atZoneSameInstant(zoneId).toLocalDate();
+            DayTotals totals = totalsByDate.computeIfAbsent(date, ignored -> new DayTotals());
+            totals.addEventFallback(event.getEventType(), durationSeconds(event));
         }
 
         var result = new ArrayList<StatisticsSummaryResponse.WeeklyFocusPoint>();
@@ -158,14 +199,145 @@ public class StatisticsServiceImpl implements StatisticsService {
         }
     }
 
-    private static class DayTotals {
+    private int durationSeconds(BehaviorEvent event) {
+        Integer durationMs = event.getDurationMs();
+        if (durationMs == null || durationMs <= 0) {
+            return 0;
+        }
+        return Math.max(1, (int) Math.round(durationMs / 1000.0));
+    }
+
+    private static int inferredFocusSeconds(FocusSession session) {
+        int abnormalSeconds = session.getAttentionSeconds()
+                + session.getDistractedSeconds()
+                + session.getFatigueSeconds()
+                + session.getDrowsySeconds()
+                + session.getPostureDownSeconds()
+                + session.getAwaySeconds();
+        int explicitFocusSeconds = session.getFocusSeconds();
+        if (explicitFocusSeconds > 0) {
+            return explicitFocusSeconds;
+        }
+        return Math.max(0, session.getMonitoredSeconds() - abnormalSeconds);
+    }
+
+    private static class StateTotals {
         int focusSeconds;
         int attentionSeconds;
+        int distractedSeconds;
         int fatigueSeconds;
+        int drowsySeconds;
+        int postureDownSeconds;
         int awaySeconds;
+        long reminderCount;
+
+        int totalSeconds() {
+            return focusSeconds
+                    + attentionSeconds
+                    + distractedSeconds
+                    + fatigueSeconds
+                    + drowsySeconds
+                    + postureDownSeconds
+                    + awaySeconds;
+        }
+
+        void addSession(FocusSession session) {
+            focusSeconds += inferredFocusSeconds(session);
+            attentionSeconds += session.getAttentionSeconds();
+            distractedSeconds += session.getDistractedSeconds();
+            fatigueSeconds += session.getFatigueSeconds();
+            drowsySeconds += session.getDrowsySeconds();
+            postureDownSeconds += session.getPostureDownSeconds();
+            awaySeconds += session.getAwaySeconds();
+        }
+
+        void addEvent(String eventType, int seconds) {
+            if (eventType == null) {
+                return;
+            }
+            switch (eventType) {
+                case "vision.attention_warning", "vision.partial_user_detected" -> {
+                    attentionSeconds += seconds;
+                    reminderCount += 1;
+                }
+                case "vision.distracted" -> {
+                    distractedSeconds += seconds;
+                    reminderCount += 1;
+                }
+                case "vision.fatigue_detected" -> {
+                    fatigueSeconds += seconds;
+                    reminderCount += 1;
+                }
+                case "vision.drowsy_detected" -> {
+                    drowsySeconds += seconds;
+                    reminderCount += 1;
+                }
+                case "vision.posture_down" -> {
+                    postureDownSeconds += seconds;
+                    reminderCount += 1;
+                }
+                case "vision.user_away" -> awaySeconds += seconds;
+                default -> {
+                }
+            }
+        }
+
+        void applyEventFallback(StateTotals eventFallback) {
+            if (eventFallback == null || eventFallback.totalSeconds() == 0) {
+                return;
+            }
+            if (attentionSeconds == 0) {
+                attentionSeconds = eventFallback.attentionSeconds;
+            }
+            if (distractedSeconds == 0) {
+                distractedSeconds = eventFallback.distractedSeconds;
+            }
+            if (fatigueSeconds == 0) {
+                fatigueSeconds = eventFallback.fatigueSeconds;
+            }
+            if (drowsySeconds == 0) {
+                drowsySeconds = eventFallback.drowsySeconds;
+            }
+            if (postureDownSeconds == 0) {
+                postureDownSeconds = eventFallback.postureDownSeconds;
+            }
+            if (awaySeconds == 0) {
+                awaySeconds = eventFallback.awaySeconds;
+            }
+        }
+    }
+
+    private static class DayTotals extends StateTotals {
+        void addEventFallback(String eventType, int seconds) {
+            if (eventType == null || seconds <= 0) {
+                return;
+            }
+            switch (eventType) {
+                case "vision.attention_warning", "vision.partial_user_detected" -> {
+                    attentionSeconds += seconds;
+                }
+                case "vision.distracted" -> {
+                    distractedSeconds += seconds;
+                }
+                case "vision.fatigue_detected" -> {
+                    fatigueSeconds += seconds;
+                }
+                case "vision.drowsy_detected" -> {
+                    drowsySeconds += seconds;
+                }
+                case "vision.posture_down" -> {
+                    postureDownSeconds += seconds;
+                }
+                case "vision.user_away" -> {
+                    awaySeconds += seconds;
+                }
+                default -> {
+                }
+            }
+        }
 
         Double focusScore() {
-            int total = focusSeconds + attentionSeconds + fatigueSeconds + awaySeconds;
+            int total = totalSeconds();
             if (total <= 0) {
                 return null;
             }
