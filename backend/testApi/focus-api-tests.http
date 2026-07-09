@@ -1,6 +1,10 @@
 @baseUrl = http://localhost:8080/api/v1
 @email = focus-api-demo@example.com
 @password = Password456!
+@summaryTodayFrom = 2026-07-09T00:00:00Z
+@summaryTodayTo = 2026-07-10T00:00:00Z
+@summaryWideFrom = 2026-01-01T00:00:00Z
+@summaryWideTo = 2026-12-31T23:59:59Z
 
 ### 0. Register demo user
 # If this account already exists, skip this request and run login directly.
@@ -8,8 +12,8 @@ POST {{baseUrl}}/users/register
 Content-Type: application/json
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}"
+  "email": "test_user@example.com",
+  "password": "Password456!"
 }
 
 ### 1. Login demo user
@@ -19,8 +23,8 @@ POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 {
-  "email": "{{email}}",
-  "password": "{{password}}"
+  "email": "test_user@example.com",
+  "password": "Password456!"
 }
 
 ### 2. Create focus session
@@ -182,8 +186,17 @@ Content-Type: application/json
   "schemaVersion": 1
 }
 
-### 7. Get statistics summary
-GET {{baseUrl}}/users/{{login.response.body.$.userId}}/statistics?from=2026-07-09T00:00:00Z&to=2026-07-10T00:00:00Z&timezone=Asia/Taipei
+### 7A. Get statistics summary - today range
+# Run this after steps 2-6. It should return:
+# today, weeklyTrend, stateDistribution, eventCounts, recentEvents
+# @name getStatisticsSummaryToday
+GET {{baseUrl}}/users/{{login.response.body.$.userId}}/statistics?from={{summaryTodayFrom}}&to={{summaryTodayTo}}&timezone=Asia/Taipei
+
+### 7B. Get statistics summary - wide smoke test
+# Use this if 7A returns empty data. If 7B has data but 7A does not,
+# the issue is the event/session timestamp range.
+# @name getStatisticsSummaryWide
+GET {{baseUrl}}/users/{{login.response.body.$.userId}}/statistics?from={{summaryWideFrom}}&to={{summaryWideTo}}&timezone=Asia/Taipei
 
 ### 8. Get companion preferences
 GET {{baseUrl}}/users/{{login.response.body.$.userId}}/preferences
