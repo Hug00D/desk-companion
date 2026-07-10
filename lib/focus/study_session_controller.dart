@@ -3,23 +3,28 @@ import '../vision/vision_event_tracker.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../voice/voice_command.dart';
 import 'pomodoro_controller.dart';
+import 'study_session.dart';
 
 class StudySessionController {
   DateTime? startedAt;
   DateTime? _lastVisionSampleAt;
 
   Duration focusedDuration = Duration.zero;
-  Duration awayDuration = Duration.zero;
+  Duration attentionDuration = Duration.zero;
   Duration distractedDuration = Duration.zero;
+  Duration fatigueDuration = Duration.zero;
+  Duration drowsyDuration = Duration.zero;
+  Duration postureDownDuration = Duration.zero;
+  Duration awayDuration = Duration.zero;
 
   int attentionWarningCount = 0;
   int fatigueEventCount = 0;
-  int partialUserDetectedCount = 0;
-  int userAwayCount = 0;
-  int userReturnedCount = 0;
   int distractedEventCount = 0;
   int drowsyEventCount = 0;
   int postureDownEventCount = 0;
+  int partialUserDetectedCount = 0;
+  int userAwayCount = 0;
+  int userReturnedCount = 0;
   int focusUserMissingEventCount = 0;
 
   int pomodoroStartedCount = 0;
@@ -57,6 +62,15 @@ class StudySessionController {
         break;
       case VisionEventType.fatigueDetected:
         fatigueEventCount += 1;
+        break;
+      case VisionEventType.distracted:
+        distractedEventCount += 1;
+        break;
+      case VisionEventType.drowsyDetected:
+        drowsyEventCount += 1;
+        break;
+      case VisionEventType.postureDownDetected:
+        postureDownEventCount += 1;
         break;
       case VisionEventType.partialUserDetected:
         partialUserDetectedCount += 1;
@@ -153,6 +167,50 @@ class StudySessionController {
     }
   }
 
+  StudySessionSnapshot toSnapshot({
+    required String clientSessionId,
+    required String timezone,
+    String? serverSessionId,
+    StudySessionStatus status = StudySessionStatus.active,
+    StudySessionEndReason? endReason,
+    DateTime? endedAt,
+    int? targetSeconds,
+    int pausedSeconds = 0,
+    int breakSeconds = 0,
+    Map<String, dynamic> config = const <String, dynamic>{},
+    int revision = 0,
+  }) {
+    ensureStarted();
+    final start = startedAt ?? DateTime.now();
+    final end = endedAt ?? DateTime.now();
+    final monitoredSeconds = end.difference(start).inSeconds;
+
+    return StudySessionSnapshot(
+      clientSessionId: clientSessionId,
+      serverSessionId: serverSessionId,
+      startedAt: start,
+      endedAt: endedAt,
+      status: status,
+      endReason: endReason,
+      timezone: timezone,
+      targetSeconds: targetSeconds,
+      monitoredSeconds: monitoredSeconds < 0 ? 0 : monitoredSeconds,
+      focusSeconds: focusedDuration.inSeconds,
+      attentionSeconds: attentionDuration.inSeconds,
+      distractedSeconds: distractedDuration.inSeconds,
+      fatigueSeconds: fatigueDuration.inSeconds,
+      drowsySeconds: drowsyDuration.inSeconds,
+      postureDownSeconds: postureDownDuration.inSeconds,
+      awaySeconds: awayDuration.inSeconds,
+      pausedSeconds: pausedSeconds,
+      breakSeconds: breakSeconds,
+      reminderShownCount: attentionWarningCount + fatigueEventCount,
+      summary: _buildStatisticsSummary(),
+      config: config,
+      revision: revision,
+    );
+  }
+
   String buildSummary(PomodoroController pomodoroController) {
     final focusText = _formatDuration(focusedDuration);
     final awayText = _formatDuration(awayDuration);
@@ -191,22 +249,34 @@ class StudySessionController {
     final delta = timestamp.difference(lastSampleAt);
     if (delta <= Duration.zero || delta > const Duration(seconds: 5)) return;
 
-    final isAway =
-        trackingResult.isStable &&
-        trackingResult.event.type == VisionEventType.userAway;
-    if (isAway) {
-      awayDuration += delta;
-      return;
-    }
+    if (!trackingResult.isStable) return;
 
-    if (isStudying && trackingResult.isStable) {
-      final status = trackingResult.event.status;
-      if (status == CompanionStatus.normal ||
-          status == CompanionStatus.attention) {
-        focusedDuration += delta;
-      } else {
+    switch (trackingResult.event.type) {
+      case VisionEventType.userAway:
+        awayDuration += delta;
+        return;
+      case VisionEventType.attentionWarning:
+      case VisionEventType.partialUserDetected:
+        attentionDuration += delta;
+        return;
+      case VisionEventType.distracted:
         distractedDuration += delta;
-      }
+        return;
+      case VisionEventType.fatigueDetected:
+        fatigueDuration += delta;
+        return;
+      case VisionEventType.drowsyDetected:
+        drowsyDuration += delta;
+        return;
+      case VisionEventType.postureDownDetected:
+        postureDownDuration += delta;
+        return;
+      case VisionEventType.userReturned:
+      case VisionEventType.normal:
+        if (isStudying) {
+          focusedDuration += delta;
+        }
+        return;
     }
   }
 
@@ -216,5 +286,34 @@ class StudySessionController {
     if (minutes == 0) return '$seconds 秒';
     if (seconds == 0) return '$minutes 分鐘';
     return '$minutes 分 $seconds 秒';
+  }
+
+  Map<String, dynamic> _buildStatisticsSummary() {
+    return <String, dynamic>{
+      'vision': <String, dynamic>{
+        'attentionWarningCount': attentionWarningCount,
+        'fatigueEventCount': fatigueEventCount,
+        'distractedEventCount': distractedEventCount,
+        'drowsyEventCount': drowsyEventCount,
+        'postureDownEventCount': postureDownEventCount,
+        'partialUserDetectedCount': partialUserDetectedCount,
+        'userAwayCount': userAwayCount,
+        'userReturnedCount': userReturnedCount,
+      },
+      'pomodoro': <String, dynamic>{
+        'startedCount': pomodoroStartedCount,
+        'pausedCount': pomodoroPausedCount,
+        'resumedCount': pomodoroResumedCount,
+        'stoppedCount': pomodoroStoppedCount,
+        'completedCount': pomodoroCompletedCount,
+      },
+      'voice': <String, dynamic>{
+        'tiredSelfReportCount': tiredSelfReportCount,
+        'distractedSelfReportCount': distractedSelfReportCount,
+        'breakRequestCount': breakRequestCount,
+        'unknownCommandCount': unknownVoiceCommandCount,
+        'lowConfidenceConfirmationCount': lowConfidenceConfirmationCount,
+      },
+    };
   }
 }

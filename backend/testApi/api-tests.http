@@ -106,6 +106,7 @@ POST {{baseUrl}}/auth/validate-reset-token
 Content-Type: application/json
 
 {
+  "email": "test_user@example.com",
   "token": "{{forgotPassword.response.body.$.resetToken}}"
 }
 
@@ -115,6 +116,7 @@ POST {{baseUrl}}/auth/reset-password
 Content-Type: application/json
 
 {
+  "email": "test_user@example.com",
   "token": "{{forgotPassword.response.body.$.resetToken}}",
   "newPassword": "Password456!"
 }
@@ -124,21 +126,26 @@ Content-Type: application/json
 DELETE {{baseUrl}}/users/{{login.response.body.$.userId}}
 Content-Type: application/json
 
+{
+  "password": "Password456!"
+}
 
 ### 9) account recovery
-# @name recovery_account
+# @name recoveryAccount
 POST {{baseUrl}}/auth/account-recovery
 Content-Type: application/json
 
 {
-  "email": "test_user@example.com"
+  "email": "test_user@example.com",
+  "password": "Password456!"
 }
 
 ### 10) account-recovery-confirm
-# @name recovery_account
+# @name recoveryConfirm
 POST {{baseUrl}}/auth/account-recovery/confirm
 Content-Type: application/json
 
 {
-  "token": "{{recovery_account.response.body.$.recoveryToken}}"
+  "email": "test_user@example.com",
+  "token": "{{recoveryAccount.response.body.$.recoveryToken}}"
 }

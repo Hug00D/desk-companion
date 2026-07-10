@@ -15,18 +15,22 @@ class HeadOffsetDetectionResult {
 class HeadOffsetDetector {
   HeadOffsetDetector({
     this.distractedThreshold = 55,
-    this.strongDistractedThreshold = 72,
-    this.distractedFrames = 5,
-    this.missingFaceHoldFrames = 3,
+    this.distractedFrames = 4,
+    this.angleChangeThreshold = 11,
+    this.movementFrames = 3,
+    this.movementHoldFrames = 2,
   });
 
   final double distractedThreshold;
-  final double strongDistractedThreshold;
   final int distractedFrames;
-  final int missingFaceHoldFrames;
+  final double angleChangeThreshold;
+  final int movementFrames;
+  final int movementHoldFrames;
 
-  double? _lastScore;
-  int _missingFaceFrameCount = 0;
+  double? _lastYaw;
+  double? _lastPitch;
+  int _angleChangeFrameCount = 0;
+  int _movementHoldFrameCount = 0;
 
   HeadOffsetDetectionResult evaluate({
     required VisionResult result,
@@ -43,32 +47,26 @@ class HeadOffsetDetector {
     }
 
     if (!result.hasFace || score == null) {
-      _missingFaceFrameCount += 1;
-      final shouldHoldDistracted = _lastScore != null &&
-          _missingFaceFrameCount <= missingFaceHoldFrames &&
-          _lastScore! >= strongDistractedThreshold &&
-          previousDistractedFrameCount >= distractedFrames;
-
-      if (shouldHoldDistracted) {
-        final distractedFrameCount = previousDistractedFrameCount + 1;
-        return HeadOffsetDetectionResult(
-          state: distractedFrameCount >= distractedFrames
-              ? HeadOffsetState.distracted
-              : HeadOffsetState.normal,
-          distractedFrameCount: distractedFrameCount,
-        );
-      }
-
+      _clearTracking();
       return const HeadOffsetDetectionResult(
         state: HeadOffsetState.unavailable,
         distractedFrameCount: 0,
       );
     }
 
-    _lastScore = score;
-    _missingFaceFrameCount = 0;
+    final hasAngleMovement = _hasAngleMovement(result);
+    if (hasAngleMovement) {
+      _angleChangeFrameCount += 1;
+      _movementHoldFrameCount = movementHoldFrames;
+    } else if (_movementHoldFrameCount > 0) {
+      _movementHoldFrameCount -= 1;
+    } else {
+      _angleChangeFrameCount = 0;
+    }
 
-    final isDistracted = score >= distractedThreshold;
+    final isDistracted =
+        score >= distractedThreshold &&
+        _angleChangeFrameCount >= movementFrames;
     final distractedFrameCount = isDistracted
         ? previousDistractedFrameCount + 1
         : 0;
@@ -90,8 +88,35 @@ class HeadOffsetDetector {
     return result.headOffsetScore;
   }
 
+  bool _hasAngleMovement(VisionResult result) {
+    final yaw = result.headYaw;
+    final pitch = result.headPitch;
+    if (yaw == null && pitch == null) return false;
+
+    final previousYaw = _lastYaw;
+    final previousPitch = _lastPitch;
+    _lastYaw = yaw;
+    _lastPitch = pitch;
+
+    final yawDelta = yaw == null || previousYaw == null
+        ? 0
+        : (yaw - previousYaw).abs();
+    final pitchDelta = pitch == null || previousPitch == null
+        ? 0
+        : (pitch - previousPitch).abs();
+
+    return yawDelta >= angleChangeThreshold ||
+        pitchDelta >= angleChangeThreshold;
+  }
+
+  void _clearTracking() {
+    _lastYaw = null;
+    _lastPitch = null;
+    _angleChangeFrameCount = 0;
+    _movementHoldFrameCount = 0;
+  }
+
   void reset() {
-    _lastScore = null;
-    _missingFaceFrameCount = 0;
+    _clearTracking();
   }
 }

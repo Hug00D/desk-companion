@@ -4,6 +4,7 @@ import desk_companion_backend.common.exception.AccountDeletedException;
 import desk_companion_backend.common.exception.AccountSuspendedException;
 import desk_companion_backend.common.exception.EmailAlreadyExistsException;
 import desk_companion_backend.common.exception.InvalidAccountStatusException;
+import desk_companion_backend.common.exception.InvalidCredentialsException;
 import desk_companion_backend.common.exception.UserNotFoundException;
 import desk_companion_backend.user.dto.AccountStatusCheckResponse;
 import desk_companion_backend.user.dto.RegisterUserRequest;
@@ -93,9 +94,15 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
-    public void softDelete(UUID userId) {
+    public void softDelete(UUID userId, String password) {
         User user = userRepository.findById(userId)
                 .orElseThrow(UserNotFoundException::new);
+
+        if (user.getAccountStatus() != AccountStatus.ACTIVE
+                || user.getPasswordHash() == null
+                || !passwordEncoder.matches(password, user.getPasswordHash())) {
+            throw new InvalidCredentialsException();
+        }
 
         user.setAccountStatus(AccountStatus.DELETED);
     }

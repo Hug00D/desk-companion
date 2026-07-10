@@ -38,6 +38,13 @@ class EyeStateDetector {
       );
     }
 
+    if (result.isHeadOffsetCalibrating) {
+      return const EyeDetectionResult(
+        state: EyeState.open,
+        closedFrameCount: 0,
+      );
+    }
+
     final headOffsetScore = result.headOffsetScore;
     final headPitch = result.headPitch?.abs();
     if ((headOffsetScore != null &&
