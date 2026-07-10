@@ -310,7 +310,6 @@ class PostureDownDetector {
         result.hasFace && shoulderShrinkScore < 45 && sideProneScore < 55
         ? math.min(shoulderDropScore, downScoreThreshold - 1)
         : shoulderDropScore;
-
     final hasBodyCollapseEvidenceForProne =
         shoulderShrinkScore >= 45 || shoulderDropScore >= 24;
     final gatedSideProneScore = hasBodyCollapseEvidenceForProne

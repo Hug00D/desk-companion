@@ -19,7 +19,6 @@ import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
 import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
-import '../vision/companion_output_gate.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../vision/vision_channel.dart';
 import '../vision/vision_event.dart';
@@ -85,7 +84,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
   PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
-  final CompanionOutputGate _companionOutputGate = CompanionOutputGate();
   final StudySessionController _studySessionController =
       StudySessionController();
   final AuthSession _authSession = AuthSession.instance;
@@ -550,13 +548,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _handleVisionResult(VisionResult visionResult) {
     final previousDetectedCompanionStatus = _latestDetectedCompanionStatus;
     final analysis = _companionController.analyze(visionResult);
-    final outputGateResult = _companionOutputGate.evaluate(analysis.status);
 
     debugPrint(
       'Vision data: '
       'status=${analysis.status.name}, '
-      'displayStatus=${outputGateResult.status.name}, '
-      'displayPending=${outputGateResult.isPending}, '
       'hasFace=${visionResult.hasFace}, '
       'leftEye=${visionResult.leftEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
       'rightEye=${visionResult.rightEyeOpen?.toStringAsFixed(3) ?? 'N/A'}, '
@@ -627,20 +622,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       );
     }
     if (_activeSpokenReminderMessage == null) {
-      final displayStatus = outputGateResult.status;
-      if (_companionStatus != displayStatus) {
-        _syncBreathingPaceForStatus(displayStatus);
+      if (_companionStatus != analysis.status) {
+        _syncBreathingPaceForStatus(analysis.status);
       }
-      _companionStatus = displayStatus;
-      _fatigueLevel = displayStatus.label;
-      if (!_isVoiceMessagePinned &&
-          (shouldUpdateVisionMessage || outputGateResult.changed)) {
-        _companionMessage = outputGateResult.changed
-            ? _messageForVisionTrackingResult(
-                trackingResult,
-                _messageForCompanionStatus(displayStatus),
-              )
-            : _latestDetectedCompanionMessage;
+      _companionStatus = analysis.status;
+      _fatigueLevel = analysis.status.label;
+      if (!_isVoiceMessagePinned && shouldUpdateVisionMessage) {
+        _companionMessage = _latestDetectedCompanionMessage;
       }
     }
 
@@ -1462,7 +1450,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _isUsingFallbackVideo = false;
     _companionController.reset();
     _visionEventTracker.reset();
-    _companionOutputGate.reset();
     await _initializeCamera();
   }
 
@@ -1471,7 +1458,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
     _visionEventTracker.reset();
-    _companionOutputGate.reset();
     _headOffsetSamples.clear();
     _closedEyeFrameCount = 0;
     _distractedFrameCount = 0;

@@ -288,7 +288,8 @@ class CompanionStateEvaluator {
     }
 
     if (shouldersNearBaseline) {
-      final inferred = _lastFaceVisibleContext == CompanionStatus.drowsy
+      final inferred =
+          _lastFaceVisibleContext == CompanionStatus.drowsy
           ? CompanionStatus.drowsy
           : headDropLikely
           ? CompanionStatus.attention
