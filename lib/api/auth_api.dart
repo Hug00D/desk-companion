@@ -5,6 +5,8 @@ class AuthApi {
 
   final ApiClient _client;
 
+  String get baseUrl => _client.baseUrl;
+
   Future<AuthResult> login({
     required String email,
     required String password,

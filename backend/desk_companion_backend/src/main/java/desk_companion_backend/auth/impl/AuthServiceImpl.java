@@ -15,6 +15,8 @@ import desk_companion_backend.auth.dto.ValidateResetTokenResponse;
 import desk_companion_backend.auth.service.AuthService;
 import desk_companion_backend.common.exception.ExpiredPasswordResetTokenException;
 import desk_companion_backend.common.exception.ExpiredVerificationTokenException;
+import desk_companion_backend.common.exception.AccountDeletedException;
+import desk_companion_backend.common.exception.AccountSuspendedException;
 import desk_companion_backend.common.exception.InvalidCredentialsException;
 import desk_companion_backend.common.exception.InvalidPasswordResetTokenException;
 import desk_companion_backend.common.exception.InvalidVerificationTokenException;
@@ -52,17 +54,20 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final SecureRandom secureRandom = new SecureRandom();
     private final boolean returnResetTokenForTesting;
+    private final String demoVerificationCode;
 
     public AuthServiceImpl(
             UserRepository userRepository,
             VerificationTokenRepository verificationTokenRepository,
             PasswordEncoder passwordEncoder,
-            @Value("${app.auth.return-reset-token-for-testing:false}") boolean returnResetTokenForTesting
+            @Value("${app.auth.return-reset-token-for-testing:false}") boolean returnResetTokenForTesting,
+            @Value("${app.auth.demo-verification-code:}") String demoVerificationCode
     ) {
         this.userRepository = userRepository;
         this.verificationTokenRepository = verificationTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.returnResetTokenForTesting = returnResetTokenForTesting;
+        this.demoVerificationCode = demoVerificationCode == null ? "" : demoVerificationCode.trim();
     }
 
     @Override
@@ -72,16 +77,14 @@ public class AuthServiceImpl implements AuthService {
         User user = userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(InvalidCredentialsException::new);
 
-        assertLoginAllowed(user);
-
-        boolean passwordMatched = passwordEncoder.matches(
-                request.password(),
-                user.getPasswordHash()
-        );
+        boolean passwordMatched = user.getPasswordHash() != null
+                && passwordEncoder.matches(request.password(), user.getPasswordHash());
 
         if (!passwordMatched) {
             throw new InvalidCredentialsException();
         }
+
+        assertLoginAllowed(user);
 
         return new AuthResponse(
                 user.getId(),
@@ -123,14 +126,14 @@ public class AuthServiceImpl implements AuthService {
 
         return new ForgotPasswordResponse(
                 "Password reset token created.",
-                returnResetTokenForTesting ? rawToken : null
+                exposedVerificationToken(rawToken)
         );
     }
 
     @Override
     @Transactional
     public ActionResponse resetPassword(ResetPasswordRequest request) {
-        VerificationToken token = getValidResetToken(request.token());
+        VerificationToken token = getValidResetToken(request.token(), request.email());
 
         User user = userRepository.findById(token.getUserId())
                 .orElseThrow(InvalidPasswordResetTokenException::new);
@@ -167,6 +170,10 @@ public class AuthServiceImpl implements AuthService {
         if (user.getAccountStatus() != AccountStatus.DELETED) {
             return new AccountRecoveryResponse(genericMessage, null);
         }
+        if (user.getPasswordHash() == null
+                || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+            throw new InvalidCredentialsException();
+        }
 
         OffsetDateTime now = OffsetDateTime.now();
         if (isTokenRequestCoolingDown(user, VerificationTokenType.ACCOUNT_RECOVERY, now)) {
@@ -185,14 +192,14 @@ public class AuthServiceImpl implements AuthService {
 
         return new AccountRecoveryResponse(
                 "Account recovery token created.",
-                returnResetTokenForTesting ? rawToken : null
+                exposedVerificationToken(rawToken)
         );
     }
 
     @Override
     @Transactional
     public ConfirmAccountRecoveryResponse confirmAccountRecovery(ConfirmAccountRecoveryRequest request) {
-        VerificationToken token = getValidAccountRecoveryToken(request.token());
+        VerificationToken token = getValidAccountRecoveryToken(request.token(), request.email());
 
         User user = userRepository.findById(token.getUserId())
                 .orElseThrow(InvalidVerificationTokenException::new);
@@ -210,7 +217,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public ValidateResetTokenResponse validateResetToken(ValidateResetTokenRequest request) {
         try {
-            getValidResetToken(request.token());
+            getValidResetToken(request.token(), request.email());
             return new ValidateResetTokenResponse(true, "Reset token is valid.");
         } catch (InvalidPasswordResetTokenException | ExpiredPasswordResetTokenException ex) {
             return new ValidateResetTokenResponse(false, ex.getMessage());
@@ -227,9 +234,11 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private void assertLoginAllowed(User user) {
-        if (user.getAccountStatus() == AccountStatus.SUSPENDED
-                || user.getAccountStatus() == AccountStatus.DELETED) {
-            throw new InvalidCredentialsException();
+        if (user.getAccountStatus() == AccountStatus.SUSPENDED) {
+            throw new AccountSuspendedException();
+        }
+        if (user.getAccountStatus() == AccountStatus.DELETED) {
+            throw new AccountDeletedException(user.getEmail());
         }
     }
 
@@ -276,7 +285,11 @@ public class AuthServiceImpl implements AuthService {
         verificationTokenRepository.save(tokenEntity);
     }
 
-    private VerificationToken getValidResetToken(String rawToken) {
+    private VerificationToken getValidResetToken(String rawToken, String email) {
+        if (isDemoVerificationCode(rawToken)) {
+            return getLatestValidTokenForEmail(email, VerificationTokenType.PASSWORD_RESET);
+        }
+
         String tokenHash = hashToken(rawToken);
 
         VerificationToken token = verificationTokenRepository
@@ -294,7 +307,11 @@ public class AuthServiceImpl implements AuthService {
         return token;
     }
 
-    private VerificationToken getValidAccountRecoveryToken(String rawToken) {
+    private VerificationToken getValidAccountRecoveryToken(String rawToken, String email) {
+        if (isDemoVerificationCode(rawToken)) {
+            return getLatestValidTokenForEmail(email, VerificationTokenType.ACCOUNT_RECOVERY);
+        }
+
         String tokenHash = hashToken(rawToken);
 
         VerificationToken token = verificationTokenRepository
@@ -310,6 +327,45 @@ public class AuthServiceImpl implements AuthService {
         }
 
         return token;
+    }
+
+    private VerificationToken getLatestValidTokenForEmail(
+            String email,
+            VerificationTokenType tokenType
+    ) {
+        if (email == null || email.isBlank()) {
+            throw invalidTokenFor(tokenType);
+        }
+
+        User user = userRepository.findByEmail(normalizeEmail(email))
+                .orElseThrow(() -> invalidTokenFor(tokenType));
+
+        return verificationTokenRepository
+                .findByUserIdAndTokenTypeAndUsedAtIsNullAndExpiresAtAfter(
+                        user.getId(),
+                        tokenType,
+                        OffsetDateTime.now()
+                )
+                .orElseThrow(() -> invalidTokenFor(tokenType));
+    }
+
+    private RuntimeException invalidTokenFor(VerificationTokenType tokenType) {
+        return tokenType == VerificationTokenType.PASSWORD_RESET
+                ? new InvalidPasswordResetTokenException()
+                : new InvalidVerificationTokenException();
+    }
+
+    private String exposedVerificationToken(String rawToken) {
+        if (returnResetTokenForTesting && !demoVerificationCode.isEmpty()) {
+            return demoVerificationCode;
+        }
+        return returnResetTokenForTesting ? rawToken : null;
+    }
+
+    private boolean isDemoVerificationCode(String token) {
+        return returnResetTokenForTesting
+                && !demoVerificationCode.isEmpty()
+                && demoVerificationCode.equals(token);
     }
 
     private String normalizeEmail(String email) {

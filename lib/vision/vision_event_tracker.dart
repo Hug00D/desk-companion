@@ -28,11 +28,17 @@ class VisionEventTracker {
     this.userAwayStableFrames = 15,
     this.attentionStableFrames = 4,
     this.fatigueStableFrames = 2,
+    this.distractedStableFrames = 4,
+    this.drowsyStableFrames = 3,
+    this.postureDownStableFrames = 4,
     this.attentionPersistCooldown = const Duration(seconds: 15),
     this.partialUserPersistCooldown = const Duration(seconds: 20),
     this.userAwayPersistCooldown = const Duration(seconds: 30),
     this.fatigueNotifyCooldown = const Duration(seconds: 20),
     this.fatiguePersistCooldown = const Duration(seconds: 20),
+    this.distractedPersistCooldown = const Duration(seconds: 20),
+    this.drowsyPersistCooldown = const Duration(seconds: 20),
+    this.postureDownPersistCooldown = const Duration(seconds: 30),
     this.userReturnedPersistCooldown = const Duration(seconds: 10),
   });
 
@@ -41,11 +47,17 @@ class VisionEventTracker {
   final int userAwayStableFrames;
   final int attentionStableFrames;
   final int fatigueStableFrames;
+  final int distractedStableFrames;
+  final int drowsyStableFrames;
+  final int postureDownStableFrames;
   final Duration attentionPersistCooldown;
   final Duration partialUserPersistCooldown;
   final Duration userAwayPersistCooldown;
   final Duration fatigueNotifyCooldown;
   final Duration fatiguePersistCooldown;
+  final Duration distractedPersistCooldown;
+  final Duration drowsyPersistCooldown;
+  final Duration postureDownPersistCooldown;
   final Duration userReturnedPersistCooldown;
 
   VisionEventType? _candidateType;
@@ -138,6 +150,12 @@ class VisionEventTracker {
         return attentionStableFrames;
       case VisionEventType.fatigueDetected:
         return fatigueStableFrames;
+      case VisionEventType.distracted:
+        return distractedStableFrames;
+      case VisionEventType.drowsyDetected:
+        return drowsyStableFrames;
+      case VisionEventType.postureDownDetected:
+        return postureDownStableFrames;
       case VisionEventType.userReturned:
       case VisionEventType.normal:
         return normalStableFrames;
@@ -173,6 +191,12 @@ class VisionEventTracker {
         return userAwayPersistCooldown;
       case VisionEventType.fatigueDetected:
         return fatiguePersistCooldown;
+      case VisionEventType.distracted:
+        return distractedPersistCooldown;
+      case VisionEventType.drowsyDetected:
+        return drowsyPersistCooldown;
+      case VisionEventType.postureDownDetected:
+        return postureDownPersistCooldown;
       case VisionEventType.userReturned:
         return userReturnedPersistCooldown;
       case VisionEventType.normal:

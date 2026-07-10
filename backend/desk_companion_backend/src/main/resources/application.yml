@@ -26,3 +26,4 @@ management:
 app:
   auth:
     return-reset-token-for-testing: true
+    demo-verification-code: ${APP_AUTH_DEMO_VERIFICATION_CODE:1234}

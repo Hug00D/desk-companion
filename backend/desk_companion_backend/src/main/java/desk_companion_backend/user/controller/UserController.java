@@ -1,5 +1,6 @@
 package desk_companion_backend.user.controller;
 
+import desk_companion_backend.user.dto.DeleteAccountRequest;
 import desk_companion_backend.user.dto.RegisterUserRequest;
 import desk_companion_backend.user.dto.UserResponse;
 import desk_companion_backend.user.service.UserService;
@@ -33,7 +34,10 @@ public class UserController {
 
     @DeleteMapping("/{userId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void softDelete(@PathVariable UUID userId) {
-        userService.softDelete(userId);
+    public void softDelete(
+            @PathVariable UUID userId,
+            @Valid @RequestBody DeleteAccountRequest request
+    ) {
+        userService.softDelete(userId, request.password());
     }
 }

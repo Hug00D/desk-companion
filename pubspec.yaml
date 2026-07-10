@@ -41,6 +41,7 @@ dependencies:
   video_thumbnail: ^0.5.3
   rive: ^0.14.8
   http: ^1.6.0
+  audioplayers: ^6.5.1
 
 dev_dependencies:
   flutter_test:
@@ -64,8 +65,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/test.mp4
     - assets/test_face.mp4
     - assets/mock/
+    - assets/audio/reminders/
     - assets/test2.riv
 
   # To add assets to your application, add an assets section, like this:
