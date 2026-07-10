@@ -38,15 +38,15 @@ class PostureDownDetectionResult {
 
 class PostureDownDetector {
   PostureDownDetector({
-    this.downScoreThreshold = 55,
-    this.strongDownScoreThreshold = 78,
-    this.downFrames = 4,
-    this.recoveryFrames = 2,
-    this.baselineFrames = 8,
-    this.missingPoseHoldFrames = 3,
+    this.downScoreThreshold = 35,
+    this.strongDownScoreThreshold = 70,
+    this.downFrames = 2,
+    this.recoveryFrames = 3,
+    this.baselineFrames = 3,
+    this.missingPoseHoldFrames = 8,
     this.shoulderDropRatioForMaxScore = 0.06,
     this.noseDropRatioForMaxScore = 0.06,
-    this.shoulderShrinkRatioForMaxScore = 0.34,
+    this.shoulderShrinkRatioForMaxScore = 0.22,
   });
 
   final double downScoreThreshold;
@@ -300,44 +300,33 @@ class PostureDownDetector {
     );
 
     final headDropScore = math.max(headLowScore, noseDropScore);
-    final hasHeadDropEvidence = headLowScore >= 55 || noseDropScore >= 70;
-    final hasStrongHeadDropEvidence = headLowScore >= 70 || noseDropScore >= 85;
     final hasBodyCollapseEvidence =
-        (shoulderShrinkScore >= 55 && hasHeadDropEvidence) ||
+        shoulderShrinkScore >= 45 ||
         sideProneScore >= 55 ||
         !result.hasFace && shoulderDropScore >= 20;
     final gatedHeadDropScore = hasBodyCollapseEvidence ? headDropScore : 0.0;
 
     final gatedShoulderDropScore =
-        result.hasFace && !hasHeadDropEvidence && sideProneScore < 55
+        result.hasFace && shoulderShrinkScore < 45 && sideProneScore < 55
         ? math.min(shoulderDropScore, downScoreThreshold - 1)
         : shoulderDropScore;
 
-    final gatedShoulderShrinkScore =
-        result.hasFace && !hasStrongHeadDropEvidence && sideProneScore < 65
-        ? math.min(shoulderShrinkScore, downScoreThreshold - 1)
-        : shoulderShrinkScore;
-
     final hasBodyCollapseEvidenceForProne =
-        (shoulderShrinkScore >= 55 && hasHeadDropEvidence) ||
-        shoulderDropScore >= 30;
+        shoulderShrinkScore >= 45 || shoulderDropScore >= 24;
     final gatedSideProneScore = hasBodyCollapseEvidenceForProne
         ? sideProneScore
         : 0.0;
 
     final rawTotal = [
       gatedShoulderDropScore,
-      gatedShoulderShrinkScore,
+      shoulderShrinkScore,
       gatedHeadDropScore,
       visibilityScore,
       gatedSideProneScore,
     ].reduce(math.max);
-    final bodyCollapseScore = math.max(
-      shoulderDropScore,
-      gatedShoulderShrinkScore,
-    );
+    final bodyCollapseScore = math.max(shoulderDropScore, shoulderShrinkScore);
     final faceVisibleWithoutBodyCollapse =
-        result.hasFace && bodyCollapseScore < downScoreThreshold;
+        result.hasFace && bodyCollapseScore < 45;
     final total = faceVisibleWithoutBodyCollapse
         ? math.min(rawTotal, downScoreThreshold - 1)
         : rawTotal;
