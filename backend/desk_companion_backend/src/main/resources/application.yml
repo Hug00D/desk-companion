@@ -27,3 +27,12 @@ app:
   auth:
     return-reset-token-for-testing: true
     demo-verification-code: ${APP_AUTH_DEMO_VERIFICATION_CODE:1234}
+  assistant:
+    ollama-base-url: ${OLLAMA_BASE_URL:${ASSISTANT_SERVICE_URL:http://localhost:11434}}
+    model: ${OLLAMA_MODEL:qwen2.5:7b}
+    chat-temperature: ${OLLAMA_CHAT_TEMPERATURE:0.8}
+    chat-num-predict: ${OLLAMA_CHAT_NUM_PREDICT:96}
+    request-timeout-seconds: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:30}
+    decide-temperature: ${OLLAMA_DECIDE_TEMPERATURE:0.15}
+    decide-num-predict: ${OLLAMA_DECIDE_NUM_PREDICT:120}
+    decide-timeout-seconds: ${OLLAMA_DECIDE_TIMEOUT_SECONDS:45}
