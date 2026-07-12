@@ -89,9 +89,10 @@ class CompanionStateEvaluator {
     required VisionResult result,
     required int previousClosedFrameCount,
     required int previousDistractedFrameCount,
-    required int previousPostureDownFrameCount,
-    required bool shouldUpdatePostureDown,
+    required bool isFreshPoseResult,
+    DateTime? observedAt,
   }) {
+    final timestamp = observedAt ?? DateTime.now();
     final eyeResult = eyeStateDetector.evaluate(
       result: result,
       previousClosedFrameCount: previousClosedFrameCount,
@@ -99,34 +100,42 @@ class CompanionStateEvaluator {
     final headOffsetResult = headOffsetDetector.evaluate(
       result: result,
       previousDistractedFrameCount: previousDistractedFrameCount,
+      observedAt: timestamp,
     );
     final postureDownResult = postureDownDetector.evaluate(
       result: result,
-      previousDownFrameCount: previousPostureDownFrameCount,
-      shouldUpdate: shouldUpdatePostureDown,
+      shouldUpdate: isFreshPoseResult,
+      observedAt: timestamp,
     );
     final poseResult = poseStateDetector.evaluate(
       result: result,
       postureDownResult: postureDownResult,
       postureDownFrameCount: postureDownResult.downFrameCount,
       isPostureDown: postureDownResult.state == PostureDownState.down,
+      eyeState: eyeResult.state,
     );
     final presenceState = presenceDetector.evaluate(result);
     _updateRecentPoseContext(
       result: result,
       postureDownResult: postureDownResult,
+      isFreshPoseResult: isFreshPoseResult,
     );
     final combinedStatus = _combine(
       eyeState: eyeResult.state,
       headOffsetState: headOffsetResult.state,
       poseState: poseResult.state,
       presenceState: presenceState,
+      suppressEyeWarning: _shouldSuppressEyeWarning(
+        result: result,
+        postureDownResult: postureDownResult,
+      ),
     );
     final resolvedStatus = _resolveFaceMissingContext(
       result: result,
       postureDownResult: postureDownResult,
       eyeState: eyeResult.state,
       baseStatus: combinedStatus,
+      isFreshPoseResult: isFreshPoseResult,
     );
     final resolvedHeadOffsetResult =
         resolvedStatus == CompanionStatus.distracted &&
@@ -153,11 +162,14 @@ class CompanionStateEvaluator {
     required HeadOffsetState headOffsetState,
     required PoseState poseState,
     required PresenceState presenceState,
+    required bool suppressEyeWarning,
   }) {
     if (poseState == PoseState.postureDown) return CompanionStatus.postureDown;
     if (poseState == PoseState.drowsy) return CompanionStatus.drowsy;
-    if (eyeState == EyeState.fatigue) return CompanionStatus.fatigue;
-    if (eyeState == EyeState.attention) return CompanionStatus.attention;
+    if (!suppressEyeWarning) {
+      if (eyeState == EyeState.fatigue) return CompanionStatus.fatigue;
+      if (eyeState == EyeState.attention) return CompanionStatus.attention;
+    }
     if (headOffsetState == HeadOffsetState.distracted) {
       return CompanionStatus.distracted;
     }
@@ -165,16 +177,33 @@ class CompanionStateEvaluator {
     return CompanionStatus.normal;
   }
 
+  bool _shouldSuppressEyeWarning({
+    required VisionResult result,
+    required PostureDownDetectionResult postureDownResult,
+  }) {
+    final hasPostureCandidate = postureDownResult.downFrameCount > 0;
+    final headPitch = result.headPitch ?? 0;
+    final headOffsetScore = result.headOffsetScore ?? 0;
+    final headLowScore = postureDownResult.headLowScore ?? 0;
+    final noseDropScore = postureDownResult.noseDropScore ?? 0;
+    final headIsDropping =
+        headPitch >= 24 || (headLowScore >= 40 && noseDropScore >= 55);
+    final faceIsTurning = headOffsetScore >= 45;
+    return hasPostureCandidate || headIsDropping || faceIsTurning;
+  }
+
   CompanionStatus _resolveFaceMissingContext({
     required VisionResult result,
     required PostureDownDetectionResult postureDownResult,
     required EyeState eyeState,
     required CompanionStatus baseStatus,
+    required bool isFreshPoseResult,
   }) {
     final hasStrongPostureDownEvidence = _hasStrongPostureDownEvidence(
       postureDownResult,
     );
-    final shouldLatchPostureDown = hasStrongPostureDownEvidence;
+    final shouldLatchPostureDown =
+        postureDownResult.state == PostureDownState.down;
     if (shouldLatchPostureDown) {
       _isPostureDownLatched = true;
       _postureDownRecoveryFrames = 0;
@@ -184,11 +213,13 @@ class CompanionStateEvaluator {
     }
 
     if (_isPostureDownLatched) {
-      if (_hasClearPostureDownRecovery(
-        result: result,
-        postureDownResult: postureDownResult,
-      )) {
+      if (isFreshPoseResult &&
+          _hasClearPostureDownRecovery(
+            result: result,
+            postureDownResult: postureDownResult,
+          )) {
         _postureDownRecoveryFrames++;
+        // PostureDownDetector already requires two fresh recovery samples.
         if (_postureDownRecoveryFrames >= 1) {
           _isPostureDownLatched = false;
           _lastFaceMissingContext = null;
@@ -204,20 +235,6 @@ class CompanionStateEvaluator {
     }
 
     if (result.hasFace) {
-      if (!result.hasPose &&
-          (_recentPostureDownEvidenceFrames > 0 ||
-              _recentProneTransitionEvidenceFrames > 0)) {
-        _isPostureDownLatched = true;
-        _postureDownRecoveryFrames = 0;
-        return CompanionStatus.postureDown;
-      }
-      if (!result.hasPose && _recentDeepHeadDropFrames > 0) {
-        _isPostureDownLatched = true;
-        _postureDownRecoveryFrames = 0;
-        _lastFaceMissingContext = CompanionStatus.postureDown;
-        return CompanionStatus.postureDown;
-      }
-
       _faceMissingFrameCount = 0;
       _lastFaceMissingContext = null;
       final visibleStatus =
@@ -260,27 +277,6 @@ class CompanionStateEvaluator {
     final hasRecentProneEvidence =
         _recentPostureDownEvidenceFrames > 0 ||
         _recentProneTransitionEvidenceFrames > 0;
-    final recentlyHeadDropped = _recentHeadDropFrames > 0;
-    final recentlyDeepHeadDropped = _recentDeepHeadDropFrames > 0;
-
-    if (!result.hasPose &&
-        recentlyHeadDropped &&
-        hasRecentProneEvidence &&
-        _faceMissingFrameCount >= 2) {
-      _isPostureDownLatched = true;
-      _postureDownRecoveryFrames = 0;
-      return CompanionStatus.postureDown;
-    }
-
-    if (!result.hasPose &&
-        recentlyDeepHeadDropped &&
-        _faceMissingFrameCount >= 2) {
-      _isPostureDownLatched = true;
-      _postureDownRecoveryFrames = 0;
-      _lastFaceMissingContext = CompanionStatus.postureDown;
-      return CompanionStatus.postureDown;
-    }
-
     if (_lastFaceVisibleContext == CompanionStatus.drowsy &&
         !hasRecentProneEvidence) {
       _lastFaceMissingContext = CompanionStatus.drowsy;
@@ -288,8 +284,7 @@ class CompanionStateEvaluator {
     }
 
     if (shouldersNearBaseline) {
-      final inferred =
-          _lastFaceVisibleContext == CompanionStatus.drowsy
+      final inferred = _lastFaceVisibleContext == CompanionStatus.drowsy
           ? CompanionStatus.drowsy
           : headDropLikely
           ? CompanionStatus.attention
@@ -358,7 +353,9 @@ class CompanionStateEvaluator {
   void _updateRecentPoseContext({
     required VisionResult result,
     required PostureDownDetectionResult postureDownResult,
+    required bool isFreshPoseResult,
   }) {
+    if (!isFreshPoseResult) return;
     final shoulderDropScore = postureDownResult.shoulderDropScore;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore;
     final headLowScore = postureDownResult.headLowScore;
