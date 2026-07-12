@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'one_euro_filter.dart';
 import 'vision_result.dart';
 
 enum PostureDownState { unavailable, normal, down }
@@ -39,25 +40,39 @@ class PostureDownDetectionResult {
 class PostureDownDetector {
   PostureDownDetector({
     this.downScoreThreshold = 35,
-    this.strongDownScoreThreshold = 70,
-    this.downFrames = 2,
-    this.recoveryFrames = 3,
-    this.baselineFrames = 3,
+    this.evidenceWindowSize = 3,
+    this.confirmationVotes = 2,
+    this.recoveryFrames = 2,
+    this.baselineFrames = 5,
     this.missingPoseHoldFrames = 8,
     this.shoulderDropRatioForMaxScore = 0.06,
     this.noseDropRatioForMaxScore = 0.06,
     this.shoulderShrinkRatioForMaxScore = 0.22,
-  });
+    OneEuroFilter? headShoulderFilter,
+    OneEuroFilter? shoulderCenterFilter,
+    OneEuroFilter? noseYFilter,
+    OneEuroFilter? shoulderWidthFilter,
+  }) : headShoulderFilter =
+           headShoulderFilter ?? OneEuroFilter(minCutoff: 1.2, beta: 0.05),
+       shoulderCenterFilter =
+           shoulderCenterFilter ?? OneEuroFilter(minCutoff: 1.2, beta: 0.05),
+       noseYFilter = noseYFilter ?? OneEuroFilter(minCutoff: 1.2, beta: 0.05),
+       shoulderWidthFilter =
+           shoulderWidthFilter ?? OneEuroFilter(minCutoff: 1.2, beta: 0.05);
 
   final double downScoreThreshold;
-  final double strongDownScoreThreshold;
-  final int downFrames;
+  final int evidenceWindowSize;
+  final int confirmationVotes;
   final int recoveryFrames;
   final int baselineFrames;
   final int missingPoseHoldFrames;
   final double shoulderDropRatioForMaxScore;
   final double noseDropRatioForMaxScore;
   final double shoulderShrinkRatioForMaxScore;
+  final OneEuroFilter headShoulderFilter;
+  final OneEuroFilter shoulderCenterFilter;
+  final OneEuroFilter noseYFilter;
+  final OneEuroFilter shoulderWidthFilter;
 
   final List<double> _baselineHeadShoulderRatioSamples = <double>[];
   final List<double> _baselineShoulderCenterYRatioSamples = <double>[];
@@ -69,24 +84,17 @@ class PostureDownDetector {
   double? _baselineShoulderWidthRatio;
   _PostureScore? _lastScore;
   _PostureScore? _lastDownScore;
+  final List<bool> _downEvidenceWindow = <bool>[];
+  bool _isDownConfirmed = false;
   int _missingPoseFrameCount = 0;
   int _recoveryFrameCount = 0;
 
   PostureDownDetectionResult evaluate({
     required VisionResult result,
-    required int previousDownFrameCount,
     required bool shouldUpdate,
+    DateTime? observedAt,
   }) {
     if (!shouldUpdate) {
-      if (result.hasFace && !result.hasPose) {
-        _clearDownHold();
-        return const PostureDownDetectionResult(
-          state: PostureDownState.unavailable,
-          score: null,
-          downFrameCount: 0,
-        );
-      }
-
       final score = _lastScore;
       if (score == null) {
         return const PostureDownDetectionResult(
@@ -96,42 +104,37 @@ class PostureDownDetector {
         );
       }
 
-      return _holdScore(
-        score: score,
-        previousDownFrameCount: previousDownFrameCount,
-      );
+      return _holdScore(score: score);
     }
 
-    final score = _calculateScore(result, shouldUpdate: shouldUpdate);
+    final score = _calculateScore(
+      result,
+      shouldUpdate: shouldUpdate,
+      observedAt: observedAt,
+    );
     if (score == null) {
-      if (result.hasFace) {
-        _clearDownHold();
-        return const PostureDownDetectionResult(
-          state: PostureDownState.unavailable,
-          score: null,
-          downFrameCount: 0,
-        );
-      }
-
       _missingPoseFrameCount++;
       final lastScore = _lastScore;
-      if (lastScore != null &&
-          _missingPoseFrameCount <= missingPoseHoldFrames) {
-        if (previousDownFrameCount >= downFrames) {
-          final heldScore = _lastDownScore ?? lastScore;
-          return _buildResultFromScore(
-            score: heldScore,
-            downFrameCount: previousDownFrameCount + 1,
-            state: PostureDownState.down,
-          );
+      final votes = _positiveEvidenceVotes;
+      if (!_isDownConfirmed &&
+          !result.hasFace &&
+          votes >= confirmationVotes - 1 &&
+          lastScore != null) {
+        _addDownEvidence(true);
+        if (_positiveEvidenceVotes >= confirmationVotes) {
+          _isDownConfirmed = true;
+          _lastDownScore = lastScore;
         }
-
-        return _holdScore(
-          score: lastScore,
-          previousDownFrameCount: previousDownFrameCount,
-        );
       }
 
+      if (lastScore != null &&
+          _missingPoseFrameCount <= missingPoseHoldFrames) {
+        return _holdScore(score: _lastDownScore ?? lastScore);
+      }
+
+      if (_isDownConfirmed && _lastDownScore != null) {
+        return _holdScore(score: _lastDownScore!);
+      }
       return const PostureDownDetectionResult(
         state: PostureDownState.unavailable,
         score: null,
@@ -140,94 +143,106 @@ class PostureDownDetector {
     }
     _missingPoseFrameCount = 0;
 
-    return _evaluateScore(
-      score: score,
-      previousDownFrameCount: previousDownFrameCount,
-    );
+    return _evaluateScore(score: score);
   }
 
-  PostureDownDetectionResult _holdScore({
-    required _PostureScore score,
-    required int previousDownFrameCount,
-  }) {
-    final canConfirmFromHeldFrame =
-        previousDownFrameCount > 0 && _isStrongProneEvidence(score);
-    final downFrameCount = canConfirmFromHeldFrame
-        ? math.min(previousDownFrameCount + 1, downFrames)
-        : previousDownFrameCount;
-    final isConfirmedDown = downFrameCount >= downFrames;
-    if (isConfirmedDown) {
-      _lastDownScore = score;
-    }
-
-    final displayScore = isConfirmedDown
+  PostureDownDetectionResult _holdScore({required _PostureScore score}) {
+    final displayScore = _isDownConfirmed
         ? score
         : _withTotal(score, math.min(score.total, downScoreThreshold - 1));
 
     return _buildResultFromScore(
       score: displayScore,
-      downFrameCount: downFrameCount,
-      state: isConfirmedDown ? PostureDownState.down : PostureDownState.normal,
+      downFrameCount: _positiveEvidenceVotes,
+      state: _isDownConfirmed ? PostureDownState.down : PostureDownState.normal,
     );
   }
 
-  PostureDownDetectionResult _evaluateScore({
-    required _PostureScore score,
-    required int previousDownFrameCount,
-  }) {
-    final isDown = !score.isCalibrating && score.total >= downScoreThreshold;
-    if (isDown) {
-      _lastDownScore = score;
+  PostureDownDetectionResult _evaluateScore({required _PostureScore score}) {
+    _lastScore = score;
+    if (score.isCalibrating) {
+      _downEvidenceWindow.clear();
+      _recoveryFrameCount = 0;
+      return _buildResultFromScore(
+        score: score,
+        downFrameCount: 0,
+        state: PostureDownState.normal,
+      );
     }
 
-    if (!isDown && previousDownFrameCount >= downFrames) {
+    final isDownEvidence = _isPostureDownEvidence(score);
+    _addDownEvidence(isDownEvidence);
+
+    if (_isDownConfirmed) {
       if (_isClearlyRecovered(score)) {
-        _clearDownHold();
-        _lastScore = score;
-        return _buildResultFromScore(
-          score: score,
-          downFrameCount: 0,
-          state: PostureDownState.normal,
-        );
+        _recoveryFrameCount++;
+      } else {
+        _recoveryFrameCount = 0;
       }
 
-      _recoveryFrameCount++;
       if (_recoveryFrameCount < recoveryFrames) {
         final heldScore = _lastDownScore ?? score;
-        _lastScore = heldScore;
         return _buildResultFromScore(
           score: heldScore,
-          downFrameCount: previousDownFrameCount,
+          downFrameCount: _positiveEvidenceVotes,
           state: PostureDownState.down,
         );
       }
-    } else {
-      _recoveryFrameCount = 0;
-    }
 
-    final downFrameCount = isDown ? previousDownFrameCount + 1 : 0;
-    _lastScore = score;
-    if (downFrameCount >= downFrames) {
+      _clearConfirmedState();
+      _lastScore = score;
       return _buildResultFromScore(
         score: score,
-        downFrameCount: downFrameCount,
+        downFrameCount: 0,
+        state: PostureDownState.normal,
+      );
+    }
+
+    if (_positiveEvidenceVotes >= confirmationVotes) {
+      _isDownConfirmed = true;
+      _lastDownScore = score;
+      _recoveryFrameCount = 0;
+      return _buildResultFromScore(
+        score: score,
+        downFrameCount: _positiveEvidenceVotes,
         state: PostureDownState.down,
       );
     }
 
-    final displayScore = isDown
+    final displayScore = isDownEvidence
         ? _withTotal(score, math.min(score.total, downScoreThreshold - 1))
         : score;
     return _buildResultFromScore(
       score: displayScore,
-      downFrameCount: downFrameCount,
+      downFrameCount: _positiveEvidenceVotes,
       state: PostureDownState.normal,
     );
+  }
+
+  int get _positiveEvidenceVotes =>
+      _downEvidenceWindow.where((value) => value).length;
+
+  void _addDownEvidence(bool value) {
+    _downEvidenceWindow.add(value);
+    if (_downEvidenceWindow.length > evidenceWindowSize) {
+      _downEvidenceWindow.removeAt(0);
+    }
+  }
+
+  bool _isPostureDownEvidence(_PostureScore score) {
+    final bodyCollapsed =
+        score.shoulderDrop >= 24 || score.shoulderShrink >= 45;
+    final headCollapsed = score.headLow >= 55 || score.noseDrop >= 70;
+    final proneContext = !score.hasFace || score.sideProne >= 65;
+    return score.total >= downScoreThreshold &&
+        bodyCollapsed &&
+        (headCollapsed || proneContext);
   }
 
   _PostureScore? _calculateScore(
     VisionResult result, {
     bool shouldUpdate = true,
+    DateTime? observedAt,
   }) {
     final shoulderCenterY = result.shoulderCenterY;
     final shoulderWidth = result.shoulderWidth;
@@ -246,13 +261,28 @@ class PostureDownDetector {
       return null;
     }
 
-    final headShoulderRatio = (shoulderCenterY - noseY) / shoulderWidth;
-    final shoulderWidthRatio = shoulderWidth / imageWidth;
-    final shoulderCenterYRatio = shoulderCenterY / imageHeight;
-    final noseYRatio = noseY / imageHeight;
+    final timestamp = observedAt ?? DateTime.now();
+    final timestampSeconds =
+        timestamp.microsecondsSinceEpoch / Duration.microsecondsPerSecond;
+    final headShoulderRatio = headShoulderFilter.filter(
+      (shoulderCenterY - noseY) / shoulderWidth,
+      timestampSeconds: timestampSeconds,
+    );
+    final shoulderWidthRatio = shoulderWidthFilter.filter(
+      shoulderWidth / imageWidth,
+      timestampSeconds: timestampSeconds,
+    );
+    final shoulderCenterYRatio = shoulderCenterFilter.filter(
+      shoulderCenterY / imageHeight,
+      timestampSeconds: timestampSeconds,
+    );
+    final noseYRatio = noseYFilter.filter(
+      noseY / imageHeight,
+      timestampSeconds: timestampSeconds,
+    );
 
     if (_baselineHeadShoulderRatio == null) {
-      if (shouldUpdate && result.hasFace) {
+      if (shouldUpdate && _canUseForBaseline(result)) {
         _recordBaseline(
           headShoulderRatio: headShoulderRatio,
           shoulderWidthRatio: shoulderWidthRatio,
@@ -345,6 +375,17 @@ class PostureDownDetector {
     );
   }
 
+  bool _canUseForBaseline(VisionResult result) {
+    if (!result.hasFace) return false;
+    final leftVisibility = result.leftShoulderVisibility;
+    final rightVisibility = result.rightShoulderVisibility;
+    if (leftVisibility != null && leftVisibility < 0.5) return false;
+    if (rightVisibility != null && rightVisibility < 0.5) return false;
+    final pitch = result.headPitch;
+    if (pitch != null && pitch.abs() > 25) return false;
+    return true;
+  }
+
   double _headLowScore({required double headShoulderRatio}) {
     final baseline = _baselineHeadShoulderRatio;
     if (baseline == null || baseline <= 0) return 0;
@@ -395,14 +436,20 @@ class PostureDownDetector {
     _baselineNoseYRatio = null;
     _lastScore = null;
     _lastDownScore = null;
+    _downEvidenceWindow.clear();
+    _isDownConfirmed = false;
     _missingPoseFrameCount = 0;
     _recoveryFrameCount = 0;
+    headShoulderFilter.reset();
+    shoulderCenterFilter.reset();
+    noseYFilter.reset();
+    shoulderWidthFilter.reset();
   }
 
-  void _clearDownHold() {
-    _lastScore = null;
+  void _clearConfirmedState() {
+    _downEvidenceWindow.clear();
+    _isDownConfirmed = false;
     _lastDownScore = null;
-    _missingPoseFrameCount = 0;
     _recoveryFrameCount = 0;
   }
 
@@ -558,27 +605,6 @@ class PostureDownDetector {
       hasFace: score.hasFace,
       isCalibrating: score.isCalibrating,
     );
-  }
-
-  bool _isStrongProneEvidence(_PostureScore score) {
-    if (score.isCalibrating || score.total < strongDownScoreThreshold) {
-      return false;
-    }
-
-    final hasSideProneWithBodyCollapse =
-        score.sideProne >= 70 &&
-        score.headLow >= 75 &&
-        score.noseDrop >= 85 &&
-        (score.shoulderDrop >= 45 || score.shoulderShrink >= 70);
-    final hasShoulderShrinkProne =
-        score.shoulderShrink >= 80 &&
-        score.headLow >= 75 &&
-        score.noseDrop >= 85;
-    final hasFaceMissingShoulderDropEvidence =
-        score.sideProne >= 85 && score.shoulderDrop >= 45;
-    return hasSideProneWithBodyCollapse ||
-        hasShoulderShrinkProne ||
-        hasFaceMissingShoulderDropEvidence;
   }
 
   bool _isClearlyRecovered(_PostureScore score) {

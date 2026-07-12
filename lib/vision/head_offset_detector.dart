@@ -1,3 +1,4 @@
+import 'one_euro_filter.dart';
 import 'vision_result.dart';
 
 enum HeadOffsetState { unavailable, normal, distracted }
@@ -14,26 +15,33 @@ class HeadOffsetDetectionResult {
 
 class HeadOffsetDetector {
   HeadOffsetDetector({
-    this.distractedThreshold = 55,
-    this.strongDistractedThreshold = 72,
-    this.distractedFrames = 5,
-    this.missingFaceHoldFrames = 3,
-  });
+    this.enterThreshold = 55,
+    this.exitThreshold = 30,
+    this.evidenceWindowSize = 5,
+    this.enterVotes = 3,
+    this.exitFrames = 2,
+    this.missingFaceHoldFrames = 2,
+    OneEuroFilter? scoreFilter,
+  }) : scoreFilter = scoreFilter ?? OneEuroFilter(minCutoff: 1.25, beta: 0.08);
 
-  final double distractedThreshold;
-  final double strongDistractedThreshold;
-  final int distractedFrames;
+  final double enterThreshold;
+  final double exitThreshold;
+  final int evidenceWindowSize;
+  final int enterVotes;
+  final int exitFrames;
   final int missingFaceHoldFrames;
+  final OneEuroFilter scoreFilter;
 
-  double? _lastScore;
+  final List<bool> _evidenceWindow = <bool>[];
+  bool _isDistracted = false;
+  int _exitFrameCount = 0;
   int _missingFaceFrameCount = 0;
 
   HeadOffsetDetectionResult evaluate({
     required VisionResult result,
     required int previousDistractedFrameCount,
+    DateTime? observedAt,
   }) {
-    final score = _score(result);
-
     if (result.isHeadOffsetCalibrating) {
       reset();
       return const HeadOffsetDetectionResult(
@@ -42,56 +50,81 @@ class HeadOffsetDetector {
       );
     }
 
-    if (!result.hasFace || score == null) {
-      _missingFaceFrameCount += 1;
-      final shouldHoldDistracted = _lastScore != null &&
-          _missingFaceFrameCount <= missingFaceHoldFrames &&
-          _lastScore! >= strongDistractedThreshold &&
-          previousDistractedFrameCount >= distractedFrames;
-
-      if (shouldHoldDistracted) {
-        final distractedFrameCount = previousDistractedFrameCount + 1;
+    final rawScore = result.headOffsetScore;
+    if (!result.hasFace || rawScore == null) {
+      _missingFaceFrameCount++;
+      if (_isDistracted && _missingFaceFrameCount <= missingFaceHoldFrames) {
         return HeadOffsetDetectionResult(
-          state: distractedFrameCount >= distractedFrames
-              ? HeadOffsetState.distracted
-              : HeadOffsetState.normal,
-          distractedFrameCount: distractedFrameCount,
+          state: HeadOffsetState.distracted,
+          distractedFrameCount: previousDistractedFrameCount + 1,
         );
       }
-
       return const HeadOffsetDetectionResult(
         state: HeadOffsetState.unavailable,
         distractedFrameCount: 0,
       );
     }
 
-    _lastScore = score;
     _missingFaceFrameCount = 0;
+    final timestamp = observedAt ?? DateTime.now();
+    final score = scoreFilter.filter(
+      rawScore,
+      timestampSeconds:
+          timestamp.microsecondsSinceEpoch / Duration.microsecondsPerSecond,
+    );
 
-    final isDistracted = score >= distractedThreshold;
-    final distractedFrameCount = isDistracted
-        ? previousDistractedFrameCount + 1
-        : 0;
+    if (_isDistracted) {
+      if (score <= exitThreshold) {
+        _exitFrameCount++;
+      } else {
+        _exitFrameCount = 0;
+      }
 
-    if (distractedFrameCount >= distractedFrames) {
+      if (_exitFrameCount >= exitFrames) {
+        _isDistracted = false;
+        _exitFrameCount = 0;
+        _evidenceWindow.clear();
+        return const HeadOffsetDetectionResult(
+          state: HeadOffsetState.normal,
+          distractedFrameCount: 0,
+        );
+      }
+
       return HeadOffsetDetectionResult(
         state: HeadOffsetState.distracted,
-        distractedFrameCount: distractedFrameCount,
+        distractedFrameCount: previousDistractedFrameCount + 1,
+      );
+    }
+
+    _addEvidence(score >= enterThreshold);
+    final votes = _evidenceWindow.where((value) => value).length;
+    if (votes >= enterVotes) {
+      _isDistracted = true;
+      _exitFrameCount = 0;
+      return HeadOffsetDetectionResult(
+        state: HeadOffsetState.distracted,
+        distractedFrameCount: votes,
       );
     }
 
     return HeadOffsetDetectionResult(
       state: HeadOffsetState.normal,
-      distractedFrameCount: distractedFrameCount,
+      distractedFrameCount: votes,
     );
   }
 
-  double? _score(VisionResult result) {
-    return result.headOffsetScore;
+  void _addEvidence(bool value) {
+    _evidenceWindow.add(value);
+    if (_evidenceWindow.length > evidenceWindowSize) {
+      _evidenceWindow.removeAt(0);
+    }
   }
 
   void reset() {
-    _lastScore = null;
+    _evidenceWindow.clear();
+    _isDistracted = false;
+    _exitFrameCount = 0;
     _missingFaceFrameCount = 0;
+    scoreFilter.reset();
   }
 }
