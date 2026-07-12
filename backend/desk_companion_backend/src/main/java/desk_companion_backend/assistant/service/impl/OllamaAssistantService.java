@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class OllamaAssistantService implements AssistantService {
@@ -38,37 +39,21 @@ public class OllamaAssistantService implements AssistantService {
             Keep replies concise but complete. Use at most two short paragraphs.
             """;
 
+    // Keep both this prompt and the output contract tiny: the shared GPU
+    // evaluates prompt tokens at ~11/s and generates at under 1/s, so every
+    // extra token here directly extends decide() latency. The model only
+    // classifies; confirmation policy, confirmation text and chat wording are
+    // filled in by the backend afterwards (see expandDecision).
     private static final String DECIDE_SYSTEM_PROMPT = """
-            You are Desk Companion's intent decision engine.
-            Return JSON only. Do not write Markdown. Do not execute app actions.
-            The JSON object must contain exactly these keys:
-            mode, intent, confidence, needsConfirmation, confirmationText, chatReply, parameters.
-
-            Classify the user's message into exactly one mode:
-            - action: user clearly wants one supported app function.
-            - clarify: user may want an app function, but the intent is ambiguous or risky.
-            - chat: user only wants conversation, encouragement, explanation, or emotional support.
-
-            Supported action intents:
-            1. start_pomodoro
-            2. pause_pomodoro
-            3. resume_pomodoro
-            4. stop_pomodoro
-            5. show_focus_summary
-            6. show_timer_status
-            7. request_break
-            8. report_tired
-            9. report_distracted
-
-            Safety and stability rules:
-            - Only use the supported intent strings above.
-            - If duration is mentioned for start_pomodoro, put minutes in parameters.durationMinutes.
-            - If a field has no value, use null. If parameters is empty, use {}.
-            - If the user asks for an action but wording is unclear, use mode clarify.
-            - If action confidence is below 0.65, use mode clarify.
-            - If the user is just chatting, use mode chat and put the reply in chatReply.
-            - For action mode, keep chatReply null and provide a short confirmationText.
-            - For clarify mode, set needsConfirmation true and ask one short question in confirmationText.
+            Classify the user's message for the Desk Companion app.
+            Reply with compact JSON only, exactly these keys:
+            {"mode":"action|clarify|chat","intent":<string or null>,"confidence":<0..1>,"minutes":<int or null>}
+            Intents: start_pomodoro, pause_pomodoro, resume_pomodoro, stop_pomodoro,
+            show_focus_summary, show_timer_status, request_break, report_tired, report_distracted.
+            Rules:
+            - mode action: exactly one clear supported intent, else use mode clarify.
+            - mode chat: the user only wants conversation. intent must be null.
+            - minutes: only for start_pomodoro when the user names a duration.
             """;
 
     private static final String DECIDE_FORMAT = "json";
@@ -83,6 +68,22 @@ public class OllamaAssistantService implements AssistantService {
             "report_tired",
             "report_distracted"
     );
+
+    // State-changing intents always ask the user before running, matching the
+    // pending-action confirm flow on the Flutter side.
+    private static final Set<String> CONFIRMATION_REQUIRED_INTENTS = Set.of(
+            "start_pomodoro",
+            "pause_pomodoro",
+            "resume_pomodoro",
+            "stop_pomodoro",
+            "request_break"
+    );
+
+    private static final String CLARIFY_QUESTION =
+            "你是想執行功能、換個說法，還是單純聊聊呢？";
+
+    private record SlimDecision(String mode, String intent, Double confidence, Integer minutes) {
+    }
 
     private final AssistantProperties properties;
     private final RestClient chatRestClient;
@@ -174,18 +175,67 @@ public class OllamaAssistantService implements AssistantService {
             content = response.message().content().trim();
         }
 
-        AssistantDecideResponse decision = parseDecision(content);
+        SlimDecision decision = parseDecision(content);
         validateDecision(decision, content);
-        return new AssistantDecideResponse(
-                decision.mode(),
-                decision.intent(),
-                decision.confidence(),
-                decision.needsConfirmation(),
-                decision.confirmationText(),
-                decision.chatReply(),
-                decision.parameters() == null ? Map.of() : decision.parameters(),
-                response != null && response.model() != null ? response.model() : properties.getModel()
-        );
+        return expandDecision(decision, request, response);
+    }
+
+    private AssistantDecideResponse expandDecision(
+            SlimDecision decision,
+            AssistantDecideRequest request,
+            OllamaChatResponse response
+    ) {
+        String model = response != null && response.model() != null ? response.model() : properties.getModel();
+        double confidence = decision.confidence() == null
+                ? 0.5
+                : Math.min(1, Math.max(0, decision.confidence()));
+
+        return switch (decision.mode()) {
+            case "action" -> {
+                Map<String, Object> parameters = decision.minutes() == null
+                        ? Map.of()
+                        : Map.of("durationMinutes", decision.minutes());
+                yield new AssistantDecideResponse(
+                        "action",
+                        decision.intent(),
+                        confidence,
+                        CONFIRMATION_REQUIRED_INTENTS.contains(decision.intent()),
+                        confirmationTextFor(decision.intent(), parameters),
+                        null,
+                        parameters,
+                        model
+                );
+            }
+            case "clarify" -> new AssistantDecideResponse(
+                    "clarify",
+                    null,
+                    confidence,
+                    true,
+                    CLARIFY_QUESTION,
+                    null,
+                    Map.of(),
+                    model
+            );
+            // chat: reuse the chat pipeline for the wording so the decision
+            // output itself stays tiny.
+            default -> {
+                AssistantChatResponse chatResponse = chat(new AssistantChatRequest(
+                        request.message(),
+                        request.history(),
+                        request.context()
+                ));
+                yield new AssistantDecideResponse(
+                        "chat",
+                        null,
+                        confidence,
+                        false,
+                        null,
+                        chatResponse.message(),
+                        Map.of(),
+                        model
+                );
+            }
+        };
     }
 
     private AssistantDecideResponse decideWithLocalRules(AssistantDecideRequest request) {
@@ -224,31 +274,10 @@ public class OllamaAssistantService implements AssistantService {
             }
             return actionDecision("start_pomodoro", 0.93, parameters);
         }
-        if (containsAny(text, "\u5e6b\u6211\u4e00\u4e0b", "\u5feb\u4e0d\u884c", "\u90a3\u500b\u958b\u4e00\u4e0b")) {
-            return new AssistantDecideResponse(
-                    "clarify",
-                    null,
-                    0.52,
-                    true,
-                    "\u4f60\u662f\u60f3\u57f7\u884c\u529f\u80fd\uff0c\u9084\u662f\u60f3\u5148\u804a\u4e00\u4e0b\uff1f",
-                    null,
-                    Map.of(),
-                    properties.getModel()
-            );
-        }
-        if (containsAny(text, "\u9f13\u52f5", "\u966a\u6211", "\u804a\u804a", "\u632b\u6298")) {
-            return new AssistantDecideResponse(
-                    "chat",
-                    null,
-                    0.78,
-                    false,
-                    null,
-                    "\u6211\u5728\u9019\u88e1\u966a\u4f60\u3002\u5148\u628a\u773c\u524d\u6700\u5c0f\u7684\u4e00\u6b65\u505a\u5b8c\uff0c\u6211\u5011\u518d\u7e7c\u7e8c\u4e0b\u4e00\u6b65\u3002",
-                    Map.of(),
-                    properties.getModel()
-            );
-        }
-
+        // Only clear-cut action commands are short-circuited here. Chat-leaning
+        // or ambiguous input falls through to the model on purpose: canned
+        // replies for conversation feel robotic, and clarify-vs-chat is
+        // exactly the judgement the model is for.
         return null;
     }
 
@@ -379,13 +408,23 @@ public class OllamaAssistantService implements AssistantService {
         return DECIDE_SYSTEM_PROMPT + "\nCurrent app context: " + context;
     }
 
-    private AssistantDecideResponse parseDecision(String content) {
+    private SlimDecision parseDecision(String content) {
         if (content.isBlank()) {
             throw new AssistantDecisionParseException("Ollama returned an empty decision response.");
         }
 
         try {
-            return objectMapper.readValue(content, AssistantDecideResponse.class);
+            var node = objectMapper.readTree(content);
+            String intent = node.hasNonNull("intent") ? node.get("intent").asText() : null;
+            if (intent != null && (intent.isBlank() || "null".equals(intent) || "none".equals(intent))) {
+                intent = null;
+            }
+            return new SlimDecision(
+                    node.hasNonNull("mode") ? node.get("mode").asText() : null,
+                    intent,
+                    node.hasNonNull("confidence") ? node.get("confidence").asDouble() : null,
+                    node.hasNonNull("minutes") ? node.get("minutes").asInt() : null
+            );
         } catch (JsonProcessingException ex) {
             throw new AssistantDecisionParseException(
                     "Ollama decision response was not valid JSON. Raw response: " + content
@@ -393,29 +432,15 @@ public class OllamaAssistantService implements AssistantService {
         }
     }
 
-    private void validateDecision(AssistantDecideResponse decision, String rawContent) {
+    private void validateDecision(SlimDecision decision, String rawContent) {
         if (decision.mode() == null || !List.of("action", "chat", "clarify").contains(decision.mode())) {
             throw new AssistantDecisionParseException("Ollama decision mode is invalid. Raw response: " + rawContent);
         }
 
-        if ("action".equals(decision.mode()) && decision.intent() == null) {
-            throw new AssistantDecisionParseException("Action decision is missing intent. Raw response: " + rawContent);
-        }
-
-        if (!"action".equals(decision.mode()) && decision.intent() != null) {
-            throw new AssistantDecisionParseException("Non-action decision must not include intent. Raw response: " + rawContent);
-        }
-
-        if (decision.intent() != null && !SUPPORTED_INTENTS.contains(decision.intent())) {
-            throw new AssistantDecisionParseException("Assistant decision intent is unsupported. Raw response: " + rawContent);
-        }
-
-        if (decision.confidence() == null || decision.confidence() < 0 || decision.confidence() > 1) {
-            throw new AssistantDecisionParseException("Assistant decision confidence is invalid. Raw response: " + rawContent);
-        }
-
-        if (decision.needsConfirmation() == null) {
-            throw new AssistantDecisionParseException("Assistant decision is missing needsConfirmation. Raw response: " + rawContent);
+        if ("action".equals(decision.mode())
+                && (decision.intent() == null || !SUPPORTED_INTENTS.contains(decision.intent()))) {
+            throw new AssistantDecisionParseException(
+                    "Action decision is missing a supported intent. Raw response: " + rawContent);
         }
     }
 

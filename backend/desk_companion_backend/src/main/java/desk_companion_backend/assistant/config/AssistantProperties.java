@@ -13,8 +13,10 @@ public class AssistantProperties {
     private Integer chatNumPredict = 96;
     private Integer requestTimeoutSeconds = 30;
     private Double decideTemperature = 0.15;
-    private Integer decideNumPredict = 120;
-    private Integer decideTimeoutSeconds = 45;
+    // The slim decide contract only needs ~35 tokens of JSON; 48 leaves margin
+    // without paying for output that the shared GPU generates at <1 token/s.
+    private Integer decideNumPredict = 48;
+    private Integer decideTimeoutSeconds = 120;
 
     public String getOllamaBaseUrl() {
         return ollamaBaseUrl;

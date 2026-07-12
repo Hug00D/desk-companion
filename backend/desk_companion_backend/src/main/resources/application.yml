@@ -34,5 +34,5 @@ app:
     chat-num-predict: ${OLLAMA_CHAT_NUM_PREDICT:96}
     request-timeout-seconds: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:30}
     decide-temperature: ${OLLAMA_DECIDE_TEMPERATURE:0.15}
-    decide-num-predict: ${OLLAMA_DECIDE_NUM_PREDICT:120}
-    decide-timeout-seconds: ${OLLAMA_DECIDE_TIMEOUT_SECONDS:45}
+    decide-num-predict: ${OLLAMA_DECIDE_NUM_PREDICT:48}
+    decide-timeout-seconds: ${OLLAMA_DECIDE_TIMEOUT_SECONDS:120}
