@@ -103,6 +103,8 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val FACE_DETECTION_INTERVAL = 1
-        private const val POSE_DETECTION_INTERVAL = 3
+        // Flutter currently submits a still image about every 800 ms, so each
+        // submitted image must produce a fresh pose result.
+        private const val POSE_DETECTION_INTERVAL = 1
     }
 }

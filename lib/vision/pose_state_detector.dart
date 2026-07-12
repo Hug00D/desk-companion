@@ -1,3 +1,4 @@
+import 'eye_state_detector.dart';
 import 'posture_down_detector.dart';
 import 'vision_result.dart';
 
@@ -35,6 +36,7 @@ class PoseStateDetector {
     required PostureDownDetectionResult postureDownResult,
     required int postureDownFrameCount,
     required bool isPostureDown,
+    required EyeState eyeState,
   }) {
     final postureDownScore = postureDownResult.score;
     final shoulderWidth = result.shoulderWidth;
@@ -65,6 +67,7 @@ class PoseStateDetector {
     final isDrowsy = _isDrowsyHeadDrop(
       result: result,
       postureDownResult: postureDownResult,
+      eyeState: eyeState,
     );
     if (isDrowsy) {
       return PoseDetectionResult(
@@ -84,6 +87,7 @@ class PoseStateDetector {
   bool _isDrowsyHeadDrop({
     required VisionResult result,
     required PostureDownDetectionResult postureDownResult,
+    required EyeState eyeState,
   }) {
     final headPitch = result.headPitch;
     if (!result.hasFace || headPitch == null) return false;
@@ -93,7 +97,8 @@ class PoseStateDetector {
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
 
-    return headPitch >= drowsyPitchThreshold &&
+    return eyeState == EyeState.fatigue &&
+        headPitch >= drowsyPitchThreshold &&
         headLowScore >= drowsyHeadLowThreshold &&
         noseDropScore >= drowsyNoseDropThreshold &&
         shoulderDropScore < drowsyMaxShoulderDropScore &&

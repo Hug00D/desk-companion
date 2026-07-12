@@ -225,7 +225,7 @@ class FocusSessionMonitor extends ChangeNotifier {
       if (isCurrentStatus &&
           !evidence.reminderSent &&
           status != CompanionStatus.userMissing &&
-          evidence.accumulated >= reminderThreshold) {
+          evidence.accumulated >= _reminderThresholdFor(status)) {
         evidence.reminderSent = true;
         interventions.add(
           FocusIntervention(
@@ -268,6 +268,21 @@ class FocusSessionMonitor extends ChangeNotifier {
     }
 
     return interventions;
+  }
+
+  Duration _reminderThresholdFor(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.postureDown:
+        return const Duration(seconds: 1);
+      case CompanionStatus.drowsy:
+        return const Duration(seconds: 2);
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+      case CompanionStatus.fatigue:
+      case CompanionStatus.distracted:
+      case CompanionStatus.userMissing:
+        return reminderThreshold;
+    }
   }
 
   List<FocusIntervention> _handleAutoPausedStatus(

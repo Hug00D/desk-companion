@@ -59,6 +59,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   Timer? _userStatusCollapseTimer;
   Timer? _idleBubbleTimer;
   Timer? _idleBubbleHideTimer;
+  Timer? _focusPauseAutoDismissTimer;
   StreamSubscription<PlayerState>? _voicePlayerStateSubscription;
   late final AnimationController _breathingController;
   bool _isProcessing = false;
@@ -107,6 +108,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isEventUploadDemoLoading = false;
   bool _isUserStatusExpanded = false;
   bool _isFocusPauseDialogVisible = false;
+  bool _isPauseSuggestionDialogVisible = false;
+  BuildContext? _focusDecisionDialogContext;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
   static const Map<CompanionStatus, Duration> _reminderCooldowns = {
@@ -352,7 +355,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _startCameraDetectionLoop() {
     _detectionTimer?.cancel();
 
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 800), (
+    _detectionTimer = Timer.periodic(const Duration(milliseconds: 600), (
       timer,
     ) {
       if (!mounted) {
@@ -606,6 +609,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
     _latestDetectedCompanionStatus = analysis.status;
+    if (analysis.postureDownResult.downFrameCount > 0 &&
+        (_pendingVoiceReminderStatus == CompanionStatus.attention ||
+            _pendingVoiceReminderStatus == CompanionStatus.fatigue)) {
+      _clearPendingVoiceReminder();
+    }
+    if (analysis.status == CompanionStatus.normal) {
+      _clearPendingVoiceReminder();
+    }
+    _syncPauseSuggestionAutoDismiss(analysis.status);
     if (analysis.status != previousDetectedCompanionStatus) {
       if (analysis.status != CompanionStatus.normal) {
         _idleBubbleVisibleUntil = null;
@@ -701,6 +713,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
 
     _isFocusPauseDialogVisible = true;
+    _isPauseSuggestionDialogVisible = true;
     bool? shouldPause;
     try {
       shouldPause = await _showFocusDecisionDialog(
@@ -714,6 +727,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         primaryIcon: Icons.pause_rounded,
       );
     } finally {
+      _focusPauseAutoDismissTimer?.cancel();
+      _focusPauseAutoDismissTimer = null;
+      _focusDecisionDialogContext = null;
+      _isPauseSuggestionDialogVisible = false;
       _isFocusPauseDialogVisible = false;
     }
 
@@ -731,6 +748,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
 
     _isFocusPauseDialogVisible = true;
+    _isPauseSuggestionDialogVisible = false;
     bool? shouldResume;
     try {
       shouldResume = await _showFocusDecisionDialog(
@@ -744,6 +762,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         primaryIcon: Icons.play_arrow_rounded,
       );
     } finally {
+      _focusDecisionDialogContext = null;
       _isFocusPauseDialogVisible = false;
     }
 
@@ -770,16 +789,19 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
       barrierColor: const Color(0x7A071725),
       transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (dialogContext, _, _) => _FocusDecisionDialog(
-        accentColor: accentColor,
-        icon: icon,
-        eyebrow: eyebrow,
-        title: title,
-        message: message,
-        secondaryLabel: secondaryLabel,
-        primaryLabel: primaryLabel,
-        primaryIcon: primaryIcon,
-      ),
+      pageBuilder: (dialogContext, _, _) {
+        _focusDecisionDialogContext = dialogContext;
+        return _FocusDecisionDialog(
+          accentColor: accentColor,
+          icon: icon,
+          eyebrow: eyebrow,
+          title: title,
+          message: message,
+          secondaryLabel: secondaryLabel,
+          primaryLabel: primaryLabel,
+          primaryIcon: primaryIcon,
+        );
+      },
       transitionBuilder: (_, animation, _, child) {
         final curved = CurvedAnimation(
           parent: animation,
@@ -795,6 +817,28 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         );
       },
     );
+  }
+
+  void _syncPauseSuggestionAutoDismiss(CompanionStatus status) {
+    if (!_isPauseSuggestionDialogVisible || status != CompanionStatus.normal) {
+      _focusPauseAutoDismissTimer?.cancel();
+      _focusPauseAutoDismissTimer = null;
+      return;
+    }
+    if (_focusPauseAutoDismissTimer != null) return;
+
+    _focusPauseAutoDismissTimer = Timer(const Duration(seconds: 5), () {
+      _focusPauseAutoDismissTimer = null;
+      if (!mounted ||
+          !_isPauseSuggestionDialogVisible ||
+          _latestDetectedCompanionStatus != CompanionStatus.normal) {
+        return;
+      }
+      final dialogContext = _focusDecisionDialogContext;
+      if (dialogContext != null && Navigator.of(dialogContext).canPop()) {
+        Navigator.of(dialogContext).pop(false);
+      }
+    });
   }
 
   PomodoroPauseReason _pauseReasonForStatus(CompanionStatus status) {
@@ -891,6 +935,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     try {
       final clips = _reminderClips[status];
       if (clips == null || clips.isEmpty) return;
+
+      if (_latestDetectedCompanionStatus != status) {
+        debugPrint(
+          'Local reminder skipped after recovery: ${status.name} -> '
+          '${_latestDetectedCompanionStatus.name}',
+        );
+        return;
+      }
 
       final index = (_reminderClipIndexes[status] ?? 0) % clips.length;
       _reminderClipIndexes[status] = index + 1;
@@ -3423,6 +3475,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _userStatusCollapseTimer?.cancel();
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();
+    _focusPauseAutoDismissTimer?.cancel();
     _breathingController.dispose();
     _cameraController?.dispose();
     _detachFallbackVideoPositionListener();

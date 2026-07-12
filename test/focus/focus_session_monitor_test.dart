@@ -118,7 +118,11 @@ void main() {
       final start = DateTime(2026, 7, 6, 10);
       monitor.beginSession(now: start);
 
-      for (var second = 0; second < 8; second += 1) {
+      expect(_step(monitor, CompanionStatus.postureDown, start, 0), isEmpty);
+      expect(_types(_step(monitor, CompanionStatus.postureDown, start, 1)), [
+        FocusInterventionType.reminder,
+      ]);
+      for (var second = 2; second < 8; second += 1) {
         _step(monitor, CompanionStatus.postureDown, start, second);
       }
       expect(_types(_step(monitor, CompanionStatus.postureDown, start, 8)), [
