@@ -7,9 +7,23 @@ class VisionChannel {
     MethodChannel channel = const MethodChannel(
       'com.example.desk_companion/cv_channel',
     ),
-  }) : _channel = channel;
+    EventChannel eventChannel = const EventChannel(
+      'com.example.desk_companion/cv_stream',
+    ),
+  }) : _channel = channel,
+       _eventChannel = eventChannel;
 
   final MethodChannel _channel;
+  final EventChannel _eventChannel;
+
+  Stream<VisionResult> cameraResults() {
+    return _eventChannel.receiveBroadcastStream().map((dynamic result) {
+      if (result is! Map) {
+        throw const FormatException('Native vision result must be a map.');
+      }
+      return VisionResult.fromNativeMap(Map<dynamic, dynamic>.from(result));
+    });
+  }
 
   Future<VisionResult> analyzeFrame(Uint8List imageBytes) async {
     final result = await _channel.invokeMethod<dynamic>(
@@ -30,6 +44,10 @@ class VisionChannel {
 
   Future<void> startCamera() {
     return _channel.invokeMethod<void>('startCamera');
+  }
+
+  Future<void> stopCamera() {
+    return _channel.invokeMethod<void>('stopCamera');
   }
 
   Future<void> resetVision() {

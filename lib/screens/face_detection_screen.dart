@@ -3,7 +3,6 @@ import 'dart:io' as io;
 import 'dart:ui' show ImageFilter;
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -51,9 +50,9 @@ class FaceDetectionScreen extends StatefulWidget {
 
 class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
-  CameraController? _cameraController;
   VideoPlayerController? _fallbackVideoController;
   VoidCallback? _fallbackVideoPositionListener;
+  StreamSubscription<VisionResult>? _nativeVisionSubscription;
 
   Timer? _detectionTimer;
   Timer? _userStatusCollapseTimer;
@@ -64,6 +63,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   late final AnimationController _breathingController;
   bool _isProcessing = false;
   bool _isCameraInitializing = true;
+  bool _isUsingNativeCamera = false;
   bool _isUsingFallbackVideo = false;
   bool _isVoiceDemoLoading = false;
   String _status = "等待辨識...";
@@ -309,40 +309,30 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     });
 
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        throw CameraException('noCamera', '找不到可用的相機。');
-      }
-
-      final camera = cameras.firstWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.front,
-        orElse: () => cameras.first,
+      await _nativeVisionSubscription?.cancel();
+      _nativeVisionSubscription = _visionChannel.cameraResults().listen(
+        _handleVisionResult,
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint('Native vision stream error: $error');
+        },
       );
-
-      final controller = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await controller.initialize();
-
+      await _resetVisionCalibration();
+      await _visionChannel.startCamera();
       if (!mounted) {
-        await controller.dispose();
+        await _visionChannel.stopCamera();
         return;
       }
 
-      _cameraController = controller;
+      _isUsingNativeCamera = true;
       _isUsingFallbackVideo = false;
       _isCameraInitializing = false;
       _status = "相機已啟動，等待辨識...";
-      await _resetVisionCalibration();
-      if (!mounted) return;
-      _startCameraDetectionLoop();
       setState(() {});
     } catch (e) {
       if (!mounted) return;
+      _isUsingNativeCamera = false;
+      await _nativeVisionSubscription?.cancel();
+      _nativeVisionSubscription = null;
       await _initializeFallbackVideo(reason: e.toString());
       if (_isUsingFallbackVideo) return;
       _isCameraInitializing = false;
@@ -352,26 +342,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
-  void _startCameraDetectionLoop() {
-    _detectionTimer?.cancel();
-
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 600), (
-      timer,
-    ) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      final controller = _cameraController;
-      if (controller != null && controller.value.isInitialized) {
-        _detectFaceFromCamera();
-      }
-    });
-  }
-
   // --- 核心偵測函式 ---
   Future<void> _initializeFallbackVideo({String? reason}) async {
     _detectionTimer?.cancel();
+    _isUsingNativeCamera = false;
+    await _visionChannel.stopCamera();
 
     try {
       final tempDir = await getTemporaryDirectory();
@@ -508,44 +483,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       controller.removeListener(listener);
     }
     _fallbackVideoPositionListener = null;
-  }
-
-  Future<void> _detectFaceFromCamera() async {
-    final controller = _cameraController;
-    if (_isProcessing ||
-        controller == null ||
-        !controller.value.isInitialized ||
-        controller.value.isTakingPicture) {
-      return;
-    }
-
-    _isProcessing = true;
-
-    XFile? frameFile;
-
-    try {
-      frameFile = await controller.takePicture();
-      final imageFile = io.File(frameFile.path);
-      final Uint8List imageBytes = await imageFile.readAsBytes();
-
-      final visionResult = await _visionChannel.analyzeFrame(imageBytes);
-
-      _handleVisionResult(visionResult);
-    } catch (e) {
-      debugPrint("辨識錯誤: $e");
-    } finally {
-      _isProcessing = false;
-      if (frameFile != null) {
-        final file = io.File(frameFile.path);
-        if (file.existsSync()) {
-          try {
-            file.deleteSync();
-          } catch (e) {
-            debugPrint("刪檔失敗");
-          }
-        }
-      }
-    }
   }
 
   void _handleVisionResult(VisionResult visionResult) {
@@ -1493,12 +1430,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _detectionTimer?.cancel();
     _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
-    await _cameraController?.dispose();
+    await _visionChannel.stopCamera();
     _detachFallbackVideoPositionListener();
     await _fallbackVideoController?.dispose();
-    _cameraController = null;
     _fallbackVideoController = null;
     _fallbackVideoPath = null;
+    _isUsingNativeCamera = false;
     _isUsingFallbackVideo = false;
     _companionController.reset();
     _visionEventTracker.reset();
@@ -2408,7 +2345,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -3281,28 +3218,29 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _cameraController;
-
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _detectionTimer?.cancel();
+      _breathingController.stop();
+      unawaited(_visionChannel.stopCamera());
       unawaited(
         _focusSyncController.flushNow(
           studySessionController: _studySessionController,
           pomodoroController: _pomodoroController,
         ),
       );
-      if (controller != null && controller.value.isInitialized) {
-        controller.dispose();
-        _cameraController = null;
-      }
       _fallbackVideoController?.pause();
     } else if (state == AppLifecycleState.resumed) {
       if (_isUsingFallbackVideo) {
         _fallbackVideoController?.play();
         _startFallbackVideoDetectionLoop();
+      } else if (_isUsingNativeCamera) {
+        unawaited(_resumeNativeCamera());
       } else {
         _initializeCamera();
+      }
+      if (!_breathingController.isAnimating) {
+        _breathingController.repeat(reverse: true);
       }
       _focusSyncController.start(
         studySessionController: _studySessionController,
@@ -3311,10 +3249,23 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
+  Future<void> _resumeNativeCamera() async {
+    try {
+      await _visionChannel.startCamera();
+    } catch (error) {
+      debugPrint('Native camera resume failed: $error');
+      if (mounted) {
+        await _initializeFallbackVideo(reason: error.toString());
+      }
+    }
+  }
+
   Widget _buildCameraBackground() {
-    return RiveAssetBackground(
-      assetPath: 'assets/test2.riv',
-      motionIntensity: _companionMotionIntensity,
+    return RepaintBoundary(
+      child: RiveAssetBackground(
+        assetPath: 'assets/test2.riv',
+        motionIntensity: _companionMotionIntensity,
+      ),
     );
   }
 
@@ -3394,23 +3345,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildVisionSourcePreview() {
-    final controller = _cameraController;
-    if (controller != null && controller.value.isInitialized) {
-      final previewSize = controller.value.previewSize;
-      if (previewSize == null) {
-        return CameraPreview(controller);
-      }
-
-      return ClipRect(
-        child: SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: previewSize.height,
-              height: previewSize.width,
-              child: CameraPreview(controller),
-            ),
-          ),
+    if (_isUsingNativeCamera && io.Platform.isAndroid) {
+      return const ClipRect(
+        child: AndroidView(
+          viewType: 'com.example.desk_companion/camera_preview',
         ),
       );
     }
@@ -3477,7 +3415,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _idleBubbleHideTimer?.cancel();
     _focusPauseAutoDismissTimer?.cancel();
     _breathingController.dispose();
-    _cameraController?.dispose();
+    unawaited(_visionChannel.stopCamera());
+    unawaited(_nativeVisionSubscription?.cancel() ?? Future<void>.value());
     _detachFallbackVideoPositionListener();
     _fallbackVideoController?.dispose();
     _completeVoicePlayback();
