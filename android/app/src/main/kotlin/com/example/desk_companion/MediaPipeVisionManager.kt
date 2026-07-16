@@ -41,7 +41,7 @@ class MediaPipeVisionManager(context: Context) {
             .build()
         val faceOptions = FaceLandmarker.FaceLandmarkerOptions.builder()
             .setBaseOptions(faceBaseOptions)
-            .setRunningMode(RunningMode.IMAGE)
+            .setRunningMode(RunningMode.VIDEO)
             .setNumFaces(1)
             .setOutputFaceBlendshapes(true)
             .setOutputFacialTransformationMatrixes(true)
@@ -51,11 +51,11 @@ class MediaPipeVisionManager(context: Context) {
             .build()
 
         val poseBaseOptions = BaseOptions.builder()
-            .setModelAssetPath("pose_landmarker_full.task")
+            .setModelAssetPath("pose_landmarker_lite.task")
             .build()
         val poseOptions = PoseLandmarker.PoseLandmarkerOptions.builder()
             .setBaseOptions(poseBaseOptions)
-            .setRunningMode(RunningMode.IMAGE)
+            .setRunningMode(RunningMode.VIDEO)
             .setNumPoses(1)
             .setMinPoseDetectionConfidence(0.5f)
             .setMinPosePresenceConfidence(0.5f)
@@ -66,7 +66,12 @@ class MediaPipeVisionManager(context: Context) {
         poseLandmarker = PoseLandmarker.createFromOptions(context, poseOptions)
     }
 
-    fun analyze(bitmap: Bitmap, runFace: Boolean, runPose: Boolean): Map<String, Any> {
+    fun analyze(
+        bitmap: Bitmap,
+        runFace: Boolean,
+        runPose: Boolean,
+        timestampMs: Long
+    ): Map<String, Any> {
         val resultMap = mutableMapOf<String, Any>()
 
         if (runFace || runPose) {
@@ -76,12 +81,13 @@ class MediaPipeVisionManager(context: Context) {
                     lastPoseResult = analyzePose(
                         mpImage = mpImage,
                         imageWidth = bitmap.width,
-                        imageHeight = bitmap.height
+                        imageHeight = bitmap.height,
+                        timestampMs = timestampMs
                     )
                 }
 
                 if (runFace) {
-                    lastFaceResult = analyzeFace(mpImage)
+                    lastFaceResult = analyzeFace(mpImage, timestampMs)
                 }
             } finally {
                 mpImage.close()
@@ -94,12 +100,21 @@ class MediaPipeVisionManager(context: Context) {
         return resultMap
     }
 
+    fun shouldBoostPose(): Boolean {
+        if (lastFaceResult["hasFace"] != true) return true
+        val headOffset = lastFaceResult["headOffsetScore"] as? Number
+        val headPitch = lastFaceResult["headPitch"] as? Number
+        return (headOffset?.toFloat() ?: 0.0f) >= POSE_BOOST_HEAD_OFFSET ||
+            abs(headPitch?.toFloat() ?: 0.0f) >= POSE_BOOST_HEAD_PITCH
+    }
+
     private fun analyzePose(
         mpImage: com.google.mediapipe.framework.image.MPImage,
         imageWidth: Int,
-        imageHeight: Int
+        imageHeight: Int,
+        timestampMs: Long
     ): Map<String, Any> {
-        val poseResult = poseLandmarker.detect(mpImage)
+        val poseResult = poseLandmarker.detectForVideo(mpImage, timestampMs)
         poseSequence++
         val landmarks = poseResult.landmarks().firstOrNull()
         val leftShoulder = landmarks?.getOrNull(LEFT_SHOULDER)
@@ -153,9 +168,10 @@ class MediaPipeVisionManager(context: Context) {
     }
 
     private fun analyzeFace(
-        mpImage: com.google.mediapipe.framework.image.MPImage
+        mpImage: com.google.mediapipe.framework.image.MPImage,
+        timestampMs: Long
     ): Map<String, Any> {
-        val faceResult = faceLandmarker.detect(mpImage)
+        val faceResult = faceLandmarker.detectForVideo(mpImage, timestampMs)
 
         return if (faceResult.faceLandmarks().isNotEmpty()) {
             val landmarks = faceResult.faceLandmarks().first()
@@ -500,8 +516,10 @@ class MediaPipeVisionManager(context: Context) {
         private const val HEAD_YAW_RATIO_DISPLAY_SCALE = 120.0f
         private const val MAX_HEAD_YAW = 45.0f
         private const val MAX_HEAD_PITCH = 45.0f
+        private const val POSE_BOOST_HEAD_OFFSET = 45.0f
+        private const val POSE_BOOST_HEAD_PITCH = 24.0f
         private const val NEUTRAL_NOSE_VERTICAL_RATIO = 0.52f
-        private const val DEBUG_HEAD_MATRIX_LOG = true
+        private const val DEBUG_HEAD_MATRIX_LOG = false
         private const val HEAD_MATRIX_DEBUG_INTERVAL = 15L
     }
 }
