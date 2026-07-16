@@ -11,6 +11,10 @@ import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 
 import '../auth/auth_session.dart';
+import '../ai/assistant_interaction_controller.dart';
+import '../ai/pending_action_controller.dart';
+import '../api/api_client.dart';
+import '../api/assistant_api.dart';
 import '../companion/companion_controller.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/focus_session_monitor.dart';
@@ -27,6 +31,7 @@ import '../vision/vision_result.dart';
 import '../voice/voice_command.dart';
 import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
+import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/rive_asset_background.dart';
@@ -77,6 +82,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
   final VoiceInteractionController _voiceInteractionController =
       const VoiceInteractionController();
+  final TextEditingController _assistantTextController =
+      TextEditingController();
+  final PendingActionController _pendingActionController =
+      PendingActionController();
+  late final AssistantInteractionController _assistantInteractionController;
   final VoiceServiceClient _voiceServiceClient = VoiceServiceClient();
   final AudioPlayer _voiceAudioPlayer = AudioPlayer();
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
@@ -105,6 +115,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _showVoiceDemoPanel = false;
   bool _showVisionSourcePreview = false;
   bool _isVoiceServiceTestInFlight = false;
+  bool _isAssistantDecideLoading = false;
   bool _isEventUploadDemoLoading = false;
   bool _isUserStatusExpanded = false;
   bool _isFocusPauseDialogVisible = false;
@@ -258,6 +269,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             _completeVoicePlayback();
           }
         });
+    // decide() may chain two Ollama calls on the backend (intent JSON, then a
+    // chat reply for mode=chat), each bounded by the backend's 120s Ollama
+    // timeout. Keep the client-side budget above that sum so slow-but-healthy
+    // responses aren't cut off; the local parser fallback still covers real
+    // outages.
+    _assistantInteractionController = AssistantInteractionController(
+      decisionClient: AssistantApi(
+        ApiClient(requestTimeout: const Duration(seconds: 250)),
+      ),
+      timeout: const Duration(seconds: 255),
+    );
     _focusSyncController = FocusSyncController(authSession: _authSession);
     _focusSyncController.start(
       studySessionController: _studySessionController,
@@ -1339,6 +1361,121 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         });
       }
     }
+  }
+
+  Future<void> _runAssistantTextDemo() async {
+    final text = _assistantTextController.text.trim();
+    if (text.isEmpty || _isAssistantDecideLoading) return;
+
+    setState(() {
+      _isAssistantDecideLoading = true;
+    });
+
+    try {
+      final result = await _assistantInteractionController.handleText(
+        text: text,
+        context: _buildAssistantContext(),
+        accessToken: _authSession.accessToken,
+      );
+      if (!mounted) return;
+      _applyAssistantInteractionResult(text, result);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Assistant decide failed: $error'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAssistantDecideLoading = false;
+        });
+      }
+    }
+  }
+
+  Map<String, dynamic> _buildAssistantContext() {
+    return <String, dynamic>{
+      'pomodoro': <String, dynamic>{
+        'status': _pomodoroController.status.name,
+        'remainingSeconds': _pomodoroController.remaining.inSeconds,
+        'totalSeconds': _pomodoroController.totalDuration.inSeconds,
+      },
+      'vision': <String, dynamic>{
+        'status': _companionStatus.name,
+        'fatigueLevel': _fatigueLevel,
+        'hasFace': _hasFace,
+      },
+      'todaySummary': _studySessionController.buildSummary(_pomodoroController),
+    };
+  }
+
+  void _applyAssistantInteractionResult(
+    String text,
+    AssistantInteractionResult result,
+  ) {
+    if (result.pendingAction != null) {
+      _pendingActionController.setPendingAction(result.pendingAction!);
+    }
+
+    if (result.shouldRunAction && result.command != null) {
+      final interaction = VoiceInteraction(
+        result: _voiceResultFromText(text),
+        command: result.command!,
+        response: result.response,
+      );
+      _applyVoiceInteraction(interaction);
+      return;
+    }
+
+    _companionMessage = result.response.message;
+    _lastVoiceResponseMessage = result.response.message;
+    _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    setState(() {});
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(result.response.message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  VoiceRecognitionResult _voiceResultFromText(String text) {
+    return VoiceRecognitionResult(
+      sessionId: 'assistant-text',
+      eventType: VoiceEventType.finalResult,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      transcript: text,
+      formattedTranscript: text,
+      isFinal: true,
+      candidates: [VoiceCandidate(text: text, confidence: 1)],
+    );
+  }
+
+  void _confirmPendingAssistantAction() {
+    final pending = _pendingActionController.consume();
+    if (pending == null) return;
+
+    final interaction = VoiceInteraction(
+      result: _voiceResultFromText(pending.command.sourceText),
+      command: pending.command,
+      response: _responseBuilder.fromVoiceCommand(pending.command),
+    );
+    _applyVoiceInteraction(interaction);
+  }
+
+  void _cancelPendingAssistantAction() {
+    _pendingActionController.clear();
+    setState(() {
+      _companionMessage = '已取消待確認的動作。';
+      _lastVoiceResponseMessage = _companionMessage;
+      _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    });
   }
 
   void _applyVoiceInteraction(VoiceInteraction interaction) {
@@ -2731,6 +2868,70 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                     ),
                   ),
                   const SizedBox(height: 10),
+                  TextField(
+                    controller: _assistantTextController,
+                    minLines: 1,
+                    maxLines: 3,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _runAssistantTextDemo(),
+                    decoration: InputDecoration(
+                      hintText: '輸入文字測試 Assistant，例如：幫我開25分鐘番茄鐘',
+                      isDense: true,
+                      filled: true,
+                      fillColor: const Color(0xFFF5FBFF),
+                      prefixIcon: const Icon(Icons.smart_toy_rounded),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFFD8EEF8)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFFD8EEF8)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _isAssistantDecideLoading
+                          ? null
+                          : _runAssistantTextDemo,
+                      icon: _isAssistantDecideLoading
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.send_rounded),
+                      label: const Text('Assistant decide'),
+                    ),
+                  ),
+                  if (_pendingActionController.hasPendingAction) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: _confirmPendingAssistantAction,
+                            icon: const Icon(Icons.check_rounded),
+                            label: const Text('確認執行'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _cancelPendingAssistantAction,
+                            icon: const Icon(Icons.close_rounded),
+                            label: const Text('取消'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -3483,6 +3684,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _completeVoicePlayback();
     _voicePlayerStateSubscription?.cancel();
     _voiceAudioPlayer.dispose();
+    _assistantTextController.dispose();
     _pomodoroController.removeListener(_handlePomodoroControllerChanged);
     super.dispose();
   }
