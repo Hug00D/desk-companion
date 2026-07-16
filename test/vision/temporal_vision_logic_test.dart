@@ -90,6 +90,35 @@ void main() {
       expect(transition.status, CompanionStatus.normal);
     });
 
+    test(
+      'quick camera exit does not confirm posture down from missing data',
+      () {
+        final controller = CompanionController();
+        final start = DateTime(2026, 7, 12, 10, 45);
+
+        for (var sequence = 1; sequence <= 6; sequence++) {
+          controller.analyze(
+            _visionResult(poseSequence: sequence),
+            observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+          );
+        }
+
+        final transition = controller.analyze(
+          _postureTransitionResult(poseSequence: 7),
+          observedAt: start.add(const Duration(milliseconds: 5600)),
+        );
+        expect(transition.postureDownResult.downFrameCount, 1);
+
+        for (var sequence = 8; sequence <= 12; sequence++) {
+          final missing = controller.analyze(
+            _missingUserResult(poseSequence: sequence),
+            observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+          );
+          expect(missing.status, isNot(CompanionStatus.postureDown));
+        }
+      },
+    );
+
     test('stale pose cannot confirm posture down', () {
       final controller = CompanionController();
       final start = DateTime(2026, 7, 12, 10);
@@ -153,6 +182,57 @@ void main() {
 
       expect(firstRecovery.status, CompanionStatus.postureDown);
       expect(secondRecovery.status, CompanionStatus.normal);
+    });
+
+    test('latched posture recovers when face and head are stable', () {
+      final evaluator = CompanionStateEvaluator(
+        postureDownDetector: _QueuedPostureDownDetector([
+          const PostureDownDetectionResult(
+            state: PostureDownState.down,
+            score: 100,
+            downFrameCount: 2,
+            headLowScore: 100,
+            noseDropScore: 100,
+            sideProneScore: 100,
+            shoulderDropScore: 100,
+            shoulderShrinkScore: 80,
+          ),
+          const PostureDownDetectionResult(
+            state: PostureDownState.normal,
+            score: 34,
+            downFrameCount: 0,
+            headLowScore: 0,
+            noseDropScore: 0,
+            sideProneScore: 0,
+            shoulderDropScore: 100,
+            shoulderShrinkScore: 0,
+          ),
+        ]),
+      );
+      final start = DateTime(2026, 7, 12, 11, 30);
+
+      final latched = evaluator.evaluate(
+        result: _visionResult(poseSequence: 1),
+        previousClosedFrameCount: 0,
+        previousDistractedFrameCount: 0,
+        isFreshPoseResult: true,
+        observedAt: start,
+      );
+      final recovered = evaluator.evaluate(
+        result: _visionResult(
+          poseSequence: 2,
+          headOffsetScore: 11.8,
+          headPitch: -11.6,
+        ),
+        previousClosedFrameCount: 0,
+        previousDistractedFrameCount: 0,
+        isFreshPoseResult: true,
+        observedAt: start.add(const Duration(milliseconds: 800)),
+      );
+
+      expect(latched.status, CompanionStatus.postureDown);
+      expect(recovered.postureDownResult.shoulderDropScore, greaterThan(90));
+      expect(recovered.status, CompanionStatus.normal);
     });
   });
 }
@@ -244,4 +324,28 @@ VisionResult _postureTransitionResult({required int poseSequence}) {
     headOffsetScore: 0,
     shoulderWidth: 250,
   );
+}
+
+VisionResult _missingUserResult({required int poseSequence}) {
+  return VisionResult(
+    raw: const <dynamic, dynamic>{},
+    hasPose: false,
+    hasFace: false,
+    poseSequence: poseSequence,
+  );
+}
+
+class _QueuedPostureDownDetector extends PostureDownDetector {
+  _QueuedPostureDownDetector(this.results);
+
+  final List<PostureDownDetectionResult> results;
+
+  @override
+  PostureDownDetectionResult evaluate({
+    required VisionResult result,
+    required bool shouldUpdate,
+    DateTime? observedAt,
+  }) {
+    return results.removeAt(0);
+  }
 }

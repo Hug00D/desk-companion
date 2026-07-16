@@ -115,17 +115,6 @@ class PostureDownDetector {
     if (score == null) {
       _missingPoseFrameCount++;
       final lastScore = _lastScore;
-      final votes = _positiveEvidenceVotes;
-      if (!_isDownConfirmed &&
-          !result.hasFace &&
-          votes >= confirmationVotes - 1 &&
-          lastScore != null) {
-        _addDownEvidence(true);
-        if (_positiveEvidenceVotes >= confirmationVotes) {
-          _isDownConfirmed = true;
-          _lastDownScore = lastScore;
-        }
-      }
 
       if (lastScore != null &&
           _missingPoseFrameCount <= missingPoseHoldFrames) {
@@ -608,11 +597,19 @@ class PostureDownDetector {
   }
 
   bool _isClearlyRecovered(_PostureScore score) {
-    return score.hasFace &&
-        score.total < downScoreThreshold &&
-        score.sideProne < 55 &&
-        score.shoulderDrop < 50 &&
-        score.shoulderShrink < 45;
+    final faceVisibleStableRecovery =
+        score.hasFace &&
+        score.sideProne < 45 &&
+        score.shoulderShrink < 45 &&
+        score.headLow < 45 &&
+        score.noseDrop < 60;
+
+    return faceVisibleStableRecovery ||
+        score.hasFace &&
+            score.total < downScoreThreshold &&
+            score.sideProne < 55 &&
+            score.shoulderDrop < 50 &&
+            score.shoulderShrink < 45;
   }
 
   PostureDownDetectionResult _buildResultFromScore({

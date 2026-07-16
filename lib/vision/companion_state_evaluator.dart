@@ -217,6 +217,7 @@ class CompanionStateEvaluator {
           _hasClearPostureDownRecovery(
             result: result,
             postureDownResult: postureDownResult,
+            eyeState: eyeState,
           )) {
         _postureDownRecoveryFrames++;
         // PostureDownDetector already requires two fresh recovery samples.
@@ -332,6 +333,7 @@ class CompanionStateEvaluator {
   bool _hasClearPostureDownRecovery({
     required VisionResult result,
     required PostureDownDetectionResult postureDownResult,
+    required EyeState eyeState,
   }) {
     if (!result.hasFace || !result.hasPose) return false;
 
@@ -341,13 +343,24 @@ class CompanionStateEvaluator {
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
     final headLowScore = postureDownResult.headLowScore ?? 0;
     final noseDropScore = postureDownResult.noseDropScore ?? 0;
-
-    return score < 30 &&
+    final headPitch = result.headPitch?.abs() ?? 0;
+    final headOffsetScore = result.headOffsetScore ?? 0;
+    final faceVisibleStableRecovery =
+        eyeState == EyeState.open &&
         sideProneScore < 45 &&
-        shoulderDropScore < 35 &&
         shoulderShrinkScore < 45 &&
         headLowScore < 45 &&
-        noseDropScore < 60;
+        noseDropScore < 60 &&
+        headPitch < 25 &&
+        headOffsetScore < 35;
+
+    return faceVisibleStableRecovery ||
+        score < 30 &&
+            sideProneScore < 45 &&
+            shoulderDropScore < 35 &&
+            shoulderShrinkScore < 45 &&
+            headLowScore < 45 &&
+            noseDropScore < 60;
   }
 
   void _updateRecentPoseContext({
