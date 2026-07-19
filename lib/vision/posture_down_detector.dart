@@ -45,6 +45,12 @@ class PostureDownDetector {
     this.recoveryFrames = 2,
     this.baselineFrames = 5,
     this.missingPoseHoldFrames = 8,
+    this.confirmedMissingPoseHoldFrames = 24,
+    this.downwardMotionWindowFrames = 8,
+    this.downwardMotionMinDrop = 0.02,
+    this.motionHistoryFrames = 5,
+    this.upwardMotionVetoFrames = 10,
+    this.motionReliableShoulderVisibility = 0.6,
     this.shoulderDropRatioForMaxScore = 0.06,
     this.noseDropRatioForMaxScore = 0.06,
     this.shoulderShrinkRatioForMaxScore = 0.22,
@@ -66,6 +72,12 @@ class PostureDownDetector {
   final int recoveryFrames;
   final int baselineFrames;
   final int missingPoseHoldFrames;
+  final int confirmedMissingPoseHoldFrames;
+  final int downwardMotionWindowFrames;
+  final double downwardMotionMinDrop;
+  final int motionHistoryFrames;
+  final int upwardMotionVetoFrames;
+  final double motionReliableShoulderVisibility;
   final double shoulderDropRatioForMaxScore;
   final double noseDropRatioForMaxScore;
   final double shoulderShrinkRatioForMaxScore;
@@ -88,6 +100,12 @@ class PostureDownDetector {
   bool _isDownConfirmed = false;
   int _missingPoseFrameCount = 0;
   int _recoveryFrameCount = 0;
+  final List<double> _noseYHistory = <double>[];
+  final List<double> _shoulderYHistory = <double>[];
+  int _downwardMotionFrames = 0;
+  int _upwardVetoFramesLeft = 0;
+  int _consecutiveDownFrames = 0;
+  int _unreliableMotionFrames = 0;
 
   PostureDownDetectionResult evaluate({
     required VisionResult result,
@@ -122,7 +140,13 @@ class PostureDownDetector {
       }
 
       if (_isDownConfirmed && _lastDownScore != null) {
-        return _holdScore(score: _lastDownScore!);
+        if (_missingPoseFrameCount <= confirmedMissingPoseHoldFrames) {
+          return _holdScore(score: _lastDownScore!);
+        }
+        // Pose has been gone far too long to keep asserting a prone posture;
+        // release the confirmed state instead of holding it indefinitely.
+        _clearConfirmedState();
+        _lastScore = null;
       }
       return const PostureDownDetectionResult(
         state: PostureDownState.unavailable,
@@ -149,6 +173,7 @@ class PostureDownDetector {
 
   PostureDownDetectionResult _evaluateScore({required _PostureScore score}) {
     _lastScore = score;
+    _updateVerticalMotion(score);
     if (score.isCalibrating) {
       _downEvidenceWindow.clear();
       _recoveryFrameCount = 0;
@@ -159,7 +184,11 @@ class PostureDownDetector {
       );
     }
 
-    final isDownEvidence = _isPostureDownEvidence(score);
+    // Lying down always involves the head/shoulders travelling downward
+    // first; without recent downward motion (e.g. walking out of frame
+    // sideways or standing up) prone evidence must not accumulate votes.
+    final isDownEvidence =
+        _downwardMotionFrames > 0 && _isPostureDownEvidence(score);
     _addDownEvidence(isDownEvidence);
 
     if (_isDownConfirmed) {
@@ -206,6 +235,73 @@ class PostureDownDetector {
       downFrameCount: _positiveEvidenceVotes,
       state: PostureDownState.normal,
     );
+  }
+
+  void _updateVerticalMotion(_PostureScore score) {
+    if (!score.isMotionReliable) {
+      // Landmarks are hallucinated (face gone and shoulders barely visible):
+      // these frames may spend an already-armed window on votes, but must
+      // never arm or extend it. Only pre-loss, trustworthy frames decide
+      // whether a descent actually happened.
+      _consecutiveDownFrames = 0;
+      if (_upwardVetoFramesLeft > 0) {
+        _upwardVetoFramesLeft--;
+      }
+      if (_downwardMotionFrames > 0) {
+        _downwardMotionFrames--;
+      }
+      _unreliableMotionFrames++;
+      if (_unreliableMotionFrames > motionHistoryFrames) {
+        _noseYHistory.clear();
+        _shoulderYHistory.clear();
+      }
+      return;
+    }
+    _unreliableMotionFrames = 0;
+
+    if (_noseYHistory.isNotEmpty) {
+      final noseDelta = score.noseYRatio - _noseYHistory.first;
+      final shoulderDelta = score.shoulderCenterYRatio - _shoulderYHistory.first;
+      final movingUp =
+          noseDelta <= -downwardMotionMinDrop ||
+          shoulderDelta <= -downwardMotionMinDrop;
+      final movingDown =
+          noseDelta >= downwardMotionMinDrop ||
+          shoulderDelta >= downwardMotionMinDrop;
+
+      if (movingUp) {
+        // Rising head/shoulders means standing up or straightening; the
+        // hallucinated landmarks that follow a frame exit jump around and
+        // must not arm the prone vote window.
+        _consecutiveDownFrames = 0;
+        _upwardVetoFramesLeft = upwardMotionVetoFrames;
+        _downwardMotionFrames = 0;
+      } else if (movingDown) {
+        _consecutiveDownFrames++;
+        // A real slump descends monotonically, so two consecutive downward
+        // frames override the veto; garbage landmarks flip up and down.
+        if (_upwardVetoFramesLeft == 0 || _consecutiveDownFrames >= 2) {
+          _upwardVetoFramesLeft = 0;
+          _downwardMotionFrames = downwardMotionWindowFrames;
+        } else {
+          _upwardVetoFramesLeft--;
+        }
+      } else {
+        _consecutiveDownFrames = 0;
+        if (_upwardVetoFramesLeft > 0) {
+          _upwardVetoFramesLeft--;
+        }
+        if (_downwardMotionFrames > 0) {
+          _downwardMotionFrames--;
+        }
+      }
+    }
+    _noseYHistory.add(score.noseYRatio);
+    _shoulderYHistory.add(score.shoulderCenterYRatio);
+    if (_noseYHistory.length > motionHistoryFrames) {
+      _noseYHistory.removeAt(0);
+      _shoulderYHistory.removeAt(0);
+    }
   }
 
   int get _positiveEvidenceVotes =>
@@ -270,6 +366,15 @@ class PostureDownDetector {
       timestampSeconds: timestampSeconds,
     );
 
+    final motionShoulderVisibility = _average([
+      result.leftShoulderVisibility,
+      result.rightShoulderVisibility,
+    ]);
+    final isMotionReliable =
+        result.hasFace ||
+        (motionShoulderVisibility != null &&
+            motionShoulderVisibility >= motionReliableShoulderVisibility);
+
     if (_baselineHeadShoulderRatio == null) {
       if (shouldUpdate && _canUseForBaseline(result)) {
         _recordBaseline(
@@ -291,6 +396,7 @@ class PostureDownDetector {
         shoulderCenterYRatio: shoulderCenterYRatio,
         noseYRatio: noseYRatio,
         hasFace: result.hasFace,
+        isMotionReliable: isMotionReliable,
         isCalibrating: true,
       );
     }
@@ -361,6 +467,7 @@ class PostureDownDetector {
       shoulderCenterYRatio: shoulderCenterYRatio,
       noseYRatio: noseYRatio,
       hasFace: result.hasFace,
+      isMotionReliable: isMotionReliable,
     );
   }
 
@@ -429,6 +536,12 @@ class PostureDownDetector {
     _isDownConfirmed = false;
     _missingPoseFrameCount = 0;
     _recoveryFrameCount = 0;
+    _noseYHistory.clear();
+    _shoulderYHistory.clear();
+    _downwardMotionFrames = 0;
+    _upwardVetoFramesLeft = 0;
+    _consecutiveDownFrames = 0;
+    _unreliableMotionFrames = 0;
     headShoulderFilter.reset();
     shoulderCenterFilter.reset();
     noseYFilter.reset();
@@ -592,6 +705,7 @@ class PostureDownDetector {
       shoulderCenterYRatio: score.shoulderCenterYRatio,
       noseYRatio: score.noseYRatio,
       hasFace: score.hasFace,
+      isMotionReliable: score.isMotionReliable,
       isCalibrating: score.isCalibrating,
     );
   }
@@ -604,7 +718,20 @@ class PostureDownDetector {
         score.headLow < 45 &&
         score.noseDrop < 60;
 
+    // Body is clearly back at baseline even though the face has not been
+    // re-acquired yet; require stricter thresholds plus good head landmark
+    // visibility so a true prone pose cannot pass.
+    final bodyOnlyStableRecovery =
+        !score.hasFace &&
+        score.sideProne < 40 &&
+        score.shoulderDrop < 25 &&
+        score.shoulderShrink < 35 &&
+        score.headLow < 50 &&
+        score.noseDrop < 55 &&
+        score.visibility < 40;
+
     return faceVisibleStableRecovery ||
+        bodyOnlyStableRecovery ||
         score.hasFace &&
             score.total < downScoreThreshold &&
             score.sideProne < 55 &&
@@ -648,6 +775,7 @@ class _PostureScore {
     required this.shoulderCenterYRatio,
     required this.noseYRatio,
     required this.hasFace,
+    this.isMotionReliable = true,
     this.isCalibrating = false,
   });
 
@@ -662,5 +790,6 @@ class _PostureScore {
   final double shoulderCenterYRatio;
   final double noseYRatio;
   final bool hasFace;
+  final bool isMotionReliable;
   final bool isCalibrating;
 }

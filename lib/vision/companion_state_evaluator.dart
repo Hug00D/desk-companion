@@ -65,6 +65,9 @@ class CompanionStateEvaluator {
     PostureDownDetector? postureDownDetector,
     this.poseStateDetector = const PoseStateDetector(),
     this.presenceDetector = const PresenceDetector(),
+    this.userAbsentReleaseFrames = 8,
+    this.postureDownAbsentReleaseFrames = 25,
+    this.faceUprightReleaseFrames = 5,
   }) : headOffsetDetector = headOffsetDetector ?? HeadOffsetDetector(),
        postureDownDetector = postureDownDetector ?? PostureDownDetector();
 
@@ -73,6 +76,9 @@ class CompanionStateEvaluator {
   final PostureDownDetector postureDownDetector;
   final PoseStateDetector poseStateDetector;
   final PresenceDetector presenceDetector;
+  final int userAbsentReleaseFrames;
+  final int postureDownAbsentReleaseFrames;
+  final int faceUprightReleaseFrames;
   CompanionStatus _lastFaceVisibleContext = CompanionStatus.normal;
   CompanionStatus? _lastFaceMissingContext;
   int _faceMissingFrameCount = 0;
@@ -84,6 +90,8 @@ class CompanionStateEvaluator {
   int _recentProneTransitionEvidenceFrames = 0;
   bool _isPostureDownLatched = false;
   int _postureDownRecoveryFrames = 0;
+  int _fullyAbsentFrameCount = 0;
+  int _faceUprightFrames = 0;
 
   CompanionAnalysis evaluate({
     required VisionResult result,
@@ -199,11 +207,46 @@ class CompanionStateEvaluator {
     required CompanionStatus baseStatus,
     required bool isFreshPoseResult,
   }) {
+    if (!result.hasFace && !result.hasPose) {
+      _fullyAbsentFrameCount++;
+    } else {
+      _fullyAbsentFrameCount = 0;
+    }
+    if (result.hasFace && (result.headPitch?.abs() ?? 0) < 30) {
+      _faceUprightFrames++;
+    } else {
+      _faceUprightFrames = 0;
+    }
+
     final hasStrongPostureDownEvidence = _hasStrongPostureDownEvidence(
       postureDownResult,
     );
     final shouldLatchPostureDown =
         postureDownResult.state == PostureDownState.down;
+    if (_isPostureDownLatched &&
+        _fullyAbsentFrameCount >= postureDownAbsentReleaseFrames) {
+      // The user has been completely out of frame for a long stretch; treat
+      // this as leaving the desk instead of holding the prone latch forever.
+      _isPostureDownLatched = false;
+      _postureDownRecoveryFrames = 0;
+      _lastFaceMissingContext = null;
+      _lastFaceVisibleContext = CompanionStatus.normal;
+      _clearRecentPoseEvidence();
+      postureDownDetector.reset();
+      return CompanionStatus.userMissing;
+    }
+    if (_isPostureDownLatched && _faceUprightFrames >= faceUprightReleaseFrames) {
+      // A steadily visible, upright face is incompatible with lying on the
+      // desk; force-release the latch and recalibrate the posture baseline
+      // for the user's new seating position.
+      _isPostureDownLatched = false;
+      _postureDownRecoveryFrames = 0;
+      _lastFaceMissingContext = null;
+      _lastFaceVisibleContext = CompanionStatus.normal;
+      _clearRecentPoseEvidence();
+      postureDownDetector.reset();
+      return CompanionStatus.normal;
+    }
     if (shouldLatchPostureDown) {
       _isPostureDownLatched = true;
       _postureDownRecoveryFrames = 0;
@@ -266,6 +309,15 @@ class CompanionStateEvaluator {
 
     _faceMissingFrameCount++;
 
+    if (_fullyAbsentFrameCount >= userAbsentReleaseFrames) {
+      // Neither face nor pose for a sustained stretch: the user left the
+      // frame, so stop inferring distraction/drowsiness from stale context.
+      _lastFaceMissingContext = null;
+      _lastFaceVisibleContext = CompanionStatus.normal;
+      _clearRecentPoseEvidence();
+      return CompanionStatus.userMissing;
+    }
+
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
     final headLowScore = postureDownResult.headLowScore ?? 0;
@@ -274,7 +326,8 @@ class CompanionStateEvaluator {
     final currentShouldersNearBaseline =
         result.hasPose && shoulderDropScore < 18 && shoulderShrinkScore < 35;
     final shouldersNearBaseline =
-        currentShouldersNearBaseline || _recentStableShoulderFrames > 0;
+        result.hasPose &&
+        (currentShouldersNearBaseline || _recentStableShoulderFrames > 0);
     final hasRecentProneEvidence =
         _recentPostureDownEvidenceFrames > 0 ||
         _recentProneTransitionEvidenceFrames > 0;
@@ -285,13 +338,18 @@ class CompanionStateEvaluator {
     }
 
     if (shouldersNearBaseline) {
-      final inferred = _lastFaceVisibleContext == CompanionStatus.drowsy
-          ? CompanionStatus.drowsy
-          : headDropLikely
-          ? CompanionStatus.attention
-          : CompanionStatus.distracted;
-      _lastFaceMissingContext = inferred;
-      return inferred;
+      if (_lastFaceVisibleContext == CompanionStatus.drowsy) {
+        _lastFaceMissingContext = CompanionStatus.drowsy;
+        return CompanionStatus.drowsy;
+      }
+      if (headDropLikely) {
+        _lastFaceMissingContext = CompanionStatus.attention;
+        return CompanionStatus.attention;
+      }
+      // A missing face on its own is never distraction evidence; leave the
+      // decision to presence (bodyOnly / away).
+      _lastFaceMissingContext = null;
+      return baseStatus;
     }
 
     if (!result.hasPose && _lastFaceMissingContext != null) {
@@ -335,7 +393,7 @@ class CompanionStateEvaluator {
     required PostureDownDetectionResult postureDownResult,
     required EyeState eyeState,
   }) {
-    if (!result.hasFace || !result.hasPose) return false;
+    if (!result.hasPose) return false;
 
     final score = postureDownResult.score ?? 0;
     final sideProneScore = postureDownResult.sideProneScore ?? 0;
@@ -343,6 +401,19 @@ class CompanionStateEvaluator {
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
     final headLowScore = postureDownResult.headLowScore ?? 0;
     final noseDropScore = postureDownResult.noseDropScore ?? 0;
+
+    if (!result.hasFace) {
+      // Body is back upright but the face has not been re-acquired yet
+      // (e.g. head turned). Require every posture score to be clearly back
+      // to baseline before releasing the latch.
+      return postureDownResult.state != PostureDownState.down &&
+          sideProneScore < 40 &&
+          shoulderDropScore < 25 &&
+          shoulderShrinkScore < 35 &&
+          headLowScore < 50 &&
+          noseDropScore < 55;
+    }
+
     final headPitch = result.headPitch?.abs() ?? 0;
     final headOffsetScore = result.headOffsetScore ?? 0;
     final faceVisibleStableRecovery =
@@ -482,19 +553,25 @@ class CompanionStateEvaluator {
     return CompanionStatus.normal;
   }
 
-  void reset() {
-    headOffsetDetector.reset();
-    postureDownDetector.reset();
-    _lastFaceVisibleContext = CompanionStatus.normal;
-    _lastFaceMissingContext = null;
-    _faceMissingFrameCount = 0;
+  void _clearRecentPoseEvidence() {
     _recentStableShoulderFrames = 0;
     _recentLoweredShoulderFrames = 0;
     _recentHeadDropFrames = 0;
     _recentDeepHeadDropFrames = 0;
     _recentPostureDownEvidenceFrames = 0;
     _recentProneTransitionEvidenceFrames = 0;
+  }
+
+  void reset() {
+    headOffsetDetector.reset();
+    postureDownDetector.reset();
+    _lastFaceVisibleContext = CompanionStatus.normal;
+    _lastFaceMissingContext = null;
+    _faceMissingFrameCount = 0;
+    _clearRecentPoseEvidence();
     _isPostureDownLatched = false;
     _postureDownRecoveryFrames = 0;
+    _fullyAbsentFrameCount = 0;
+    _faceUprightFrames = 0;
   }
 }
