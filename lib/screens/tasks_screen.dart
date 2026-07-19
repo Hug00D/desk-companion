@@ -521,10 +521,8 @@ class _TasksScreenState extends State<TasksScreen> {
         return '長時間閉眼';
       case CompanionStatus.distracted:
         return '分心';
-      case CompanionStatus.drowsy:
-        return '打瞌睡';
-      case CompanionStatus.postureDown:
-        return '趴下';
+      case CompanionStatus.sleeping:
+        return '疑似睡著';
       case CompanionStatus.userMissing:
         return '離席';
     }
@@ -562,10 +560,8 @@ class _TasksScreenState extends State<TasksScreen> {
         return '分心過久，已自動暫停';
       case PomodoroPauseReason.fatigue:
         return '閉眼過久，已自動暫停';
-      case PomodoroPauseReason.drowsy:
-        return '打瞌睡，已自動暫停';
-      case PomodoroPauseReason.postureDown:
-        return '趴下過久，已自動暫停';
+      case PomodoroPauseReason.sleeping:
+        return '疑似睡著，已自動暫停';
       case PomodoroPauseReason.userMissing:
         return '離席過久，已自動暫停';
       case PomodoroPauseReason.manual:

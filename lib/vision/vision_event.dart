@@ -1,5 +1,6 @@
 import 'companion_state_evaluator.dart';
 import 'eye_state_detector.dart';
+import 'pose_state_detector.dart';
 import 'presence_detector.dart';
 import 'vision_result.dart';
 
@@ -138,11 +139,10 @@ class VisionEvent {
     if (analysis.status == CompanionStatus.fatigue) {
       return VisionEventType.fatigueDetected;
     }
-    if (analysis.status == CompanionStatus.drowsy) {
-      return VisionEventType.drowsyDetected;
-    }
-    if (analysis.status == CompanionStatus.postureDown) {
-      return VisionEventType.postureDownDetected;
+    if (analysis.status == CompanionStatus.sleeping) {
+      return analysis.poseState == PoseState.postureDown
+          ? VisionEventType.postureDownDetected
+          : VisionEventType.drowsyDetected;
     }
     if (analysis.status == CompanionStatus.distracted) {
       return VisionEventType.distracted;

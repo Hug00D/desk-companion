@@ -39,7 +39,7 @@ _last_catalog_text: dict[str, str] = {}
 REMINDER_CATALOG: dict[str, tuple[str, ...]] = {
     "attention": (
         "眼睛有點累了，眨眨眼，讓視線休息一下。",
-        "看螢幕有一會兒了，稍微放鬆一下眼睛吧。",
+        "眨眼變得比較頻繁，讓眼睛休息一下吧。",
         "先把視線移開幾秒，眼睛會舒服一點。",
     ),
     "fatigue": (

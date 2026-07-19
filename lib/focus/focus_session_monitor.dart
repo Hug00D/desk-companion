@@ -272,9 +272,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   Duration _reminderThresholdFor(CompanionStatus status) {
     switch (status) {
-      case CompanionStatus.postureDown:
-        return const Duration(seconds: 1);
-      case CompanionStatus.drowsy:
+      case CompanionStatus.sleeping:
         return const Duration(seconds: 2);
       case CompanionStatus.normal:
       case CompanionStatus.attention:
@@ -333,13 +331,7 @@ class FocusSessionMonitor extends ChangeNotifier {
         threshold = const Duration(seconds: 10);
         type = FocusInterventionType.offerPause;
         break;
-      case CompanionStatus.drowsy:
-        threshold = const Duration(seconds: 10);
-        type = severeAutoPauseEnabled
-            ? FocusInterventionType.autoPause
-            : FocusInterventionType.offerPause;
-        break;
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         threshold = const Duration(seconds: 8);
         type = severeAutoPauseEnabled
             ? FocusInterventionType.autoPause

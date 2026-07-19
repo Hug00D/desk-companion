@@ -113,26 +113,27 @@ void main() {
       expect(monitor.totalEventCount, 0);
     });
 
-    test('posture down auto-pauses and only waits for recovery afterward', () {
+    test('sleeping auto-pauses and only waits for recovery afterward', () {
       final monitor = FocusSessionMonitor.detached();
       final start = DateTime(2026, 7, 6, 10);
       monitor.beginSession(now: start);
 
-      expect(_step(monitor, CompanionStatus.postureDown, start, 0), isEmpty);
-      expect(_types(_step(monitor, CompanionStatus.postureDown, start, 1)), [
+      expect(_step(monitor, CompanionStatus.sleeping, start, 0), isEmpty);
+      expect(_step(monitor, CompanionStatus.sleeping, start, 1), isEmpty);
+      expect(_types(_step(monitor, CompanionStatus.sleeping, start, 2)), [
         FocusInterventionType.reminder,
       ]);
-      for (var second = 2; second < 8; second += 1) {
-        _step(monitor, CompanionStatus.postureDown, start, second);
+      for (var second = 3; second < 8; second += 1) {
+        _step(monitor, CompanionStatus.sleeping, start, second);
       }
-      expect(_types(_step(monitor, CompanionStatus.postureDown, start, 8)), [
+      expect(_types(_step(monitor, CompanionStatus.sleeping, start, 8)), [
         FocusInterventionType.autoPause,
       ]);
 
       expect(
         _step(
           monitor,
-          CompanionStatus.drowsy,
+          CompanionStatus.sleeping,
           start,
           9,
           sessionRunning: false,
@@ -143,7 +144,7 @@ void main() {
       expect(
         _step(
           monitor,
-          CompanionStatus.drowsy,
+          CompanionStatus.sleeping,
           start,
           20,
           sessionRunning: false,
@@ -151,7 +152,7 @@ void main() {
         ),
         isEmpty,
       );
-      expect(monitor.eventCountFor(CompanionStatus.drowsy), 0);
+      expect(monitor.eventCountFor(CompanionStatus.sleeping), 1);
 
       expect(
         _step(

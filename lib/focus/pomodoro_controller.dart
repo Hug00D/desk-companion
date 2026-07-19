@@ -5,14 +5,7 @@ import 'package:flutter/foundation.dart';
 
 enum PomodoroStatus { idle, running, paused, completed }
 
-enum PomodoroPauseReason {
-  manual,
-  distracted,
-  fatigue,
-  drowsy,
-  postureDown,
-  userMissing,
-}
+enum PomodoroPauseReason { manual, distracted, fatigue, sleeping, userMissing }
 
 class PomodoroController extends ChangeNotifier {
   PomodoroController._();

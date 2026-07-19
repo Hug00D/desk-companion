@@ -127,8 +127,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     CompanionStatus.attention: Duration(seconds: 12),
     CompanionStatus.fatigue: Duration(seconds: 15),
     CompanionStatus.distracted: Duration(seconds: 12),
-    CompanionStatus.drowsy: Duration(seconds: 15),
-    CompanionStatus.postureDown: Duration(seconds: 20),
+    CompanionStatus.sleeping: Duration(seconds: 18),
   };
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
@@ -140,10 +139,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _ReminderClip(
         'assets/audio/reminders/attention_1.wav',
         '眼睛有點累了，眨眨眼，讓視線休息一下。',
-      ),
-      _ReminderClip(
-        'assets/audio/reminders/attention_2.wav',
-        '看螢幕有一會兒了，稍微放鬆一下眼睛吧。',
       ),
       _ReminderClip(
         'assets/audio/reminders/attention_3.wav',
@@ -178,24 +173,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         '好像分心了，重新找回剛才的節奏吧。',
       ),
     ],
-    CompanionStatus.drowsy: [
+    CompanionStatus.sleeping: [
       _ReminderClip('assets/audio/reminders/drowsy_1.wav', '快睡著了喔，坐直一點，醒醒精神。'),
       _ReminderClip('assets/audio/reminders/drowsy_2.wav', '先起來動一動吧，你需要清醒一下。'),
       _ReminderClip('assets/audio/reminders/drowsy_3.wav', '看起來很想睡，休息幾分鐘再繼續吧。'),
-    ],
-    CompanionStatus.postureDown: [
-      _ReminderClip(
-        'assets/audio/reminders/posture_down_1.wav',
-        '你趴下了，先坐起來再繼續。',
-      ),
-      _ReminderClip(
-        'assets/audio/reminders/posture_down_2.wav',
-        '先把身體坐正，別讓自己趴著睡著了。',
-      ),
-      _ReminderClip(
-        'assets/audio/reminders/posture_down_3.wav',
-        '起來伸展一下吧，換個姿勢會舒服一點。',
-      ),
     ],
   };
   static const List<String> _idleChatterMessages = <String>[
@@ -489,7 +470,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _resetVoiceReminderCycleForVideoReplay() {
     _fallbackVideoReplayCount += 1;
     _lastReminderPlayedAt.clear();
-    if (_pendingVoiceReminderStatus != CompanionStatus.postureDown) {
+    if (_pendingVoiceReminderStatus != CompanionStatus.sleeping) {
       _clearPendingVoiceReminder();
     }
     debugPrint(
@@ -806,10 +787,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return PomodoroPauseReason.distracted;
       case CompanionStatus.fatigue:
         return PomodoroPauseReason.fatigue;
-      case CompanionStatus.drowsy:
-        return PomodoroPauseReason.drowsy;
-      case CompanionStatus.postureDown:
-        return PomodoroPauseReason.postureDown;
+      case CompanionStatus.sleeping:
+        return PomodoroPauseReason.sleeping;
       case CompanionStatus.userMissing:
         return PomodoroPauseReason.userMissing;
       case CompanionStatus.normal:
@@ -828,10 +807,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '你已經分心一段時間，可以暫停整理一下再繼續。';
       case CompanionStatus.fatigue:
         return '眼睛持續疲勞，建議先休息一下。';
-      case CompanionStatus.drowsy:
+      case CompanionStatus.sleeping:
         return '你看起來快睡著了，建議先暫停休息。';
-      case CompanionStatus.postureDown:
-        return '目前持續趴下，建議先暫停這輪專注。';
       case CompanionStatus.userMissing:
         return '目前已經離席一段時間，要暫停番茄鐘嗎？';
       case CompanionStatus.normal:
@@ -850,10 +827,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '長時間閉眼';
       case CompanionStatus.distracted:
         return '分心狀態';
-      case CompanionStatus.drowsy:
-        return '打瞌睡狀態';
-      case CompanionStatus.postureDown:
-        return '趴下狀態';
+      case CompanionStatus.sleeping:
+        return '疑似睡著';
       case CompanionStatus.userMissing:
         return '離席狀態';
     }
@@ -938,9 +913,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   int _voicePriority(CompanionStatus status) {
     switch (status) {
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         return 4;
-      case CompanionStatus.drowsy:
       case CompanionStatus.fatigue:
         return 3;
       case CompanionStatus.distracted:
@@ -995,10 +969,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return 'vision.fatigue_detected';
       case CompanionStatus.distracted:
         return 'vision.distracted';
-      case CompanionStatus.drowsy:
-        return 'vision.drowsy';
-      case CompanionStatus.postureDown:
-        return 'vision.posture_down';
+      case CompanionStatus.sleeping:
+        return 'vision.sleeping';
       case CompanionStatus.normal:
       case CompanionStatus.userMissing:
         return 'vision.normal';
@@ -1013,10 +985,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '你看起來很累，先停一下，讓眼睛休息。';
       case CompanionStatus.distracted:
         return '注意力跑掉了，先回來專注一下。';
-      case CompanionStatus.drowsy:
-        return '快睡著了喔，坐直一點，醒一下。';
-      case CompanionStatus.postureDown:
-        return '你趴下了，先坐起來再繼續。';
+      case CompanionStatus.sleeping:
+        return '看起來快睡著了，先坐直休息一下。';
       case CompanionStatus.normal:
       case CompanionStatus.userMissing:
         return '';
@@ -1133,10 +1103,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '偵測到眼睛疲勞，建議休息一下。';
       case CompanionStatus.distracted:
         return '偵測到視線偏離，請把注意力帶回螢幕。';
-      case CompanionStatus.drowsy:
-        return '偵測到低頭打瞌睡，建議抬頭或短暫休息。';
-      case CompanionStatus.postureDown:
-        return '偵測到疑似趴下睡覺，請確認目前狀態。';
+      case CompanionStatus.sleeping:
+        return '偵測到疑似睡著，建議坐直或短暫休息。';
       case CompanionStatus.userMissing:
         return '暫時沒有偵測到完整使用者。';
     }
@@ -1617,8 +1585,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return const Color(0xFFE85D75);
       case CompanionStatus.attention:
       case CompanionStatus.distracted:
-      case CompanionStatus.drowsy:
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         return const Color(0xFFFFB648);
       case CompanionStatus.normal:
       case CompanionStatus.userMissing:
@@ -1634,8 +1601,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       case CompanionStatus.distracted:
         return const Color(0xFFFFD36B);
       case CompanionStatus.fatigue:
-      case CompanionStatus.drowsy:
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         return const Color(0xFFFF7A3D);
       case CompanionStatus.userMissing:
         return const Color(0xFF9AC7FF);
@@ -1650,8 +1616,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       case CompanionStatus.distracted:
         return const Duration(seconds: 2);
       case CompanionStatus.fatigue:
-      case CompanionStatus.drowsy:
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         return const Duration(milliseconds: 850);
       case CompanionStatus.userMissing:
         return const Duration(seconds: 4);
@@ -1680,8 +1645,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
     final value = _breathingController.value;
     if (_companionStatus == CompanionStatus.fatigue ||
-        _companionStatus == CompanionStatus.drowsy ||
-        _companionStatus == CompanionStatus.postureDown) {
+        _companionStatus == CompanionStatus.sleeping) {
       final firstPulse = value < 0.32 ? value / 0.32 : 0.0;
       final secondPulse = value > 0.46 && value < 0.72
           ? (value - 0.46) / 0.26
@@ -1720,10 +1684,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '欸，視線飄走了，回來陪我一下。';
       case CompanionStatus.fatigue:
         return '眼睛真的累了，先休息一下比較帥。';
-      case CompanionStatus.drowsy:
-        return '快睡著啦，抬頭醒一下。';
-      case CompanionStatus.postureDown:
-        return '先別趴下，坐起來喘口氣。';
+      case CompanionStatus.sleeping:
+        return '看起來快睡著啦，先坐直醒一下。';
       case CompanionStatus.userMissing:
         return '我先待機，回來再陪你。';
     }
@@ -1737,8 +1699,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       case CompanionStatus.distracted:
         return 8;
       case CompanionStatus.fatigue:
-      case CompanionStatus.drowsy:
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
       case CompanionStatus.userMissing:
         return 2;
     }
@@ -1780,10 +1741,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return "似乎有些疲倦了，記得留意狀態。";
       case CompanionStatus.distracted:
         return "視線偏離了一段時間，先把注意力帶回螢幕吧。";
-      case CompanionStatus.drowsy:
-        return "偵測到低頭打瞌睡，先抬頭休息一下。";
-      case CompanionStatus.postureDown:
-        return "偵測到趴下睡覺，先抬頭休息一下。";
+      case CompanionStatus.sleeping:
+        return "偵測到疑似睡著，先坐直休息一下。";
       case CompanionStatus.userMissing:
         return '暫時離開';
       case CompanionStatus.normal:
@@ -1801,10 +1760,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         return '疲勞';
       case CompanionStatus.distracted:
         return '分心';
-      case CompanionStatus.drowsy:
-        return '打瞌睡';
-      case CompanionStatus.postureDown:
-        return '趴下';
+      case CompanionStatus.sleeping:
+        return '睡著';
       case CompanionStatus.userMissing:
         return '離席';
     }
@@ -2418,13 +2375,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   Widget _buildAttentionBanner() {
     if (_companionStatus != CompanionStatus.attention &&
         _companionStatus != CompanionStatus.distracted &&
-        _companionStatus != CompanionStatus.drowsy &&
-        _companionStatus != CompanionStatus.postureDown) {
+        _companionStatus != CompanionStatus.sleeping) {
       return const SizedBox.shrink();
     }
     final isDistracted = _companionStatus == CompanionStatus.distracted;
-    final isDrowsy = _companionStatus == CompanionStatus.drowsy;
-    final isPostureDown = _companionStatus == CompanionStatus.postureDown;
+    final isSleeping = _companionStatus == CompanionStatus.sleeping;
 
     return Positioned(
       top: 96,
@@ -2450,10 +2405,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                isPostureDown
-                    ? "偵測到趴下睡覺，先抬頭休息一下。"
-                    : isDrowsy
-                    ? "偵測到低頭打瞌睡，先抬頭休息一下。"
+                isSleeping
+                    ? "偵測到疑似睡著，先坐直休息一下。"
                     : isDistracted
                     ? "偵測到視線偏離，請把注意力帶回螢幕。"
                     : "偵測到眨眼頻繁，請留意疲勞狀態。",

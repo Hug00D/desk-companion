@@ -147,11 +147,8 @@ class StudySessionController {
       case CompanionStatus.distracted:
         distractedEventCount += 1;
         break;
-      case CompanionStatus.drowsy:
+      case CompanionStatus.sleeping:
         drowsyEventCount += 1;
-        break;
-      case CompanionStatus.postureDown:
-        postureDownEventCount += 1;
         break;
       case CompanionStatus.userMissing:
         focusUserMissingEventCount += 1;
