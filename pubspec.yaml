@@ -42,6 +42,7 @@ dependencies:
     path: third_party/flutter_live2d
   http: ^1.6.0
   audioplayers: ^6.5.1
+  speech_to_text: ^7.4.0
 
 dev_dependencies:
   flutter_test:

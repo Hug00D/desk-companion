@@ -29,6 +29,7 @@ import '../vision/vision_event.dart';
 import '../vision/vision_event_tracker.dart';
 import '../vision/vision_result.dart';
 import '../voice/voice_command.dart';
+import '../voice/device_speech_recognition_service.dart';
 import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
 import '../voice/voice_result.dart';
@@ -83,6 +84,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const MockVoiceResultLoader(assetPath: 'assets/mock/voice_intents.json');
   final VoiceInteractionController _voiceInteractionController =
       const VoiceInteractionController();
+  final DeviceSpeechRecognitionService _deviceSpeechRecognitionService =
+      DeviceSpeechRecognitionService();
   final TextEditingController _assistantTextController =
       TextEditingController();
   final PendingActionController _pendingActionController =
@@ -118,6 +121,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isVoiceServiceTestInFlight = false;
   bool _isAssistantDecideLoading = false;
   bool _isEventUploadDemoLoading = false;
+  bool _isSpeechInitializing = false;
+  bool _isSpeechListening = false;
+  bool _isSpeechStopping = false;
+  bool _isSpeechSubmitting = false;
+  String _speechTranscript = '';
+  String? _speechRecognitionError;
+  String? _submittedSpeechSessionId;
   bool _isUserStatusExpanded = false;
   bool _isFocusPauseDialogVisible = false;
   bool _isPauseSuggestionDialogVisible = false;
@@ -1219,10 +1229,206 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _closeAllDeveloperPanels() {
     setState(() {
-      _showVoiceDemoPanel = false;
+      _hideVoiceDemoPanelState();
       _showDebugPanel = false;
       _showVisionSourcePreview = false;
     });
+  }
+
+  void _hideVoiceDemoPanelState() {
+    unawaited(_deviceSpeechRecognitionService.cancel());
+    _showVoiceDemoPanel = false;
+    _resetSpeechDemoState();
+  }
+
+  Future<void> _toggleSpeechDemo() async {
+    if (_isSpeechListening || _deviceSpeechRecognitionService.isListening) {
+      await _stopSpeechDemo();
+      return;
+    }
+    await _startSpeechDemo();
+  }
+
+  Future<void> _startSpeechDemo() async {
+    if (_isSpeechInitializing ||
+        _isSpeechStopping ||
+        _isSpeechSubmitting ||
+        _isAssistantDecideLoading) {
+      return;
+    }
+
+    setState(() {
+      _isSpeechInitializing = true;
+      _speechRecognitionError = null;
+      _speechTranscript = '';
+      _submittedSpeechSessionId = null;
+    });
+
+    try {
+      if (_voiceAudioPlayer.state == PlayerState.playing ||
+          _voiceAudioPlayer.state == PlayerState.paused) {
+        await _voiceAudioPlayer.stop();
+      }
+
+      final available = await _deviceSpeechRecognitionService.initialize(
+        onStatus: _handleDeviceSpeechStatus,
+        onError: _handleDeviceSpeechError,
+      );
+      if (!mounted) return;
+      if (!available) {
+        setState(() {
+          _isSpeechInitializing = false;
+          _speechRecognitionError = '這台裝置沒有可用的語音辨識服務。';
+        });
+        return;
+      }
+
+      debugPrint(
+        'STT locale=${_deviceSpeechRecognitionService.preferredLocaleId} '
+        'reportedByDevice='
+        '${_deviceSpeechRecognitionService.preferredLocaleReportedByDevice}',
+      );
+
+      setState(() {
+        _isSpeechInitializing = false;
+        _isSpeechListening = true;
+      });
+      await _deviceSpeechRecognitionService.start(
+        onResult: _handleDeviceSpeechResult,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSpeechInitializing = false;
+        _isSpeechListening = false;
+        _isSpeechStopping = false;
+        _speechRecognitionError = '無法開始語音辨識：$error';
+      });
+    }
+  }
+
+  Future<void> _stopSpeechDemo() async {
+    if (_isSpeechStopping) return;
+    setState(() {
+      _isSpeechListening = false;
+      _isSpeechStopping = true;
+    });
+    try {
+      await _deviceSpeechRecognitionService.stop();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSpeechStopping = false;
+        _speechRecognitionError = '停止語音辨識失敗：$error';
+      });
+    }
+  }
+
+  Future<void> _cancelSpeechDemo({bool clearTranscript = true}) async {
+    await _deviceSpeechRecognitionService.cancel();
+    if (!mounted) return;
+    setState(() {
+      _resetSpeechDemoState(clearTranscript: clearTranscript);
+    });
+  }
+
+  void _handleDeviceSpeechStatus(String status) {
+    if (!mounted) return;
+    setState(() {
+      _isSpeechListening = status == 'listening';
+      if (status == 'done' || status == 'notListening') {
+        _isSpeechStopping = false;
+      }
+    });
+  }
+
+  void _handleDeviceSpeechError(String error) {
+    debugPrint(
+      'STT error: locale=${_deviceSpeechRecognitionService.preferredLocaleId} '
+      'error=$error',
+    );
+    if (!mounted) return;
+    setState(() {
+      _isSpeechInitializing = false;
+      _isSpeechListening = false;
+      _isSpeechStopping = false;
+      _speechRecognitionError = _friendlySpeechError(error);
+    });
+  }
+
+  void _handleDeviceSpeechResult(VoiceRecognitionResult result) {
+    if (!mounted) return;
+    final text = result.bestText.trim();
+    debugPrint(
+      'STT result: locale=${result.language?.tag} '
+      'final=${result.isFinal} text="$text"',
+    );
+    setState(() {
+      _speechTranscript = text;
+      if (result.isFinal) {
+        _isSpeechListening = false;
+        _isSpeechStopping = false;
+      }
+    });
+
+    if (result.isFinal &&
+        text.isNotEmpty &&
+        _submittedSpeechSessionId != result.sessionId) {
+      _submittedSpeechSessionId = result.sessionId;
+      unawaited(_submitRecognizedSpeech(text));
+    }
+  }
+
+  Future<void> _submitRecognizedSpeech(String text) async {
+    if (_isSpeechSubmitting || _isAssistantDecideLoading) return;
+    setState(() {
+      _isSpeechSubmitting = true;
+      _speechRecognitionError = null;
+      _assistantTextController.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    });
+
+    try {
+      await _runAssistantTextDemo();
+    } finally {
+      if (mounted) {
+        setState(() => _isSpeechSubmitting = false);
+      }
+    }
+  }
+
+  String _friendlySpeechError(String error) {
+    if (error.contains('permission')) {
+      return '沒有麥克風權限，請到系統設定允許後再試一次。';
+    }
+    if (error.contains('speech_timeout')) {
+      return '沒有聽到你說話，點一下麥克風再試一次。';
+    }
+    if (error.contains('no_match')) {
+      return '這句沒有聽清楚，可以靠近一點再說一次。';
+    }
+    if (error.contains('network')) {
+      return '語音辨識目前無法連線，請檢查網路後再試一次。';
+    }
+    if (error.contains('language_not_supported') ||
+        error.contains('language_unavailable')) {
+      return '裝置尚未提供繁體中文語音模型，請安裝中文（台灣）語音資料後再試。';
+    }
+    return '語音辨識失敗：$error';
+  }
+
+  void _resetSpeechDemoState({bool clearTranscript = false}) {
+    _isSpeechInitializing = false;
+    _isSpeechListening = false;
+    _isSpeechStopping = false;
+    _isSpeechSubmitting = false;
+    _speechRecognitionError = null;
+    _submittedSpeechSessionId = null;
+    if (clearTranscript) {
+      _speechTranscript = '';
+    }
   }
 
   Future<void> _runVoiceDemo(String caseId) async {
@@ -2158,8 +2364,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                       onTap: () {
                         Navigator.pop(context);
                         setState(() {
-                          _showVoiceDemoPanel = !_showVoiceDemoPanel;
                           if (_showVoiceDemoPanel) {
+                            _hideVoiceDemoPanelState();
+                          } else {
+                            _showVoiceDemoPanel = true;
                             _showDebugPanel = false;
                             _showVisionSourcePreview = false;
                           }
@@ -2176,7 +2384,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                         setState(() {
                           _showDebugPanel = !_showDebugPanel;
                           if (_showDebugPanel) {
-                            _showVoiceDemoPanel = false;
+                            _hideVoiceDemoPanelState();
                             _showVisionSourcePreview = false;
                           }
                         });
@@ -2192,7 +2400,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                         setState(() {
                           _showVisionSourcePreview = !_showVisionSourcePreview;
                           if (_showVisionSourcePreview) {
-                            _showVoiceDemoPanel = false;
+                            _hideVoiceDemoPanelState();
                             _showDebugPanel = false;
                           }
                         });
@@ -2760,7 +2968,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                       IconButton(
                         tooltip: '關閉語音 Demo',
                         onPressed: () {
-                          setState(() => _showVoiceDemoPanel = false);
+                          setState(_hideVoiceDemoPanelState);
                         },
                         icon: const Icon(Icons.close_rounded),
                         color: const Color(0xFF63758C),
@@ -2779,6 +2987,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                     ),
                   ),
                   const SizedBox(height: 10),
+                  _buildSpeechRecognitionDemo(),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1, color: Color(0x1A20324D)),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _assistantTextController,
                     minLines: 1,
@@ -2926,6 +3138,146 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildSpeechRecognitionDemo() {
+    final isBusy =
+        _isSpeechInitializing || _isSpeechStopping || _isSpeechSubmitting;
+    final statusText = switch ((
+      _isSpeechInitializing,
+      _isSpeechListening,
+      _isSpeechStopping,
+      _isSpeechSubmitting,
+    )) {
+      (true, _, _, _) => '正在準備麥克風…',
+      (_, true, _, _) => '正在聆聽…',
+      (_, _, true, _) => '正在整理辨識結果…',
+      (_, _, _, true) => '正在把文字送給角色…',
+      _ => '裝置語音轉文字',
+    };
+    final buttonLabel = switch ((
+      _isSpeechInitializing,
+      _isSpeechListening,
+      _isSpeechStopping,
+      _isSpeechSubmitting,
+    )) {
+      (true, _, _, _) => '準備中',
+      (_, true, _, _) => '停止並送出',
+      (_, _, true, _) => '整理中',
+      (_, _, _, true) => '送出中',
+      _ => '開始語音辨識',
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              _isSpeechListening ? Icons.graphic_eq_rounded : Icons.mic_rounded,
+              size: 20,
+              color: _isSpeechListening
+                  ? const Color(0xFFDF5D67)
+                  : const Color(0xFF2F7ED8),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                statusText,
+                style: const TextStyle(
+                  color: Color(0xFF20324D),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Text(
+              _deviceSpeechRecognitionService.preferredLocaleId,
+              style: const TextStyle(
+                color: Color(0xFF63758C),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _speechTranscript.isEmpty ? '辨識文字會顯示在這裡' : _speechTranscript,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: _speechTranscript.isEmpty
+                ? const Color(0xFF8A99AA)
+                : const Color(0xFF31465F),
+            fontSize: 13,
+            height: 1.4,
+            fontWeight: _speechTranscript.isEmpty
+                ? FontWeight.w400
+                : FontWeight.w600,
+          ),
+        ),
+        if (!_deviceSpeechRecognitionService.preferredLocaleReportedByDevice)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              '模擬器未列出繁中模型，這次已強制使用 zh-TW。',
+              style: TextStyle(
+                color: Color(0xFF9A6A17),
+                fontSize: 10,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        if (_speechRecognitionError != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            _speechRecognitionError!,
+            style: const TextStyle(
+              color: Color(0xFFB33A48),
+              fontSize: 11,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: isBusy || _isAssistantDecideLoading
+                    ? null
+                    : _toggleSpeechDemo,
+                icon: isBusy
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(
+                        _isSpeechListening
+                            ? Icons.stop_rounded
+                            : Icons.mic_rounded,
+                      ),
+                label: Text(buttonLabel),
+              ),
+            ),
+            if (_isSpeechListening || _isSpeechStopping) ...[
+              const SizedBox(width: 8),
+              IconButton.filledTonal(
+                tooltip: '取消這次語音辨識',
+                onPressed: () => _cancelSpeechDemo(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ],
+        ),
+      ],
     );
   }
 
@@ -3292,8 +3644,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
               isActive: _showVoiceDemoPanel,
               onTap: () {
                 setState(() {
-                  _showVoiceDemoPanel = !_showVoiceDemoPanel;
                   if (_showVoiceDemoPanel) {
+                    _hideVoiceDemoPanelState();
+                  } else {
+                    _showVoiceDemoPanel = true;
                     _showDebugPanel = false;
                     _showVisionSourcePreview = false;
                   }
@@ -3309,7 +3663,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                 setState(() {
                   _showDebugPanel = !_showDebugPanel;
                   if (_showDebugPanel) {
-                    _showVoiceDemoPanel = false;
+                    _hideVoiceDemoPanelState();
                     _showVisionSourcePreview = false;
                   }
                 });
@@ -3324,7 +3678,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                 setState(() {
                   _showVisionSourcePreview = !_showVisionSourcePreview;
                   if (_showVisionSourcePreview) {
-                    _showVoiceDemoPanel = false;
+                    _hideVoiceDemoPanelState();
                     _showDebugPanel = false;
                   }
                 });
@@ -3598,6 +3952,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _completeVoicePlayback();
     _voicePlayerStateSubscription?.cancel();
     _voiceAudioPlayer.dispose();
+    unawaited(_deviceSpeechRecognitionService.cancel());
     _assistantTextController.dispose();
     _pomodoroController.removeListener(_handlePomodoroControllerChanged);
     super.dispose();
