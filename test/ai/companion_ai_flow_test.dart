@@ -9,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Claude-free AI intent flow', () {
+    setUp(() => PomodoroController().stop());
+    tearDown(() => PomodoroController().stop());
+
     test('Claude service stays disabled without an API key', () {
       final service = ClaudeIntentService(apiKey: '');
 

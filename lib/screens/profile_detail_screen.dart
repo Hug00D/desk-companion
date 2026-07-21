@@ -6,9 +6,10 @@ import '../api/api_client.dart';
 import '../api/profile_api.dart';
 import '../auth/auth_session.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
-import '../widgets/rive_asset_background.dart';
+import '../widgets/live2d_character_background.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
+import 'tasks_screen.dart';
 
 class ProfileDetailScreen extends StatefulWidget {
   const ProfileDetailScreen({super.key});
@@ -133,10 +134,6 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
     );
   }
 
-  void _showComingSoon(String title) {
-    _showSnackBar('$title 之後會接上正式頁面。');
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -144,10 +141,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const RiveAssetBackground(
-            assetPath: 'assets/test2.riv',
-            motionIntensity: 4,
-          ),
+          const Live2DCharacterBackground(),
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -400,7 +394,12 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
         );
       },
-      onTasksTap: () => _showComingSoon('任務'),
+      onTasksTap: () {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const TasksScreen()),
+        );
+      },
       onSettingsTap: () {
         Navigator.pushReplacement(
           context,

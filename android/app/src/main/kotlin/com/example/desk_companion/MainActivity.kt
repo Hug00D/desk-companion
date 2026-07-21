@@ -1,24 +1,51 @@
 package com.example.desk_companion
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
+import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Size
+import android.view.View
 import android.widget.Toast
 import androidx.annotation.NonNull
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
-import java.io.ByteArrayOutputStream
-import java.io.File
+import io.flutter.plugin.common.StandardMessageCodec
+import io.flutter.plugin.platform.PlatformView
+import io.flutter.plugin.platform.PlatformViewFactory
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.max
 
 class MainActivity : FlutterActivity() {
-    private val channel = "com.example.desk_companion/cv_channel"
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var visionExecutor: ExecutorService
-    private var frameCounter = 0L
+    private var visionEventSink: EventChannel.EventSink? = null
+    private var pendingCameraStartResult: MethodChannel.Result? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var imageAnalysis: ImageAnalysis? = null
+    private var previewView: PreviewView? = null
+    private var isVisionCameraRunning = false
+    private var lastFaceAnalysisAtMs = Long.MIN_VALUE
+    private var lastPoseAnalysisAtMs = Long.MIN_VALUE
+    private var cameraWarmupUntilMs = 0L
+    private var lastTaskTimestampMs = 0L
+    private var lastVisionErrorAtMs = Long.MIN_VALUE
     private val visionManagerDelegate = lazy {
         MediaPipeVisionManager(this)
     }
@@ -28,7 +55,29 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         visionExecutor = Executors.newSingleThreadExecutor()
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel).setMethodCallHandler { call, result ->
+        flutterEngine.platformViewsController.registry.registerViewFactory(
+            CAMERA_PREVIEW_VIEW_TYPE,
+            VisionCameraPreviewFactory(this)
+        )
+
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            VISION_EVENT_CHANNEL
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                visionEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                visionEventSink = null
+                stopVisionCamera()
+            }
+        })
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            METHOD_CHANNEL
+        ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "showToast" -> {
                     val message = call.argument<String>("message")
@@ -45,148 +94,33 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                "startCamera" -> {
-                    result.success("Simulator Mode: Camera logic bypassed")
-                }
+                "startCamera" -> requestVisionCameraStart(result)
 
-                "resetVision" -> {
-                    frameCounter = 0L
-                    if (visionManagerDelegate.isInitialized()) {
-                        visionManager.resetCalibration()
-                    }
+                "stopCamera" -> {
+                    stopVisionCamera()
                     result.success("OK")
                 }
 
-                "copyNativeAssetToCache" -> {
-                    val assetName = call.argument<String>("assetName")
-                    val outputFileName = call.argument<String>("outputFileName")
-                    if (assetName.isNullOrBlank() || outputFileName.isNullOrBlank()) {
-                        result.error("INVALID_ARGUMENT", "assetName and outputFileName are required", null)
-                    } else {
-                        copyNativeAssetToCache(assetName, outputFileName, result)
-                    }
-                }
-
-                "extractVideoFrame" -> {
-                    val videoPath = call.argument<String>("videoPath")
-                    val timeMs = call.argument<Int>("timeMs")
-                    val quality = call.argument<Int>("quality") ?: 85
-                    if (videoPath.isNullOrBlank() || timeMs == null) {
-                        result.error("INVALID_ARGUMENT", "videoPath and timeMs are required", null)
-                    } else {
-                        extractVideoFrame(videoPath, timeMs, quality, result)
-                    }
-                }
+                "resetVision" -> resetVision(result)
 
                 else -> result.notImplemented()
             }
         }
     }
 
-    private fun copyNativeAssetToCache(
-        assetName: String,
-        outputFileName: String,
-        result: MethodChannel.Result
-    ) {
-        try {
-            val outputFile = File(cacheDir, outputFileName)
-            assets.open(assetName).use { input ->
-                outputFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            result.success(outputFile.absolutePath)
-        } catch (e: Exception) {
-            result.error("ASSET_COPY_ERROR", e.message, null)
-        }
-    }
-
-    private fun extractVideoFrame(
-        videoPath: String,
-        timeMs: Int,
-        quality: Int,
-        result: MethodChannel.Result
-    ) {
-        visionExecutor.execute {
-            val retriever = MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(videoPath)
-                val durationMs = retriever
-                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    ?.toLongOrNull()
-                val bitmap = extractBestAvailableFrame(retriever, timeMs, durationMs)
-                    ?: throw IllegalStateException("Unable to extract video frame at ${timeMs}ms")
-
-                val output = ByteArrayOutputStream()
-                try {
-                    bitmap.compress(
-                        android.graphics.Bitmap.CompressFormat.JPEG,
-                        quality.coerceIn(1, 100),
-                        output
-                    )
-                } finally {
-                    bitmap.recycle()
-                }
-
-                mainHandler.post {
-                    result.success(output.toByteArray())
-                }
-            } catch (e: Exception) {
-                mainHandler.post {
-                    result.error("VIDEO_FRAME_ERROR", e.message, null)
-                }
-            } finally {
-                retriever.release()
-            }
-        }
-    }
-
-    private fun extractBestAvailableFrame(
-        retriever: MediaMetadataRetriever,
-        requestedTimeMs: Int,
-        durationMs: Long?
-    ): android.graphics.Bitmap? {
-        val requested = requestedTimeMs.coerceAtLeast(0).toLong()
-        val candidateTimesMs = buildList {
-            add(requested)
-            add(0L)
-            if (durationMs != null && durationMs > 0L) {
-                add((durationMs / 2L).coerceAtLeast(0L))
-                add((durationMs - 1_000L).coerceAtLeast(0L))
-            }
-        }.distinct()
-
-        val options = intArrayOf(
-            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-            MediaMetadataRetriever.OPTION_PREVIOUS_SYNC,
-            MediaMetadataRetriever.OPTION_NEXT_SYNC,
-            MediaMetadataRetriever.OPTION_CLOSEST
-        )
-
-        for (timeMs in candidateTimesMs) {
-            val timeUs = timeMs * 1000L
-            for (option in options) {
-                val frame = retriever.getFrameAtTime(timeUs, option)
-                if (frame != null) return frame
-            }
-        }
-
-        return retriever.frameAtTime
-    }
-
     private fun processImage(data: ByteArray, result: MethodChannel.Result) {
         visionExecutor.execute {
-            val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            val bitmap = decodeAnalysisBitmap(data)
             try {
                 if (bitmap == null) {
                     throw IllegalArgumentException("Unable to decode image data")
                 }
-                frameCounter++
 
                 val resultMap = visionManager.analyze(
                     bitmap = bitmap,
-                    runFace = shouldRun(frameCounter, FACE_DETECTION_INTERVAL),
-                    runPose = shouldRun(frameCounter, POSE_DETECTION_INTERVAL)
+                    runFace = true,
+                    runPose = true,
+                    timestampMs = nextTaskTimestampMs()
                 )
 
                 mainHandler.post {
@@ -202,22 +136,310 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun decodeAnalysisBitmap(data: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+
+        var sampleSize = 1
+        while (max(bounds.outWidth, bounds.outHeight) / sampleSize > MAX_ANALYSIS_DIMENSION) {
+            sampleSize *= 2
+        }
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return BitmapFactory.decodeByteArray(data, 0, data.size, options)
+    }
+
+    private fun requestVisionCameraStart(result: MethodChannel.Result) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startVisionCamera(result)
+            return
+        }
+
+        pendingCameraStartResult?.error(
+            "CAMERA_REQUEST_REPLACED",
+            "A newer camera request replaced the previous request",
+            null
+        )
+        pendingCameraStartResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.CAMERA),
+            CAMERA_PERMISSION_REQUEST_CODE
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != CAMERA_PERMISSION_REQUEST_CODE) return
+
+        val pendingResult = pendingCameraStartResult ?: return
+        pendingCameraStartResult = null
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            startVisionCamera(pendingResult)
+        } else {
+            pendingResult.error(
+                "CAMERA_PERMISSION_DENIED",
+                "Camera permission was denied",
+                null
+            )
+        }
+    }
+
+    private fun startVisionCamera(result: MethodChannel.Result) {
+        if (isVisionCameraRunning) {
+            result.success("OK")
+            return
+        }
+
+        val providerFuture = ProcessCameraProvider.getInstance(this)
+        providerFuture.addListener({
+            try {
+                cameraProvider = providerFuture.get()
+                isVisionCameraRunning = true
+                resetAnalysisSchedule()
+                bindCameraUseCases()
+                result.success("OK")
+            } catch (e: Exception) {
+                isVisionCameraRunning = false
+                result.error("CAMERA_START_ERROR", e.message, null)
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun bindCameraUseCases() {
+        val provider = cameraProvider ?: return
+        if (!isVisionCameraRunning) return
+
+        imageAnalysis?.clearAnalyzer()
+        val analysis = ImageAnalysis.Builder()
+            .setTargetResolution(Size(ANALYSIS_WIDTH, ANALYSIS_HEIGHT))
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+        analysis.setAnalyzer(visionExecutor, ::analyzeCameraFrame)
+        imageAnalysis = analysis
+
+        val cameraSelector = when {
+            provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) ->
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) ->
+                CameraSelector.DEFAULT_BACK_CAMERA
+            else -> throw IllegalStateException("No camera is available")
+        }
+
+        val useCases = mutableListOf<androidx.camera.core.UseCase>(analysis)
+        previewView?.let { view ->
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(view.surfaceProvider)
+            }
+            useCases.add(preview)
+        }
+
+        provider.unbindAll()
+        provider.bindToLifecycle(this, cameraSelector, *useCases.toTypedArray())
+    }
+
+    private fun analyzeCameraFrame(imageProxy: ImageProxy) {
+        var analysisBitmap: Bitmap? = null
+        try {
+            val nowMs = SystemClock.elapsedRealtime()
+            val runFace = elapsedAtLeast(
+                nowMs,
+                lastFaceAnalysisAtMs,
+                FACE_ANALYSIS_INTERVAL_MS
+            )
+            val shouldBoostPose = nowMs < cameraWarmupUntilMs ||
+                !visionManagerDelegate.isInitialized() ||
+                visionManager.shouldBoostPose()
+            val poseIntervalMs = if (shouldBoostPose) {
+                POSE_BOOST_INTERVAL_MS
+            } else {
+                POSE_STABLE_INTERVAL_MS
+            }
+            val runPose = elapsedAtLeast(nowMs, lastPoseAnalysisAtMs, poseIntervalMs)
+
+            if (!runFace && !runPose) return
+
+            analysisBitmap = prepareAnalysisBitmap(imageProxy)
+            val resultMap = visionManager.analyze(
+                bitmap = analysisBitmap,
+                runFace = runFace,
+                runPose = runPose,
+                timestampMs = nextTaskTimestampMs()
+            )
+            if (runFace) lastFaceAnalysisAtMs = nowMs
+            if (runPose) lastPoseAnalysisAtMs = nowMs
+
+            mainHandler.post {
+                visionEventSink?.success(resultMap)
+            }
+        } catch (e: Exception) {
+            emitVisionError(e)
+        } finally {
+            analysisBitmap?.recycle()
+            imageProxy.close()
+        }
+    }
+
+    private fun prepareAnalysisBitmap(imageProxy: ImageProxy): Bitmap {
+        val source = imageProxy.toBitmap()
+        val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+        val rotated = if (rotationDegrees == 0) {
+            source
+        } else {
+            Bitmap.createBitmap(
+                source,
+                0,
+                0,
+                source.width,
+                source.height,
+                Matrix().apply { postRotate(rotationDegrees.toFloat()) },
+                true
+            ).also { source.recycle() }
+        }
+
+        val maxDimension = max(rotated.width, rotated.height)
+        if (maxDimension <= MAX_ANALYSIS_DIMENSION) return rotated
+
+        val scale = MAX_ANALYSIS_DIMENSION.toFloat() / maxDimension
+        return Bitmap.createScaledBitmap(
+            rotated,
+            (rotated.width * scale).toInt(),
+            (rotated.height * scale).toInt(),
+            true
+        ).also { scaled ->
+            if (scaled !== rotated) rotated.recycle()
+        }
+    }
+
+    private fun elapsedAtLeast(nowMs: Long, previousMs: Long, intervalMs: Long): Boolean {
+        return previousMs == Long.MIN_VALUE || nowMs - previousMs >= intervalMs
+    }
+
+    private fun nextTaskTimestampMs(): Long {
+        val nowMs = SystemClock.uptimeMillis()
+        lastTaskTimestampMs = max(nowMs, lastTaskTimestampMs + 1L)
+        return lastTaskTimestampMs
+    }
+
+    private fun resetAnalysisSchedule() {
+        lastFaceAnalysisAtMs = Long.MIN_VALUE
+        lastPoseAnalysisAtMs = Long.MIN_VALUE
+        cameraWarmupUntilMs = SystemClock.elapsedRealtime() + CAMERA_WARMUP_DURATION_MS
+    }
+
+    private fun emitVisionError(error: Exception) {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (!elapsedAtLeast(nowMs, lastVisionErrorAtMs, ERROR_REPORT_INTERVAL_MS)) return
+        lastVisionErrorAtMs = nowMs
+        mainHandler.post {
+            visionEventSink?.error("CAMERA_ANALYSIS_ERROR", error.message, null)
+        }
+    }
+
+    private fun resetVision(result: MethodChannel.Result) {
+        visionExecutor.execute {
+            if (visionManagerDelegate.isInitialized()) {
+                visionManager.resetCalibration()
+            }
+            resetAnalysisSchedule()
+            mainHandler.post { result.success("OK") }
+        }
+    }
+
+    private fun stopVisionCamera() {
+        isVisionCameraRunning = false
+        imageAnalysis?.clearAnalyzer()
+        imageAnalysis = null
+        cameraProvider?.unbindAll()
+    }
+
+    internal fun attachCameraPreview(view: PreviewView) {
+        previewView = view
+        if (isVisionCameraRunning) {
+            bindCameraUseCases()
+        }
+    }
+
+    internal fun detachCameraPreview(view: PreviewView) {
+        if (previewView !== view) return
+        previewView = null
+        if (isVisionCameraRunning) {
+            bindCameraUseCases()
+        }
+    }
+
     override fun onDestroy() {
-        super.onDestroy()
+        pendingCameraStartResult?.error(
+            "ACTIVITY_DESTROYED",
+            "The activity was destroyed before the camera started",
+            null
+        )
+        pendingCameraStartResult = null
+        visionEventSink = null
+        stopVisionCamera()
         if (visionManagerDelegate.isInitialized()) {
             visionManager.close()
         }
         if (::visionExecutor.isInitialized) {
             visionExecutor.shutdown()
         }
-    }
-
-    private fun shouldRun(frameNumber: Long, interval: Int): Boolean {
-        return (frameNumber - 1L) % interval == 0L
+        super.onDestroy()
     }
 
     companion object {
-        private const val FACE_DETECTION_INTERVAL = 1
-        private const val POSE_DETECTION_INTERVAL = 3
+        private const val METHOD_CHANNEL = "com.example.desk_companion/cv_channel"
+        private const val VISION_EVENT_CHANNEL =
+            "com.example.desk_companion/cv_stream"
+        private const val CAMERA_PREVIEW_VIEW_TYPE =
+            "com.example.desk_companion/camera_preview"
+        private const val CAMERA_PERMISSION_REQUEST_CODE = 4201
+        private const val ANALYSIS_WIDTH = 640
+        private const val ANALYSIS_HEIGHT = 480
+        private const val MAX_ANALYSIS_DIMENSION = 640
+        private const val FACE_ANALYSIS_INTERVAL_MS = 600L
+        private const val POSE_STABLE_INTERVAL_MS = 1200L
+        private const val POSE_BOOST_INTERVAL_MS = 600L
+        private const val CAMERA_WARMUP_DURATION_MS = 4_000L
+        private const val ERROR_REPORT_INTERVAL_MS = 5_000L
+    }
+}
+
+private class VisionCameraPreviewFactory(
+    private val activity: MainActivity
+) : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
+    override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
+        return VisionCameraPreview(context, activity)
+    }
+}
+
+private class VisionCameraPreview(
+    context: Context,
+    private val activity: MainActivity
+) : PlatformView {
+    private val previewView = PreviewView(context).apply {
+        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        scaleType = PreviewView.ScaleType.FILL_CENTER
+    }
+
+    init {
+        activity.attachCameraPreview(previewView)
+    }
+
+    override fun getView(): View = previewView
+
+    override fun dispose() {
+        activity.detachCameraPreview(previewView)
     }
 }

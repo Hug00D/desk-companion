@@ -15,7 +15,7 @@ public interface UserService {
 
     UserResponse getByEmail(String email);
 
-    void softDelete(UUID userId);
+    void softDelete(UUID userId, String password);
 
     void assertLoginAllowed(User user);
 

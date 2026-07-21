@@ -1,3 +1,4 @@
+import 'eye_state_detector.dart';
 import 'posture_down_detector.dart';
 import 'vision_result.dart';
 
@@ -17,9 +18,9 @@ class PoseDetectionResult {
 
 class PoseStateDetector {
   const PoseStateDetector({
-    this.drowsyPitchThreshold = 32,
-    this.drowsyHeadLowThreshold = 55,
-    this.drowsyNoseDropThreshold = 70,
+    this.drowsyPitchThreshold = 26,
+    this.drowsyHeadLowThreshold = 45,
+    this.drowsyNoseDropThreshold = 55,
     this.drowsyMaxShoulderDropScore = 50,
     this.drowsyMaxShoulderShrinkScore = 45,
   });
@@ -35,6 +36,7 @@ class PoseStateDetector {
     required PostureDownDetectionResult postureDownResult,
     required int postureDownFrameCount,
     required bool isPostureDown,
+    required EyeState eyeState,
   }) {
     final postureDownScore = postureDownResult.score;
     final shoulderWidth = result.shoulderWidth;
@@ -65,6 +67,7 @@ class PoseStateDetector {
     final isDrowsy = _isDrowsyHeadDrop(
       result: result,
       postureDownResult: postureDownResult,
+      eyeState: eyeState,
     );
     if (isDrowsy) {
       return PoseDetectionResult(
@@ -84,6 +87,7 @@ class PoseStateDetector {
   bool _isDrowsyHeadDrop({
     required VisionResult result,
     required PostureDownDetectionResult postureDownResult,
+    required EyeState eyeState,
   }) {
     final headPitch = result.headPitch;
     if (!result.hasFace || headPitch == null) return false;
@@ -93,9 +97,15 @@ class PoseStateDetector {
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
 
-    return headPitch >= drowsyPitchThreshold &&
+    final pitchSupportsHeadDrop =
+        headPitch.abs() >= drowsyPitchThreshold &&
+        (headLowScore >= 35 || noseDropScore >= 40);
+    final geometrySupportsHeadDrop =
         headLowScore >= drowsyHeadLowThreshold &&
-        noseDropScore >= drowsyNoseDropThreshold &&
+        noseDropScore >= drowsyNoseDropThreshold;
+
+    return eyeState == EyeState.fatigue &&
+        (pitchSupportsHeadDrop || geometrySupportsHeadDrop) &&
         shoulderDropScore < drowsyMaxShoulderDropScore &&
         shoulderShrinkScore < drowsyMaxShoulderShrinkScore;
   }

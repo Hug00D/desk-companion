@@ -1,15 +1,20 @@
 import '../voice/voice_command.dart';
 
-class PendingCompanionAction {
+class PendingAction {
+  const PendingAction({required this.command, required this.confirmationText});
+
+  final VoiceCommand command;
+  final String confirmationText;
+}
+
+class PendingCompanionAction extends PendingAction {
   const PendingCompanionAction({
-    required this.command,
-    required this.confirmationText,
+    required super.command,
+    required super.confirmationText,
     this.createdAt,
     this.ttl = const Duration(seconds: 45),
   });
 
-  final VoiceCommand command;
-  final String confirmationText;
   final DateTime? createdAt;
   final Duration ttl;
 
@@ -30,12 +35,28 @@ class PendingActionResolution {
 }
 
 class PendingActionController {
-  PendingCompanionAction? _pending;
+  PendingAction? _pendingAction;
 
-  PendingCompanionAction? get pending => _pending;
+  PendingAction? get pendingAction => _pendingAction;
+
+  PendingCompanionAction? get pending {
+    final action = _pendingAction;
+    if (action == null) return null;
+    if (action is PendingCompanionAction) return action;
+    return PendingCompanionAction(
+      command: action.command,
+      confirmationText: action.confirmationText,
+    );
+  }
+
+  bool get hasPendingAction => _pendingAction != null;
+
+  void setPendingAction(PendingAction action) {
+    _pendingAction = action;
+  }
 
   void set(PendingCompanionAction action, {DateTime? now}) {
-    _pending = PendingCompanionAction(
+    _pendingAction = PendingCompanionAction(
       command: action.command,
       confirmationText: action.confirmationText,
       createdAt: now ?? DateTime.now(),
@@ -43,16 +64,21 @@ class PendingActionController {
     );
   }
 
+  PendingAction? consume() {
+    final action = _pendingAction;
+    _pendingAction = null;
+    return action;
+  }
+
   void clear() {
-    _pending = null;
+    _pendingAction = null;
   }
 
   PendingActionResolution? resolve(String userText, {DateTime? now}) {
-    final action = _pending;
+    final action = pending;
     if (action == null) return null;
 
-    final timestamp = now ?? DateTime.now();
-    if (action.isExpired(timestamp)) {
+    if (action.isExpired(now ?? DateTime.now())) {
       clear();
       return null;
     }

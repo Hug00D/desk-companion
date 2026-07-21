@@ -83,6 +83,51 @@ class VoiceRecognitionResult {
     );
   }
 
+  Map<String, dynamic> toJson({bool includeTranscript = true}) {
+    return <String, dynamic>{
+      'sessionId': sessionId,
+      'eventType': _eventTypeToString(eventType),
+      'timestampMs': timestampMs,
+      if (caseId != null) 'caseId': caseId,
+      if (includeTranscript && transcript != null) 'transcript': transcript,
+      if (includeTranscript && formattedTranscript != null)
+        'formattedTranscript': formattedTranscript,
+      'isFinal': isFinal,
+      'candidates': candidates
+          .map(
+            (candidate) => <String, dynamic>{
+              if (includeTranscript) 'text': candidate.text,
+              if (candidate.confidence != null)
+                'confidence': candidate.confidence,
+            },
+          )
+          .toList(growable: false),
+      if (audio != null) 'audio': audio!.toJson(),
+      if (language != null) 'language': language!.toJson(),
+      'recognitionParts': recognitionParts
+          .map(
+            (part) => <String, dynamic>{
+              if (includeTranscript) 'text': part.text,
+              if (includeTranscript && part.formattedText != null)
+                'formattedText': part.formattedText,
+              if (part.timestampMs != null) 'timestampMs': part.timestampMs,
+              if (part.confidence != null) 'confidence': part.confidence,
+            },
+          )
+          .toList(growable: false),
+      'alternatives': alternatives
+          .map(
+            (alternative) => <String, dynamic>{
+              'startIndex': alternative.startIndex,
+              'endIndex': alternative.endIndex,
+              if (includeTranscript) 'texts': alternative.texts,
+            },
+          )
+          .toList(growable: false),
+      if (error != null) 'error': error!.toJson(),
+    };
+  }
+
   static VoiceEventType _eventTypeFromString(String? value) {
     switch (value) {
       case 'partial':
@@ -92,6 +137,17 @@ class VoiceRecognitionResult {
       case 'final':
       default:
         return VoiceEventType.finalResult;
+    }
+  }
+
+  static String _eventTypeToString(VoiceEventType type) {
+    switch (type) {
+      case VoiceEventType.partial:
+        return 'partial';
+      case VoiceEventType.error:
+        return 'error';
+      case VoiceEventType.finalResult:
+        return 'final';
     }
   }
 }
@@ -108,6 +164,13 @@ class VoiceCandidate {
       confidence: _toDouble(json['confidence']),
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'text': text,
+      if (confidence != null) 'confidence': confidence,
+    };
+  }
 }
 
 class VoiceAudioInfo {
@@ -121,6 +184,13 @@ class VoiceAudioInfo {
       rmsDb: _toDouble(json['rmsDb']),
       isSpeechDetected: json['isSpeechDetected'] == true,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      if (rmsDb != null) 'rmsDb': rmsDb,
+      'isSpeechDetected': isSpeechDetected,
+    };
   }
 }
 
@@ -143,6 +213,14 @@ class VoiceLanguageInfo {
         json['alternatives'],
       ).map((value) => value.toString()).toList(),
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      if (tag != null) 'tag': tag,
+      if (confidenceLevel != null) 'confidenceLevel': confidenceLevel,
+      'alternatives': alternatives,
+    };
   }
 }
 
@@ -167,6 +245,15 @@ class VoiceRecognitionPart {
       confidence: _toDouble(json['confidence']),
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'text': text,
+      if (formattedText != null) 'formattedText': formattedText,
+      if (timestampMs != null) 'timestampMs': timestampMs,
+      if (confidence != null) 'confidence': confidence,
+    };
+  }
 }
 
 class VoiceAlternativeSpan {
@@ -189,6 +276,14 @@ class VoiceAlternativeSpan {
       ).map((value) => value.toString()).toList(),
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'startIndex': startIndex,
+      'endIndex': endIndex,
+      'texts': texts,
+    };
+  }
 }
 
 class VoiceRecognitionError {
@@ -202,6 +297,10 @@ class VoiceRecognitionError {
       code: json['code']?.toString() ?? 'UNKNOWN',
       message: json['message']?.toString() ?? 'Unknown voice error.',
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{'code': code, 'message': message};
   }
 }
 

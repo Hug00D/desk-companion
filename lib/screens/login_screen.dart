@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -5,7 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/auth_api.dart';
 import '../auth/auth_session.dart';
-import '../widgets/rive_asset_background.dart';
+import '../widgets/live2d_character_background.dart';
 import 'face_detection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -28,15 +29,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleAction() async {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => const FaceDetectionScreen()),
-    );
-    return;
-
-
     final email = _emailController.text.trim();
-    final password = _pwController.text.trim();
+    final password = _pwController.text;
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(
@@ -73,7 +67,17 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
       );
+    } on TimeoutException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('伺服器連線逾時，請確認手機可以連到 ${_authApi.baseUrl}'),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 8),
+        ),
+      );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text("網路連線失敗: $e")));
@@ -96,9 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Stack(
         children: [
           // 1. 動態背景
-          const SizedBox.expand(
-            child: RiveAssetBackground(assetPath: 'assets/test2.riv'),
-          ),
+          const SizedBox.expand(child: Live2DCharacterBackground()),
           Positioned.fill(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
