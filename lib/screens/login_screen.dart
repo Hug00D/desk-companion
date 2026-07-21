@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/auth_api.dart';
 import '../auth/auth_session.dart';
-import '../widgets/rive_asset_background.dart';
+import '../widgets/live2d_character_background.dart';
 import 'face_detection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -100,9 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Stack(
         children: [
           // 1. 動態背景
-          const SizedBox.expand(
-            child: RiveAssetBackground(assetPath: 'assets/test2.riv'),
-          ),
+          const SizedBox.expand(child: Live2DCharacterBackground()),
           Positioned.fill(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),

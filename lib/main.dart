@@ -1,11 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'screens/face_detection_screen.dart';
 import 'screens/login_screen.dart';
 
-void main() => runApp(const DeskCompanionApp());
+const bool _offlineDemoRequested = bool.fromEnvironment('OFFLINE_DEMO');
+
+void main() =>
+    runApp(DeskCompanionApp(offlineDemo: kDebugMode && _offlineDemoRequested));
 
 class DeskCompanionApp extends StatelessWidget {
-  const DeskCompanionApp({super.key});
+  const DeskCompanionApp({super.key, this.offlineDemo = false});
+
+  final bool offlineDemo;
 
   @override
   Widget build(BuildContext context) {
@@ -16,8 +23,7 @@ class DeskCompanionApp extends StatelessWidget {
         useMaterial3: true,
         primaryColor: const Color(0xFF57BEEB),
       ),
-      // 之後如果你寫好了 LoginScreen，就把這裡換掉
-      home: const LoginScreen(),
+      home: offlineDemo ? const FaceDetectionScreen() : const LoginScreen(),
     );
   }
 }

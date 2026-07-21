@@ -141,6 +141,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+**/android/.cxx/
 
 # Local voice models and generated speech are licensed/runtime artifacts.
 /backend/python_voice_service/models/

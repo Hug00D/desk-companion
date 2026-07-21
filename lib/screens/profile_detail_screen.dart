@@ -6,7 +6,7 @@ import '../api/api_client.dart';
 import '../api/profile_api.dart';
 import '../auth/auth_session.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
-import '../widgets/rive_asset_background.dart';
+import '../widgets/live2d_character_background.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
 import 'tasks_screen.dart';
@@ -141,10 +141,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const RiveAssetBackground(
-            assetPath: 'assets/test2.riv',
-            motionIntensity: 4,
-          ),
+          const Live2DCharacterBackground(),
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(

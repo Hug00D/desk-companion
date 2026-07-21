@@ -15,6 +15,7 @@ import '../ai/pending_action_controller.dart';
 import '../api/api_client.dart';
 import '../api/assistant_api.dart';
 import '../companion/companion_controller.dart';
+import '../companion/character_reaction.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/focus_session_monitor.dart';
 import '../focus/focus_round.dart';
@@ -33,7 +34,7 @@ import '../voice/voice_interaction_controller.dart';
 import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
-import '../widgets/rive_asset_background.dart';
+import '../widgets/live2d_character_background.dart';
 import 'profile_detail_screen.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
@@ -132,8 +133,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
   static const bool _preferFallbackVideoForLocalTest = false;
-  static const String _fallbackVideoAssetPath = 'assets/test.mp4';
-  static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
+  static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
+  static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
   static const Map<CompanionStatus, List<_ReminderClip>> _reminderClips = {
     CompanionStatus.attention: [
       _ReminderClip(
@@ -211,6 +212,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   VoiceInteraction? _lastVoiceInteraction;
   String? _lastEventUploadDemoMessage;
   VisionEventType _lastVisionEventType = VisionEventType.normal;
+  CompanionCharacterReaction _characterReaction =
+      CompanionCharacterReaction.none;
+  int _characterReactionSerial = 0;
 
   @override
   void initState() {
@@ -391,7 +395,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = true;
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
-      _status = '本地測試模式：使用 test.mp4。';
+      _status = '本地測試模式：使用 test_face.mp4。';
       await _resetVisionCalibration();
       if (!mounted) return;
       _startFallbackVideoDetectionLoop();
@@ -562,6 +566,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (analysis.status != CompanionStatus.normal) {
         _idleBubbleVisibleUntil = null;
       }
+    }
+    if (trackingResult.event.type == VisionEventType.userReturned &&
+        _lastVisionEventType != VisionEventType.userReturned) {
+      _triggerCharacterReaction(CompanionCharacterReaction.welcome);
     }
     _lastVisionEventType = trackingResult.event.type;
     final shouldUpdateVisionMessage =
@@ -1009,6 +1017,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       playbackCompleter = Completer<void>();
       _voicePlaybackCompleter = playbackCompleter;
       _currentVoicePlaybackStatus = status;
+      _triggerCharacterReaction(CompanionCharacterReaction.reminder);
       _showSpokenReminder(status, message);
       debugPrint(
         'Voice playback starting: ${audioBytes.length} bytes '
@@ -1275,6 +1284,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     setState(() {
       _isAssistantDecideLoading = true;
     });
+    _triggerCharacterReaction(CompanionCharacterReaction.thinking);
 
     try {
       final result = await _assistantInteractionController.handleText(
@@ -1286,6 +1296,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _applyAssistantInteractionResult(text, result);
     } catch (error) {
       if (!mounted) return;
+      _triggerCharacterReaction(CompanionCharacterReaction.error);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Assistant decide failed: $error'),
@@ -1323,6 +1334,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   ) {
     if (result.pendingAction != null) {
       _pendingActionController.setPendingAction(result.pendingAction!);
+      _triggerCharacterReaction(CompanionCharacterReaction.confirmation);
     }
 
     if (result.shouldRunAction && result.command != null) {
@@ -1338,6 +1350,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _companionMessage = result.response.message;
     _lastVoiceResponseMessage = result.response.message;
     _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    if (result.pendingAction == null) {
+      _triggerCharacterReaction(CompanionCharacterReaction.success);
+    }
     setState(() {});
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -1381,6 +1396,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _lastVoiceResponseMessage = _companionMessage;
       _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
     });
+    _triggerCharacterReaction(CompanionCharacterReaction.error);
   }
 
   void _applyVoiceInteraction(VoiceInteraction interaction) {
@@ -1406,6 +1422,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _companionMessage = actionResult.response.message;
     _lastVoiceResponseMessage = actionResult.response.message;
     _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    _triggerCharacterReaction(CompanionCharacterReaction.success);
 
     if (mounted) {
       setState(() {});
@@ -1517,6 +1534,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _companionMessage = '這輪專注完成了，先休息一下吧。';
       _lastVoiceResponseMessage = null;
       _voiceMessagePinnedUntil = null;
+      _triggerCharacterReaction(CompanionCharacterReaction.focusCompleted);
     }
     if (currentStatus == PomodoroStatus.idle ||
         currentStatus == PomodoroStatus.completed) {
@@ -1691,18 +1709,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
-  double get _companionMotionIntensity {
-    switch (_companionStatus) {
-      case CompanionStatus.normal:
-        return 18;
-      case CompanionStatus.attention:
-      case CompanionStatus.distracted:
-        return 8;
-      case CompanionStatus.fatigue:
-      case CompanionStatus.sleeping:
-      case CompanionStatus.userMissing:
-        return 2;
-    }
+  CompanionCharacterMood get _characterMood {
+    return switch (_companionStatus) {
+      CompanionStatus.normal => CompanionCharacterMood.neutral,
+      CompanionStatus.attention => CompanionCharacterMood.attentive,
+      CompanionStatus.fatigue => CompanionCharacterMood.tired,
+      CompanionStatus.distracted => CompanionCharacterMood.distracted,
+      CompanionStatus.sleeping => CompanionCharacterMood.sleeping,
+      CompanionStatus.userMissing => CompanionCharacterMood.away,
+    };
+  }
+
+  void _triggerCharacterReaction(CompanionCharacterReaction reaction) {
+    _characterReaction = reaction;
+    _characterReactionSerial += 1;
+    if (mounted) setState(() {});
   }
 
   String get _displayName {
@@ -3416,9 +3437,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Widget _buildCameraBackground() {
     return RepaintBoundary(
-      child: RiveAssetBackground(
-        assetPath: 'assets/test2.riv',
-        motionIntensity: _companionMotionIntensity,
+      child: Live2DCharacterBackground(
+        mood: _characterMood,
+        reaction: _characterReaction,
+        reactionSerial: _characterReactionSerial,
       ),
     );
   }
