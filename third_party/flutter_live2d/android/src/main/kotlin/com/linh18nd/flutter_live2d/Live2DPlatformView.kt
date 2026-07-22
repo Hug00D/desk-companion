@@ -50,14 +50,14 @@ class Live2DPlatformView(
     }
 
     fun loadModel(modelDir: String, modelFileName: String, callback: (Boolean) -> Unit) {
-        Live2DRenderHub.queueEvent(nativeHandle) {
+        Live2DRenderHub.queueEvent(nativeHandle, onCancelled = { callback(false) }) {
             val ok = Live2DBridge.nativeLoadModel(nativeHandle, modelDir, modelFileName)
             callback(ok)
         }
     }
 
     fun unloadModel(callback: () -> Unit) {
-        Live2DRenderHub.queueEvent(nativeHandle) {
+        Live2DRenderHub.queueEvent(nativeHandle, onCancelled = callback) {
             Live2DBridge.nativeUnloadModel(nativeHandle)
             callback()
         }
@@ -158,6 +158,12 @@ private class Live2DTextureView(
  */
 private object Live2DRenderHub {
 
+    private class PendingAction(
+        val handle: Long,
+        val action: () -> Unit,
+        val onCancelled: (() -> Unit)?,
+    )
+
     private class HubView(
         val handle: Long,
         val surfaceTexture: SurfaceTexture,
@@ -174,7 +180,8 @@ private object Live2DRenderHub {
     private val running = AtomicBoolean(false)
     private val viewsLock = Any()
     private val views = mutableListOf<HubView>()
-    private val pendingActions = LinkedBlockingQueue<Pair<Long, () -> Unit>>()
+    private val disposedHandles = mutableSetOf<Long>()
+    private val pendingActions = LinkedBlockingQueue<PendingAction>()
     private val newSurfaces = LinkedBlockingQueue<HubView>()
 
     private var thread: Thread? = null
@@ -188,14 +195,30 @@ private object Live2DRenderHub {
         val view = HubView(handle, surface, width, height)
         synchronized(viewsLock) {
             views.removeAll { it.handle == handle }
+            // A PlatformView can be disposed while Android is still preparing
+            // its TextureView. A late registration must go straight through
+            // cleanup rather than execute commands for an already-dead view.
+            view.doomed = disposedHandles.contains(handle)
             views.add(view)
             ensureStarted()
         }
         newSurfaces.offer(view)
     }
 
-    fun queueEvent(handle: Long, action: () -> Unit) {
-        pendingActions.offer(handle to action)
+    fun queueEvent(
+        handle: Long,
+        onCancelled: (() -> Unit)? = null,
+        action: () -> Unit,
+    ) {
+        val accepted = synchronized(viewsLock) {
+            if (disposedHandles.contains(handle)) {
+                false
+            } else {
+                pendingActions.offer(PendingAction(handle, action, onCancelled))
+                true
+            }
+        }
+        if (!accepted) onCancelled?.invoke()
     }
 
     fun setPaused(handle: Long, paused: Boolean) {
@@ -220,9 +243,17 @@ private object Live2DRenderHub {
      * already gone or never existed.
      */
     fun disposeViewSync(handle: Long, timeoutMs: Long = 2000) {
-        val latch: CountDownLatch
+        var latch: CountDownLatch? = null
+        val cancelledActions: List<PendingAction>
         synchronized(viewsLock) {
-            val v = views.firstOrNull { it.handle == handle } ?: return
+            disposedHandles.add(handle)
+            cancelledActions = pendingActions.filter { it.handle == handle }
+            pendingActions.removeAll(cancelledActions.toSet())
+
+            val v = views.firstOrNull { it.handle == handle } ?: run {
+                cancelledActions.forEach { it.onCancelled?.invoke() }
+                return
+            }
             if (v.doomed) {
                 // Already in the disposal pipeline — wait on the existing latch.
                 latch = v.disposeLatch ?: return
@@ -232,8 +263,10 @@ private object Live2DRenderHub {
                 v.doomed = true
             }
         }
+        cancelledActions.forEach { it.onCancelled?.invoke() }
+        val disposeLatch = latch ?: return
         try {
-            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            disposeLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
@@ -264,17 +297,32 @@ private object Live2DRenderHub {
 
             // 3. Drain queued events (loadModel, startMotion, ...).
             //    Skip events for views that have been disposed.
-            while (true) {
-                val pair = pendingActions.poll() ?: break
-                val (handle, action) = pair
+            // Only inspect the commands that existed at the start of this
+            // frame. If Flutter has created the PlatformView but Android has
+            // not produced its EGLSurface yet, retain the command for the next
+            // frame instead of silently dropping it.
+            val pendingCount = pendingActions.size
+            for (index in 0 until pendingCount) {
+                val pending = pendingActions.poll() ?: break
                 val target = synchronized(viewsLock) {
-                    views.firstOrNull { it.handle == handle && !it.doomed }
+                    views.firstOrNull {
+                        it.handle == pending.handle && !it.doomed
+                    }
                 }
                 if (target != null && target.eglSurface != EGL14.EGL_NO_SURFACE) {
                     EGL14.eglMakeCurrent(
                         eglDisplay, target.eglSurface, target.eglSurface, eglContext
                     )
-                    action()
+                    pending.action()
+                } else {
+                    val shouldRetry = synchronized(viewsLock) {
+                        !disposedHandles.contains(pending.handle)
+                    }
+                    if (shouldRetry) {
+                        pendingActions.offer(pending)
+                    } else {
+                        pending.onCancelled?.invoke()
+                    }
                 }
             }
 
