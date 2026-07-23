@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'navigation/app_route_observer.dart';
 import 'screens/face_detection_screen.dart';
 import 'screens/login_screen.dart';
 
@@ -19,6 +20,7 @@ class DeskCompanionApp extends StatelessWidget {
     return MaterialApp(
       title: 'Desk Companion',
       debugShowCheckedModeBanner: false,
+      navigatorObservers: [appRouteObserver],
       theme: ThemeData(
         useMaterial3: true,
         primaryColor: const Color(0xFF57BEEB),

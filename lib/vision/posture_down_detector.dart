@@ -53,6 +53,7 @@ class PostureDownDetector {
     this.motionReliableShoulderVisibility = 0.6,
     this.shoulderDropRatioForMaxScore = 0.06,
     this.noseDropRatioForMaxScore = 0.06,
+    this.noseDropScoreWeight = 0.5,
     this.shoulderShrinkRatioForMaxScore = 0.22,
     OneEuroFilter? headShoulderFilter,
     OneEuroFilter? shoulderCenterFilter,
@@ -80,6 +81,7 @@ class PostureDownDetector {
   final double motionReliableShoulderVisibility;
   final double shoulderDropRatioForMaxScore;
   final double noseDropRatioForMaxScore;
+  final double noseDropScoreWeight;
   final double shoulderShrinkRatioForMaxScore;
   final OneEuroFilter headShoulderFilter;
   final OneEuroFilter shoulderCenterFilter;
@@ -261,7 +263,8 @@ class PostureDownDetector {
 
     if (_noseYHistory.isNotEmpty) {
       final noseDelta = score.noseYRatio - _noseYHistory.first;
-      final shoulderDelta = score.shoulderCenterYRatio - _shoulderYHistory.first;
+      final shoulderDelta =
+          score.shoulderCenterYRatio - _shoulderYHistory.first;
       final movingUp =
           noseDelta <= -downwardMotionMinDrop ||
           shoulderDelta <= -downwardMotionMinDrop;
@@ -317,7 +320,8 @@ class PostureDownDetector {
   bool _isPostureDownEvidence(_PostureScore score) {
     final bodyCollapsed =
         score.shoulderDrop >= 24 || score.shoulderShrink >= 45;
-    final headCollapsed = score.headLow >= 55 || score.noseDrop >= 70;
+    final headCollapsed =
+        score.headLow >= 55 || (score.noseDrop >= 35 && score.headLow >= 35);
     final proneContext = !score.hasFace || score.sideProne >= 65;
     return score.total >= downScoreThreshold &&
         bodyCollapsed &&
@@ -407,11 +411,12 @@ class PostureDownDetector {
       baseline: _baselineShoulderCenterYRatio,
       maxDrop: shoulderDropRatioForMaxScore,
     );
-    final noseDropScore = _dropScore(
+    final rawNoseDropScore = _dropScore(
       current: noseYRatio,
       baseline: _baselineNoseYRatio,
       maxDrop: noseDropRatioForMaxScore,
     );
+    final noseDropScore = _weightedNoseDropScore(rawNoseDropScore);
     final shoulderShrinkScore = _shoulderShrinkScore(
       shoulderWidthRatio: shoulderWidthRatio,
     );
@@ -498,6 +503,10 @@ class PostureDownDetector {
   }) {
     if (baseline == null || maxDrop <= 0) return 0;
     return ((current - baseline) / maxDrop * 100).clamp(0, 100).toDouble();
+  }
+
+  double _weightedNoseDropScore(double rawScore) {
+    return (rawScore * noseDropScoreWeight).clamp(0, 100).toDouble();
   }
 
   void _recordBaseline({
@@ -615,7 +624,7 @@ class PostureDownDetector {
       return faceMissingShoulderDropScore;
     }
 
-    if (headLowScore < 25 && noseDropScore < 55) {
+    if (headLowScore < 25 && noseDropScore < 28) {
       return 0;
     }
     if (headDropEvidence < 35) return 0;
@@ -716,7 +725,7 @@ class PostureDownDetector {
         score.sideProne < 45 &&
         score.shoulderShrink < 45 &&
         score.headLow < 45 &&
-        score.noseDrop < 60;
+        score.noseDrop < 30;
 
     // Body is clearly back at baseline even though the face has not been
     // re-acquired yet; require stricter thresholds plus good head landmark
@@ -727,7 +736,7 @@ class PostureDownDetector {
         score.shoulderDrop < 25 &&
         score.shoulderShrink < 35 &&
         score.headLow < 50 &&
-        score.noseDrop < 55 &&
+        score.noseDrop < 28 &&
         score.visibility < 40;
 
     return faceVisibleStableRecovery ||

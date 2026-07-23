@@ -10,6 +10,7 @@ import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 
 import '../auth/auth_session.dart';
+import '../navigation/app_route_observer.dart';
 import '../ai/assistant_interaction_controller.dart';
 import '../ai/pending_action_controller.dart';
 import '../api/api_client.dart';
@@ -56,7 +57,7 @@ class FaceDetectionScreen extends StatefulWidget {
 }
 
 class _FaceDetectionScreenState extends State<FaceDetectionScreen>
-    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin, RouteAware {
   VideoPlayerController? _fallbackVideoController;
   VoidCallback? _fallbackVideoPositionListener;
   StreamSubscription<VisionResult>? _nativeVisionSubscription;
@@ -69,6 +70,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   StreamSubscription<PlayerState>? _voicePlayerStateSubscription;
   late final AnimationController _breathingController;
   bool _isProcessing = false;
+  bool _isSuspendedForNavigation = false;
   bool _isCameraInitializing = true;
   bool _isUsingNativeCamera = false;
   bool _isUsingFallbackVideo = false;
@@ -282,6 +284,76 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     );
     _initializeCamera();
     _startIdleBubbleTimer();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      appRouteObserver.subscribe(this, route);
+    }
+  }
+
+  // 被其他畫面（統計 / 任務 / 個人…）蓋在上方時觸發。
+  @override
+  void didPushNext() {
+    _suspendForNavigation();
+  }
+
+  // 上方畫面被移除、本畫面重新顯示時觸發。
+  @override
+  void didPopNext() {
+    _resumeFromNavigation();
+  }
+
+  /// 切離本畫面時：暫停相機/辨識、凍結番茄鐘、停掉狀態紀錄與閒聊泡泡。
+  void _suspendForNavigation() {
+    if (_isSuspendedForNavigation) return;
+    _isSuspendedForNavigation = true;
+
+    // 1) 暫停相機 / 辨識來源。離席、眨眼、專注等狀態紀錄都由辨識結果驅動，
+    //    來源一停，紀錄自然一起凍結。
+    if (_isUsingFallbackVideo) {
+      _detectionTimer?.cancel();
+      unawaited(_fallbackVideoController?.pause() ?? Future<void>.value());
+    } else if (_isUsingNativeCamera) {
+      unawaited(_visionChannel.stopCamera());
+    }
+
+    // 2) 凍結番茄鐘倒數（不改狀態、不記錄暫停事件）。
+    _pomodoroController.suspendTicking();
+
+    // 3) 停掉閒聊泡泡計時器。
+    _idleBubbleTimer?.cancel();
+    _idleBubbleHideTimer?.cancel();
+
+    if (mounted) setState(() {}); // 讓 Live2D 收到 paused=true 暫停算圖
+  }
+
+  /// 切回本畫面時：恢復番茄鐘、重啟相機/辨識、恢復閒聊泡泡。
+  void _resumeFromNavigation() {
+    if (!_isSuspendedForNavigation) return;
+    _isSuspendedForNavigation = false;
+
+    // 1) 恢復番茄鐘倒數。
+    _pomodoroController.resumeTicking();
+
+    // 2) 恢復閒聊泡泡。
+    _startIdleBubbleTimer();
+
+    // 3) 恢復相機 / 辨識來源。
+    if (_isUsingFallbackVideo) {
+      final controller = _fallbackVideoController;
+      if (controller != null && controller.value.isInitialized) {
+        unawaited(controller.play());
+      }
+      _startFallbackVideoDetectionLoop();
+    } else if (_isUsingNativeCamera) {
+      unawaited(_resumeNativeCamera());
+    }
+
+    if (mounted) setState(() {}); // 讓 Live2D 收到 paused=false 恢復算圖
   }
 
   void _startIdleBubbleTimer() {
@@ -3760,13 +3832,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       );
       _fallbackVideoController?.pause();
     } else if (state == AppLifecycleState.resumed) {
-      if (_isUsingFallbackVideo) {
-        _fallbackVideoController?.play();
-        _startFallbackVideoDetectionLoop();
-      } else if (_isUsingNativeCamera) {
-        unawaited(_resumeNativeCamera());
-      } else {
-        _initializeCamera();
+      // 若目前正被其他畫面覆蓋（導覽暫停中），回到前景時先別重啟相機/辨識，
+      // 等真的切回本畫面（didPopNext）再恢復。
+      if (!_isSuspendedForNavigation) {
+        if (_isUsingFallbackVideo) {
+          _fallbackVideoController?.play();
+          _startFallbackVideoDetectionLoop();
+        } else if (_isUsingNativeCamera) {
+          unawaited(_resumeNativeCamera());
+        } else {
+          _initializeCamera();
+        }
       }
       if (!_breathingController.isAnimating) {
         _breathingController.repeat(reverse: true);
@@ -3795,6 +3871,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         mood: _characterMood,
         reaction: _characterReaction,
         reactionSerial: _characterReactionSerial,
+        paused: _isSuspendedForNavigation,
       ),
     );
   }
@@ -3931,6 +4008,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _printHeadOffsetStats();
     _detectionTimer?.cancel();

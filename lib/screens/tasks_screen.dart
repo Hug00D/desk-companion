@@ -7,7 +7,6 @@ import '../focus/focus_session_monitor.dart';
 import '../focus/pomodoro_controller.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
-import '../widgets/live2d_character_background.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
 
@@ -40,7 +39,6 @@ class _TasksScreenState extends State<TasksScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const Live2DCharacterBackground(),
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(

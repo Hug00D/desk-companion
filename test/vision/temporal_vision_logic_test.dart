@@ -159,6 +159,71 @@ void main() {
       expect(transition.status, CompanionStatus.normal);
     });
 
+    test('strong posture candidate delays eye warnings', () {
+      final postureCandidate = const PostureDownDetectionResult(
+        state: PostureDownState.normal,
+        score: 80,
+        downFrameCount: 1,
+        headLowScore: 20,
+        noseDropScore: 10,
+        shoulderDropScore: 60,
+        shoulderShrinkScore: 20,
+        sideProneScore: 20,
+      );
+      final start = DateTime(2026, 7, 12, 10, 35);
+
+      CompanionAnalysis analyzeWithClosedFrames(int previousClosedFrames) {
+        final evaluator = CompanionStateEvaluator(
+          postureDownDetector: _QueuedPostureDownDetector([postureCandidate]),
+        );
+        return evaluator.evaluate(
+          result: _visionResult(
+            poseSequence: 1,
+            leftEyeOpen: 0.05,
+            rightEyeOpen: 0.05,
+          ),
+          previousClosedFrameCount: previousClosedFrames,
+          previousDistractedFrameCount: 0,
+          isFreshPoseResult: true,
+          observedAt: start,
+        );
+      }
+
+      final attention = analyzeWithClosedFrames(0);
+      final shortFatigue = analyzeWithClosedFrames(2);
+      final longFatigue = analyzeWithClosedFrames(4);
+
+      expect(attention.eyeResult.state, EyeState.attention);
+      expect(attention.status, CompanionStatus.normal);
+      expect(shortFatigue.eyeResult.state, EyeState.fatigue);
+      expect(shortFatigue.status, CompanionStatus.normal);
+      expect(longFatigue.eyeResult.state, EyeState.fatigue);
+      expect(longFatigue.status, CompanionStatus.fatigue);
+    });
+
+    test('nose drop is weighted down for posture scoring', () {
+      final detector = PostureDownDetector();
+      final start = DateTime(2026, 7, 12, 10, 40);
+
+      for (var sequence = 1; sequence <= 6; sequence++) {
+        detector.evaluate(
+          result: _visionResult(poseSequence: sequence),
+          shouldUpdate: true,
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      final readingPosture = detector.evaluate(
+        result: _readingHeadDownResult(poseSequence: 7),
+        shouldUpdate: true,
+        observedAt: start.add(const Duration(milliseconds: 5600)),
+      );
+
+      expect(readingPosture.noseDropScore, 50);
+      expect(readingPosture.state, PostureDownState.normal);
+      expect(readingPosture.downFrameCount, 0);
+    });
+
     test(
       'quick camera exit does not confirm posture down from missing data',
       () {
@@ -573,6 +638,36 @@ VisionResult _postureTransitionResult({required int poseSequence}) {
     headPitch: 40,
     headOffsetScore: 0,
     shoulderWidth: 250,
+  );
+}
+
+VisionResult _readingHeadDownResult({required int poseSequence}) {
+  return VisionResult(
+    raw: const <dynamic, dynamic>{},
+    hasPose: true,
+    hasFace: true,
+    imageWidth: 1000,
+    imageHeight: 1000,
+    poseSequence: poseSequence,
+    leftShoulderX: 300,
+    leftShoulderY: 500,
+    rightShoulderX: 700,
+    rightShoulderY: 500,
+    leftShoulderVisibility: 0.95,
+    rightShoulderVisibility: 0.95,
+    poseNoseX: 500,
+    poseNoseY: 580,
+    poseNoseVisibility: 0.95,
+    poseLeftEyeVisibility: 0.95,
+    poseRightEyeVisibility: 0.95,
+    poseLeftEarVisibility: 0.95,
+    poseRightEarVisibility: 0.95,
+    leftEyeOpen: 0.8,
+    rightEyeOpen: 0.8,
+    headYaw: 0,
+    headPitch: 18,
+    headOffsetScore: 0,
+    shoulderWidth: 400,
   );
 }
 

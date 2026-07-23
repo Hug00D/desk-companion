@@ -11,11 +11,16 @@ class Live2DCharacterBackground extends StatefulWidget {
     this.mood = CompanionCharacterMood.neutral,
     this.reaction = CompanionCharacterReaction.none,
     this.reactionSerial = 0,
+    this.paused = false,
   });
 
   final CompanionCharacterMood mood;
   final CompanionCharacterReaction reaction;
   final int reactionSerial;
+
+  /// 由外部要求暫停算圖（例如切換到其他畫面時）。實際是否暫停還會併入
+  /// App 生命週期狀態一起判斷。
+  final bool paused;
 
   @override
   State<Live2DCharacterBackground> createState() =>
@@ -30,6 +35,7 @@ class _Live2DCharacterBackgroundState extends State<Live2DCharacterBackground>
   final Live2DViewController _controller = Live2DViewController();
   Timer? _reactionTimer;
   int _commandGeneration = 0;
+  bool _appResumed = true;
 
   @override
   void initState() {
@@ -57,6 +63,7 @@ class _Live2DCharacterBackgroundState extends State<Live2DCharacterBackground>
       if (widget.reaction != CompanionCharacterReaction.none) {
         await _playReaction(widget.reaction);
       }
+      _syncRenderingPaused();
     } catch (error) {
       debugPrint('Live2D model load failed: $error');
     }
@@ -74,6 +81,9 @@ class _Live2DCharacterBackgroundState extends State<Live2DCharacterBackground>
     }
     if (oldWidget.mood != widget.mood && _reactionTimer == null) {
       unawaited(_applyMood());
+    }
+    if (oldWidget.paused != widget.paused) {
+      _syncRenderingPaused();
     }
   }
 
@@ -120,9 +130,14 @@ class _Live2DCharacterBackgroundState extends State<Live2DCharacterBackground>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    _syncRenderingPaused();
+  }
+
+  /// 只要 App 進入背景，或外部要求 [Live2DCharacterBackground.paused]，就暫停算圖。
+  void _syncRenderingPaused() {
     if (!_controller.value.isLoaded) return;
-    final shouldPause = state != AppLifecycleState.resumed;
-    unawaited(_setRenderingPaused(shouldPause));
+    unawaited(_setRenderingPaused(widget.paused || !_appResumed));
   }
 
   Future<void> _setRenderingPaused(bool paused) async {
