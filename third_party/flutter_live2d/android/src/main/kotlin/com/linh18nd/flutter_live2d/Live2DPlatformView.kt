@@ -157,6 +157,8 @@ private class Live2DTextureView(
  * blocks until the hub thread finishes cleanup.
  */
 private object Live2DRenderHub {
+    private const val ACTIVE_FRAME_INTERVAL_MS = 16L
+    private const val IDLE_POLL_INTERVAL_MS = 50L
 
     private class PendingAction(
         val handle: Long,
@@ -285,6 +287,8 @@ private object Live2DRenderHub {
         }
 
         while (running.get()) {
+            val frameStartedAtMs = SystemClock.uptimeMillis()
+
             // 1. Spin up EGL surfaces for newly registered views.
             while (true) {
                 val nv = newSurfaces.poll() ?: break
@@ -352,7 +356,18 @@ private object Live2DRenderHub {
                 anyDrawn = true
             }
 
-            SystemClock.sleep(if (anyDrawn) 16 else 50)
+            if (anyDrawn) {
+                // eglSwapBuffers may already wait for vsync. Only sleep for the
+                // unused part of the frame budget so we do not cap animation at
+                // roughly 30 FPS by waiting twice.
+                val elapsedMs = SystemClock.uptimeMillis() - frameStartedAtMs
+                val remainingMs = ACTIVE_FRAME_INTERVAL_MS - elapsedMs
+                if (remainingMs > 0) {
+                    SystemClock.sleep(remainingMs)
+                }
+            } else {
+                SystemClock.sleep(IDLE_POLL_INTERVAL_MS)
+            }
         }
 
         teardownAll()

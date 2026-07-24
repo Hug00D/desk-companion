@@ -145,8 +145,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
   static const bool _preferFallbackVideoForLocalTest = false;
-  static const String _fallbackVideoAssetPath = 'assets/test_face.mp4';
-  static const String _fallbackVideoFileName = 'desk_companion_test_face.mp4';
+  static const String _fallbackVideoAssetPath = 'assets/test.mp4';
+  static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
   static const Map<CompanionStatus, List<_ReminderClip>> _reminderClips = {
     CompanionStatus.attention: [
       _ReminderClip(
@@ -477,7 +477,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = true;
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
-      _status = '本地測試模式：使用 test_face.mp4。';
+      _status = '本地測試模式：使用 test.mp4。';
       await _resetVisionCalibration();
       if (!mounted) return;
       _startFallbackVideoDetectionLoop();
@@ -1602,7 +1602,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         'fatigueLevel': _fatigueLevel,
         'hasFace': _hasFace,
       },
-      'todaySummary': _studySessionController.buildSummary(_pomodoroController),
+      'todaySummary': _studySessionController.buildSummary(
+        _pomodoroController,
+        currentFocusDuration: _focusSessionMonitor.effectiveFocusDuration,
+        currentDistractedDuration: _focusSessionMonitor.distractedDuration,
+        currentFocusEventCount: _focusSessionMonitor.totalEventCount,
+      ),
     };
   }
 
@@ -1685,6 +1690,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       command: interaction.command,
       controller: _pomodoroController,
       studySession: _studySessionController,
+      focusSessionMonitor: _focusSessionMonitor,
     );
     _focusSyncController.recordVoiceInteraction(
       interaction,
