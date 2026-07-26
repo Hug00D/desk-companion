@@ -5,7 +5,14 @@ import 'package:flutter/foundation.dart';
 
 enum PomodoroStatus { idle, running, paused, completed }
 
-enum PomodoroPauseReason { manual, distracted, fatigue, sleeping, userMissing }
+enum PomodoroPauseReason {
+  manual,
+  navigation,
+  distracted,
+  fatigue,
+  sleeping,
+  userMissing,
+}
 
 class PomodoroController extends ChangeNotifier {
   PomodoroController._();
@@ -51,6 +58,10 @@ class PomodoroController extends ChangeNotifier {
   void pause({PomodoroPauseReason reason = PomodoroPauseReason.manual}) {
     if (status != PomodoroStatus.running) return;
     _refreshRemaining();
+    if (status != PomodoroStatus.running) {
+      notifyListeners();
+      return;
+    }
     status = PomodoroStatus.paused;
     pauseReason = reason;
     _deadline = null;

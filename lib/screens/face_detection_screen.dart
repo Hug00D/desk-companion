@@ -19,6 +19,7 @@ import '../companion/companion_controller.dart';
 import '../companion/character_reaction.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/focus_session_monitor.dart';
+import '../focus/focus_session_report.dart';
 import '../focus/focus_round.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
@@ -36,6 +37,7 @@ import '../voice/voice_interaction_controller.dart';
 import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
+import '../widgets/focus_session_report_dialog.dart';
 import '../widgets/live2d_character_background.dart';
 import 'profile_detail_screen.dart';
 import 'profile_hub_screen.dart';
@@ -127,6 +129,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isSpeechListening = false;
   bool _isSpeechStopping = false;
   bool _isSpeechSubmitting = false;
+  bool _isSessionReportVisible = false;
   String _speechTranscript = '';
   String? _speechRecognitionError;
   String? _submittedSpeechSessionId;
@@ -321,8 +324,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       unawaited(_visionChannel.stopCamera());
     }
 
-    // 2) 凍結番茄鐘倒數（不改狀態、不記錄暫停事件）。
-    _pomodoroController.suspendTicking();
+    // 2) 沒有視覺資料時不累積專注時間，明確暫停並保留導航原因。
+    if (_pomodoroController.isRunning) {
+      _pomodoroController.pause(reason: PomodoroPauseReason.navigation);
+    }
 
     // 3) 停掉閒聊泡泡計時器。
     _idleBubbleTimer?.cancel();
@@ -331,13 +336,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     if (mounted) setState(() {}); // 讓 Live2D 收到 paused=true 暫停算圖
   }
 
-  /// 切回本畫面時：恢復番茄鐘、重啟相機/辨識、恢復閒聊泡泡。
+  /// 切回本畫面時：重啟相機/辨識並恢復閒聊泡泡。
   void _resumeFromNavigation() {
     if (!_isSuspendedForNavigation) return;
     _isSuspendedForNavigation = false;
 
-    // 1) 恢復番茄鐘倒數。
-    _pomodoroController.resumeTicking();
+    // 1) 只恢復由頁面切換造成的暫停，不覆蓋手動或辨識自動暫停。
+    if (_pomodoroController.status == PomodoroStatus.paused &&
+        _pomodoroController.pauseReason == PomodoroPauseReason.navigation) {
+      _pomodoroController.resume();
+    }
 
     // 2) 恢復閒聊泡泡。
     _startIdleBubbleTimer();
@@ -1810,6 +1818,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
     if (currentStatus == PomodoroStatus.completed &&
         previousStatus != PomodoroStatus.completed) {
+      final report = _focusSessionMonitor.completeSession(
+        plannedDuration: _pomodoroController.totalDuration,
+      );
       _studySessionController.recordPomodoroCompleted();
       _focusSyncController.recordPomodoroCompleted(
         studySessionController: _studySessionController,
@@ -1819,13 +1830,27 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _lastVoiceResponseMessage = null;
       _voiceMessagePinnedUntil = null;
       _triggerCharacterReaction(CompanionCharacterReaction.focusCompleted);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(_showCompletedSessionReport(report));
+        }
+      });
     }
-    if (currentStatus == PomodoroStatus.idle ||
-        currentStatus == PomodoroStatus.completed) {
+    if (currentStatus == PomodoroStatus.idle) {
       _focusSessionMonitor.endSession();
     }
     _lastObservedPomodoroStatus = currentStatus;
     if (mounted) setState(() {});
+  }
+
+  Future<void> _showCompletedSessionReport(FocusSessionReport report) async {
+    if (!mounted || _isSessionReportVisible) return;
+    _isSessionReportVisible = true;
+    try {
+      await showFocusSessionReportDialog(context: context, report: report);
+    } finally {
+      _isSessionReportVisible = false;
+    }
   }
 
   bool get _isVoiceMessagePinned {
