@@ -32,4 +32,19 @@ void main() {
     expect(controller.pauseReason, PomodoroPauseReason.manual);
     expect(controller.isAutoPaused, isFalse);
   });
+
+  test('app background pause can be resumed by explicit user action', () {
+    controller.start(durationMinutes: 1);
+
+    controller.pause(reason: PomodoroPauseReason.appBackground);
+
+    expect(controller.status, PomodoroStatus.paused);
+    expect(controller.pauseReason, PomodoroPauseReason.appBackground);
+    expect(controller.isAutoPaused, isTrue);
+
+    controller.resume();
+
+    expect(controller.status, PomodoroStatus.running);
+    expect(controller.pauseReason, isNull);
+  });
 }

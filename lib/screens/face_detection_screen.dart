@@ -130,6 +130,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isSpeechStopping = false;
   bool _isSpeechSubmitting = false;
   bool _isSessionReportVisible = false;
+  bool _shouldPromptPomodoroResumeAfterLifecycle = false;
   String _speechTranscript = '';
   String? _speechRecognitionError;
   String? _submittedSpeechSessionId;
@@ -1567,6 +1568,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final text = _assistantTextController.text.trim();
     if (text.isEmpty || _isAssistantDecideLoading) return;
 
+    final pendingResolution = _pendingActionController.resolve(text);
+    if (pendingResolution != null) {
+      _assistantTextController.clear();
+      if (pendingResolution.type == PendingActionResolutionType.accepted) {
+        _applyPendingAssistantAction(pendingResolution.action);
+      } else {
+        _showPendingActionDeclined();
+      }
+      return;
+    }
+
     setState(() {
       _isAssistantDecideLoading = true;
     });
@@ -1672,6 +1684,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final pending = _pendingActionController.consume();
     if (pending == null) return;
 
+    _applyPendingAssistantAction(pending);
+  }
+
+  void _applyPendingAssistantAction(PendingAction pending) {
     final interaction = VoiceInteraction(
       result: _voiceResultFromText(pending.command.sourceText),
       command: pending.command,
@@ -1682,12 +1698,52 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _cancelPendingAssistantAction() {
     _pendingActionController.clear();
+    _showPendingActionDeclined();
+  }
+
+  void _showPendingActionDeclined() {
     setState(() {
       _companionMessage = '已取消待確認的動作。';
       _lastVoiceResponseMessage = _companionMessage;
       _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
     });
     _triggerCharacterReaction(CompanionCharacterReaction.error);
+  }
+
+  void _promptResumePomodoroAfterLifecycle() {
+    if (!mounted ||
+        _pomodoroController.status != PomodoroStatus.paused ||
+        _pomodoroController.pauseReason != PomodoroPauseReason.appBackground) {
+      return;
+    }
+
+    const message = '你剛剛離開 App，番茄鐘已先暫停。要繼續這輪嗎？';
+    _pendingActionController.set(
+      const PendingCompanionAction(
+        command: VoiceCommand(
+          type: VoiceCommandType.resumePomodoro,
+          sourceText: '繼續番茄鐘',
+          confidence: 1,
+        ),
+        confirmationText: message,
+        ttl: Duration(minutes: 10),
+      ),
+    );
+    setState(() {
+      _companionMessage = message;
+      _lastVoiceResponseMessage = message;
+      _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    });
+    _triggerCharacterReaction(CompanionCharacterReaction.confirmation);
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 5),
+      ),
+    );
   }
 
   void _applyVoiceInteraction(VoiceInteraction interaction) {
@@ -2115,6 +2171,108 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   String _formatScore(double? value) {
     if (value == null) return "--";
     return value.toStringAsFixed(1);
+  }
+
+  String _formatYesNo(bool value) => value ? "是" : "否";
+
+  double? _averageEyeOpen() {
+    final left = _leftEyeOpenValue;
+    final right = _rightEyeOpenValue;
+    if (left == null || right == null) return null;
+    return (left + right) / 2.0;
+  }
+
+  double? _minimumEyeOpen() {
+    final left = _leftEyeOpenValue;
+    final right = _rightEyeOpenValue;
+    if (left == null || right == null) return null;
+    return left < right ? left : right;
+  }
+
+  String _debugPitchBandLabel(double? pitch) {
+    if (pitch == null) return "--";
+
+    final pitchAbs = pitch.abs();
+    if (pitchAbs < 25) return "正常/輕微";
+    if (pitchAbs <= 50) return "讀書候選";
+    return "極低頭";
+  }
+
+  bool _debugIsReadingPitchCandidate(double? pitch) {
+    final pitchAbs = pitch?.abs();
+    return pitchAbs != null && pitchAbs >= 25 && pitchAbs <= 50;
+  }
+
+  bool _debugIsExtremeHeadDown(double? pitch) {
+    final pitchAbs = pitch?.abs();
+    return pitchAbs != null && pitchAbs > 50;
+  }
+
+  String _debugEyeReliabilityLabel(CompanionAnalysis? analysis) {
+    final result = analysis?.visionResult;
+    if (result == null) return "--";
+    if (!result.hasFace) return "否（無臉）";
+    if (!result.hasEyeData) return "否（無眼睛資料）";
+
+    final headOffsetScore = result.headOffsetScore;
+    if (headOffsetScore != null && headOffsetScore > 55) {
+      return "否（頭偏移過大）";
+    }
+
+    final headPitch = result.headPitch?.abs();
+    if (headPitch != null && headPitch > 70) {
+      return "否（Pitch 過大）";
+    }
+
+    return "是";
+  }
+
+  String _debugBaselineEligibilityLabel(CompanionAnalysis? analysis) {
+    final result = analysis?.visionResult;
+    if (result == null) return "--";
+    if (!result.hasFace) return "否（無臉）";
+
+    final leftVisibility = result.leftShoulderVisibility;
+    if (leftVisibility != null && leftVisibility < 0.5) {
+      return "否（左肩可見度低）";
+    }
+
+    final rightVisibility = result.rightShoulderVisibility;
+    if (rightVisibility != null && rightVisibility < 0.5) {
+      return "否（右肩可見度低）";
+    }
+
+    final pitch = result.headPitch;
+    if (pitch != null && pitch.abs() > 25) {
+      return "否（Pitch 超過 25°）";
+    }
+
+    return "是";
+  }
+
+  bool _debugScoresDoNotReact(CompanionAnalysis? analysis) {
+    final posture = analysis?.postureDownResult;
+    if (posture == null) return false;
+
+    return (posture.headLowScore ?? 0) < 8 &&
+        (posture.shoulderDropScore ?? 0) < 8 &&
+        (posture.noseDropScore ?? 0) < 8 &&
+        (posture.shoulderShrinkScore ?? 0) < 12 &&
+        (posture.sideProneScore ?? 0) < 12;
+  }
+
+  bool _debugIsBaselineSuspiciousCandidate(CompanionAnalysis? analysis) {
+    if (analysis == null) return false;
+    if (analysis.status == CompanionStatus.sleeping ||
+        analysis.status == CompanionStatus.userMissing) {
+      return false;
+    }
+
+    final result = analysis.visionResult;
+    if (!result.hasFace || !result.hasPose) return false;
+
+    return _debugIsReadingPitchCandidate(result.headPitch) &&
+        _debugScoresDoNotReact(analysis);
   }
 
   void _recordHeadOffsetSample(VisionResult visionResult) {
@@ -3564,6 +3722,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   Widget _buildDebugPanel() {
     if (!_showDebugPanel) return const SizedBox.shrink();
 
+    final analysis = _companionController.lastAnalysis;
+    final eyeResult = analysis?.eyeResult;
+    final poseResult = analysis?.poseResult;
+    final posture = analysis?.postureDownResult;
+    final presenceState = analysis?.presenceState;
+    final pitchBand = _debugPitchBandLabel(_headPitch);
+    final averageEyeOpen = _averageEyeOpen();
+    final minimumEyeOpen = _minimumEyeOpen();
+    final readingPitchCandidate = _debugIsReadingPitchCandidate(_headPitch);
+    final extremeHeadDown = _debugIsExtremeHeadDown(_headPitch);
+    final scoresDoNotReact = _debugScoresDoNotReact(analysis);
+    final baselineSuspiciousCandidate = _debugIsBaselineSuspiciousCandidate(
+      analysis,
+    );
+
     return Positioned(
       left: 16,
       right: 16,
@@ -3630,28 +3803,91 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                       ],
                     ),
                     const SizedBox(height: 6),
-                    Text("左眼開度：${_formatEyeValue(_leftEyeOpenValue)}"),
-                    Text("右眼開度：${_formatEyeValue(_rightEyeOpenValue)}"),
+                    const Text(
+                      "眼睛",
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      "左/右眼開度："
+                      "${_formatEyeValue(_leftEyeOpenValue)} / "
+                      "${_formatEyeValue(_rightEyeOpenValue)}",
+                    ),
+                    Text("平均眼開度：${_formatEyeValue(averageEyeOpen)}"),
+                    Text("最低眼開度：${_formatEyeValue(minimumEyeOpen)}"),
+                    Text("眼睛狀態：${eyeResult?.state.name ?? "--"}"),
+                    Text("眼睛是否可靠：${_debugEyeReliabilityLabel(analysis)}"),
+                    Text("連續閉眼次數：$_closedEyeFrameCount"),
+                    const SizedBox(height: 8),
+                    const Text(
+                      "頭部角度",
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text("Yaw 參考值：${_formatAngle(_headYaw)}"),
+                    Text("Pitch 參考值：${_formatAngle(_headPitch)}"),
+                    Text("Pitch 區間：$pitchBand"),
+                    Text(
+                      "讀書候選區間："
+                      "${_formatYesNo(readingPitchCandidate)}",
+                    ),
+                    Text("極低頭區間：${_formatYesNo(extremeHeadDown)}"),
                     Text(
                       "頭部偏移分數：${_formatScore(_headOffsetScore)}"
                       "${_isHeadOffsetCalibrating ? "（校正中）" : ""}",
                     ),
                     Text("連續分心次數：$_distractedFrameCount"),
+                    const SizedBox(height: 8),
+                    const Text(
+                      "趴下/姿勢",
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
                     Text("趴下分數：${_formatScore(_postureDownScore)}"),
                     Text("連續趴下次數：$_postureDownFrameCount"),
+                    Text("姿勢狀態：${poseResult?.state.name ?? "--"}"),
+                    Text("趴下狀態：${posture?.state.name ?? "--"}"),
                     Text(
-                      "趴下細項："
-                      "頭低 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.headLowScore)} / "
-                      "肩降 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.shoulderDropScore)} / "
-                      "鼻降 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.noseDropScore)} / "
-                      "側趴 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.sideProneScore)} / "
-                      "肩縮 ${_formatScore(_companionController.lastAnalysis?.postureDownResult.shoulderShrinkScore)}",
+                      "頭低/鼻降："
+                      "${_formatScore(posture?.headLowScore)} / "
+                      "${_formatScore(posture?.noseDropScore)}",
+                    ),
+                    Text(
+                      "肩降/肩縮："
+                      "${_formatScore(posture?.shoulderDropScore)} / "
+                      "${_formatScore(posture?.shoulderShrinkScore)}",
+                    ),
+                    Text("側趴：${_formatScore(posture?.sideProneScore)}"),
+                    Text("可見度分數：${_formatScore(posture?.visibilityScore)}"),
+                    Text(
+                      "原始比例 head/shoulder："
+                      "${_formatScore(posture?.headShoulderRatio)}",
+                    ),
+                    Text(
+                      "原始比例 shoulderY/noseY："
+                      "${_formatScore(posture?.shoulderCenterYRatio)} / "
+                      "${_formatScore(posture?.noseYRatio)}",
                     ),
                     Text("Pose 鼻子 Y：${_formatScore(_poseNoseY)}"),
-                    Text("Yaw 參考值：${_formatAngle(_headYaw)}"),
-                    Text("Pitch 參考值：${_formatAngle(_headPitch)}"),
-                    Text("連續閉眼次數：$_closedEyeFrameCount"),
+                    const SizedBox(height: 8),
+                    const Text(
+                      "基準/校準",
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      "姿勢基準："
+                      "${posture?.isCalibrating == true ? "校準中" : "已建立/待資料"}",
+                    ),
+                    Text("目前可收基準：${_debugBaselineEligibilityLabel(analysis)}"),
+                    Text("低頭但分數無反應：${_formatYesNo(scoresDoNotReact)}"),
+                    Text(
+                      "疑似基準異常候選："
+                      "${_formatYesNo(baselineSuspiciousCandidate)}",
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      "狀態",
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
                     Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
+                    Text("Presence：${presenceState?.name ?? "--"}"),
                     Text("目前狀態：$_fatigueLevel"),
                     Text("視覺事件：${_lastVisionEventType.storageValue}"),
                     Text(
@@ -3855,6 +4091,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _detectionTimer?.cancel();
       _breathingController.stop();
       unawaited(_visionChannel.stopCamera());
+      if (_pomodoroController.isRunning) {
+        _pomodoroController.pause(reason: PomodoroPauseReason.appBackground);
+        _shouldPromptPomodoroResumeAfterLifecycle = true;
+      }
       unawaited(
         _focusSyncController.flushNow(
           studySessionController: _studySessionController,
@@ -3882,6 +4122,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         studySessionController: _studySessionController,
         pomodoroController: _pomodoroController,
       );
+      if (_shouldPromptPomodoroResumeAfterLifecycle) {
+        _shouldPromptPomodoroResumeAfterLifecycle = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _promptResumePomodoroAfterLifecycle();
+        });
+      }
     }
   }
 

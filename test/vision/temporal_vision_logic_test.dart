@@ -83,44 +83,114 @@ void main() {
       }
     });
 
-    test('drowsy requires closed-eye evidence', () {
+    test('drowsy requires closed-eye evidence beyond reading posture', () {
       const detector = PoseStateDetector();
-      const posture = PostureDownDetectionResult(
+      const protectedReadingPosture = PostureDownDetectionResult(
         state: PostureDownState.normal,
-        score: 34,
+        score: 11,
         downFrameCount: 0,
         headLowScore: 80,
-        noseDropScore: 85,
-        shoulderDropScore: 20,
-        shoulderShrinkScore: 20,
+        noseDropScore: 50,
+        shoulderDropScore: 8,
+        shoulderShrinkScore: 12,
+        sideProneScore: 0,
+      );
+      const extremeHeadLowPosture = PostureDownDetectionResult(
+        state: PostureDownState.normal,
+        score: 11,
+        downFrameCount: 0,
+        headLowScore: 96,
+        noseDropScore: 50,
+        shoulderDropScore: 8,
+        shoulderShrinkScore: 12,
+        sideProneScore: 0,
       );
       final result = _visionResult(headPitch: 40);
 
       final eyesOpen = detector.evaluate(
         result: result,
-        postureDownResult: posture,
+        postureDownResult: extremeHeadLowPosture,
         postureDownFrameCount: 0,
         isPostureDown: false,
         eyeState: EyeState.open,
       );
+      final protectedReading = detector.evaluate(
+        result: result,
+        postureDownResult: protectedReadingPosture,
+        postureDownFrameCount: 0,
+        isPostureDown: false,
+        eyeState: EyeState.fatigue,
+      );
       final eyesClosed = detector.evaluate(
         result: result,
-        postureDownResult: posture,
+        postureDownResult: extremeHeadLowPosture,
         postureDownFrameCount: 0,
         isPostureDown: false,
         eyeState: EyeState.fatigue,
       );
       final eyesClosedWithOppositePitchSign = detector.evaluate(
         result: _visionResult(headPitch: -40),
-        postureDownResult: posture,
+        postureDownResult: extremeHeadLowPosture,
         postureDownFrameCount: 0,
         isPostureDown: false,
         eyeState: EyeState.fatigue,
       );
 
       expect(eyesOpen.state, PoseState.normal);
+      expect(protectedReading.state, PoseState.normal);
       expect(eyesClosed.state, PoseState.drowsy);
       expect(eyesClosedWithOppositePitchSign.state, PoseState.drowsy);
+    });
+
+    test('stable reading head drop does not become sleeping on face loss', () {
+      final evaluator = CompanionStateEvaluator(
+        postureDownDetector: _QueuedPostureDownDetector([
+          const PostureDownDetectionResult(
+            state: PostureDownState.normal,
+            score: 11,
+            downFrameCount: 0,
+            headLowScore: 93,
+            noseDropScore: 50,
+            shoulderDropScore: 8,
+            shoulderShrinkScore: 12,
+            sideProneScore: 0,
+          ),
+          const PostureDownDetectionResult(
+            state: PostureDownState.normal,
+            score: 11,
+            downFrameCount: 0,
+            headLowScore: 93,
+            noseDropScore: 50,
+            shoulderDropScore: 8,
+            shoulderShrinkScore: 12,
+            sideProneScore: 0,
+          ),
+        ]),
+      );
+      final start = DateTime(2026, 7, 12, 10, 20);
+
+      final reading = evaluator.evaluate(
+        result: _visionResult(
+          poseSequence: 1,
+          leftEyeOpen: 0.05,
+          rightEyeOpen: 0.05,
+        ),
+        previousClosedFrameCount: 2,
+        previousDistractedFrameCount: 0,
+        isFreshPoseResult: true,
+        observedAt: start,
+      );
+      final faceLost = evaluator.evaluate(
+        result: _sidewaysExitResult(poseSequence: 2),
+        previousClosedFrameCount: reading.eyeResult.closedFrameCount,
+        previousDistractedFrameCount: 0,
+        isFreshPoseResult: true,
+        observedAt: start.add(const Duration(milliseconds: 800)),
+      );
+
+      expect(reading.eyeResult.state, EyeState.fatigue);
+      expect(reading.status, CompanionStatus.fatigue);
+      expect(faceLost.status, isNot(CompanionStatus.sleeping));
     });
 
     test('asymmetric but jointly closed eyes can accumulate fatigue', () {

@@ -585,6 +585,8 @@ class _TasksScreenState extends State<TasksScreen> {
     switch (_pomodoroController.pauseReason) {
       case PomodoroPauseReason.navigation:
         return '切換頁面，回首頁後自動繼續';
+      case PomodoroPauseReason.appBackground:
+        return '離開 App，回首頁後可繼續';
       case PomodoroPauseReason.distracted:
         return '分心過久，已自動暫停';
       case PomodoroPauseReason.fatigue:

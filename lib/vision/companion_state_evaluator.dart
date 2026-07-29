@@ -84,7 +84,6 @@ class CompanionStateEvaluator {
   final int strongPostureFatigueClosedFrames;
   CompanionStatus _lastFaceVisibleContext = CompanionStatus.normal;
   CompanionStatus? _lastFaceMissingContext;
-  int _faceMissingFrameCount = 0;
   DateTime? _faceMissingStartedAt;
   int _recentStableShoulderFrames = 0;
   int _recentLoweredShoulderFrames = 0;
@@ -301,7 +300,6 @@ class CompanionStateEvaluator {
     }
 
     if (result.hasFace) {
-      _faceMissingFrameCount = 0;
       _faceMissingStartedAt = null;
       _lastFaceMissingContext = null;
       final visibleStatus =
@@ -329,8 +327,6 @@ class CompanionStateEvaluator {
 
       return baseStatus;
     }
-
-    _faceMissingFrameCount++;
 
     if (_fullyAbsentFrameCount >= userAbsentReleaseFrames) {
       // Neither face nor pose for a sustained stretch: the user left the
@@ -367,6 +363,12 @@ class CompanionStateEvaluator {
         return CompanionStatus.sleeping;
       }
       if (headDropLikely) {
+        if (_hasStableReadingBody(postureDownResult) &&
+            headLowScore < _readingProtectionHeadLowMax) {
+          _faceMissingStartedAt = null;
+          _lastFaceMissingContext = null;
+          return baseStatus;
+        }
         _faceMissingStartedAt = null;
         _lastFaceMissingContext = CompanionStatus.attention;
         return CompanionStatus.attention;
@@ -602,6 +604,10 @@ class CompanionStateEvaluator {
         headPitch >= 26 && (headLowScore >= 35 || noseDropScore >= 20);
     final geometrySupportsHeadDrop = headLowScore >= 45 && noseDropScore >= 28;
     if (pitchSupportsHeadDrop || geometrySupportsHeadDrop) {
+      if (_hasStableReadingBody(postureDownResult) &&
+          headLowScore < _readingProtectionHeadLowMax) {
+        return baseStatus;
+      }
       return eyeState == EyeState.fatigue
           ? CompanionStatus.sleeping
           : CompanionStatus.attention;
@@ -614,6 +620,25 @@ class CompanionStateEvaluator {
 
     return CompanionStatus.normal;
   }
+
+  bool _hasStableReadingBody(PostureDownDetectionResult postureDownResult) {
+    final postureDownScore = postureDownResult.score ?? 0;
+    final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
+    final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
+    final sideProneScore = postureDownResult.sideProneScore ?? 0;
+
+    return postureDownResult.downFrameCount == 0 &&
+        postureDownScore < _readingProtectionPostureScoreMax &&
+        shoulderDropScore < _readingProtectionShoulderDropMax &&
+        shoulderShrinkScore < _readingProtectionShoulderShrinkMax &&
+        sideProneScore < _readingProtectionSideProneMax;
+  }
+
+  static const double _readingProtectionHeadLowMax = 95;
+  static const double _readingProtectionPostureScoreMax = 35;
+  static const double _readingProtectionShoulderDropMax = 24;
+  static const double _readingProtectionShoulderShrinkMax = 25;
+  static const double _readingProtectionSideProneMax = 30;
 
   void _clearRecentPoseEvidence() {
     _recentStableShoulderFrames = 0;
@@ -630,7 +655,6 @@ class CompanionStateEvaluator {
     postureDownDetector.reset();
     _lastFaceVisibleContext = CompanionStatus.normal;
     _lastFaceMissingContext = null;
-    _faceMissingFrameCount = 0;
     _faceMissingStartedAt = null;
     _clearRecentPoseEvidence();
     _isPostureDownLatched = false;

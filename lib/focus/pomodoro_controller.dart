@@ -8,6 +8,7 @@ enum PomodoroStatus { idle, running, paused, completed }
 enum PomodoroPauseReason {
   manual,
   navigation,
+  appBackground,
   distracted,
   fatigue,
   sleeping,
