@@ -43,6 +43,8 @@ dependencies:
   http: ^1.6.0
   audioplayers: ^6.5.1
   speech_to_text: ^7.4.0
+  record: ^6.1.2
+  sherpa_onnx: ^1.13.4
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +71,8 @@ flutter:
     - assets/test.mp4
     - assets/mock/
     - assets/audio/reminders/
+    - assets/audio/wake/
+    - assets/models/wake_word/
     - assets/March 7th/
     - assets/March 7th/exp/
     - assets/March 7th/motions/

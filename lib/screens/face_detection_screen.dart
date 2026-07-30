@@ -15,6 +15,7 @@ import '../ai/assistant_interaction_controller.dart';
 import '../ai/pending_action_controller.dart';
 import '../api/api_client.dart';
 import '../api/assistant_api.dart';
+import '../companion/assistant_identity.dart';
 import '../companion/companion_controller.dart';
 import '../companion/character_reaction.dart';
 import '../companion/companion_response_builder.dart';
@@ -36,6 +37,7 @@ import '../voice/mock_voice_result_loader.dart';
 import '../voice/voice_interaction_controller.dart';
 import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
+import '../voice/wake_word_service.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/focus_session_report_dialog.dart';
 import '../widgets/live2d_character_background.dart';
@@ -90,6 +92,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const VoiceInteractionController();
   final DeviceSpeechRecognitionService _deviceSpeechRecognitionService =
       DeviceSpeechRecognitionService();
+  final WakeWordService _wakeWordService = WakeWordService();
   final TextEditingController _assistantTextController =
       TextEditingController();
   final PendingActionController _pendingActionController =
@@ -97,6 +100,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   late final AssistantInteractionController _assistantInteractionController;
   final VoiceServiceClient _voiceServiceClient = VoiceServiceClient();
   final AudioPlayer _voiceAudioPlayer = AudioPlayer();
+  final AudioPlayer _wakeAcknowledgementPlayer = AudioPlayer();
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
@@ -129,10 +133,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isSpeechListening = false;
   bool _isSpeechStopping = false;
   bool _isSpeechSubmitting = false;
+  bool _isWakeWordDemoEnabled = false;
+  bool _isWakeWordInitializing = false;
+  bool _isWakeAcknowledgementPlaying = false;
   bool _isSessionReportVisible = false;
   bool _shouldPromptPomodoroResumeAfterLifecycle = false;
   String _speechTranscript = '';
   String? _speechRecognitionError;
+  String _wakeWordStatus = '喚醒詞尚未啟用';
+  String? _wakeWordError;
+  int _wakeWordDetectionCount = 0;
+  int _wakeWordResumeRequestId = 0;
   String? _submittedSpeechSessionId;
   bool _isUserStatusExpanded = false;
   bool _isFocusPauseDialogVisible = false;
@@ -140,6 +151,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   BuildContext? _focusDecisionDialogContext;
 
   static const Duration _voiceMessageHoldDuration = Duration(seconds: 5);
+  static const String _wakeKeywordTokens =
+      'h ēi l ù m ǐ n à @${AssistantIdentity.wakeKeyword}';
+  static const List<String> _wakeAcknowledgementAssets = <String>[
+    'audio/wake/acknowledgement_1.wav',
+    'audio/wake/acknowledgement_2.wav',
+    'audio/wake/acknowledgement_3.wav',
+  ];
   static const Map<CompanionStatus, Duration> _reminderCooldowns = {
     CompanionStatus.attention: Duration(seconds: 12),
     CompanionStatus.fatigue: Duration(seconds: 15),
@@ -258,6 +276,20 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       ),
     );
     unawaited(_voiceAudioPlayer.setReleaseMode(ReleaseMode.stop));
+    unawaited(
+      _wakeAcknowledgementPlayer.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            isSpeakerphoneOn: false,
+            stayAwake: false,
+            contentType: AndroidContentType.speech,
+            usageType: AndroidUsageType.media,
+            audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+          ),
+        ),
+      ),
+    );
+    unawaited(_wakeAcknowledgementPlayer.setReleaseMode(ReleaseMode.stop));
     _voicePlayerStateSubscription = _voiceAudioPlayer.onPlayerStateChanged
         .listen((PlayerState state) {
           debugPrint('Voice player state: $state');
@@ -333,6 +365,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     // 3) 停掉閒聊泡泡計時器。
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();
+    unawaited(_pauseWakeWordListener());
 
     if (mounted) setState(() {}); // 讓 Live2D 收到 paused=true 暫停算圖
   }
@@ -350,6 +383,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
     // 2) 恢復閒聊泡泡。
     _startIdleBubbleTimer();
+    unawaited(_resumeWakeWordListenerIfEnabled());
 
     // 3) 恢復相機 / 辨識來源。
     if (_isUsingFallbackVideo) {
@@ -460,9 +494,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         );
       }
 
-      final controller = VideoPlayerController.file(videoFile);
+      final controller = VideoPlayerController.file(
+        videoFile,
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
       await controller.initialize();
       await controller.setLooping(true);
+      await controller.setVolume(0);
       await controller.play();
 
       if (!mounted) {
@@ -950,7 +988,23 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     return now.difference(lastPlayedAt) >= cooldown;
   }
 
+  bool get _isInteractiveVoiceSessionActive =>
+      _isWakeAcknowledgementPlaying ||
+      _isSpeechInitializing ||
+      _isSpeechListening ||
+      _isSpeechStopping ||
+      _isSpeechSubmitting ||
+      _isAssistantDecideLoading;
+
   void _requestLocalReminder(CompanionStatus status) {
+    if (_isInteractiveVoiceSessionActive) {
+      _clearPendingVoiceReminder();
+      debugPrint(
+        'Local reminder skipped during interactive voice session: '
+        '${status.name}',
+      );
+      return;
+    }
     if (!_isReminderCooldownReady(status, DateTime.now())) {
       debugPrint('Local reminder cooldown: ${status.name}');
       return;
@@ -976,6 +1030,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         );
         return;
       }
+
+      if (_isInteractiveVoiceSessionActive) return;
+      if (_wakeWordService.isListening || _isWakeWordInitializing) {
+        await _pauseWakeWordListener();
+      }
+      if (_isInteractiveVoiceSessionActive) return;
 
       final index = (_reminderClipIndexes[status] ?? 0) % clips.length;
       _reminderClipIndexes[status] = index + 1;
@@ -1007,6 +1067,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     } finally {
       _isReminderPlaybackInFlight = false;
       _sendPendingVoiceReminderIfReady();
+      if (!_isInteractiveVoiceSessionActive && !_isReminderPlaybackInFlight) {
+        unawaited(_resumeWakeWordListenerIfEnabled());
+      }
     }
   }
 
@@ -1141,6 +1204,29 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     if (completer != null && !completer.isCompleted) {
       completer.complete();
     }
+  }
+
+  Future<void> _interruptPassiveReminderForInteractiveVoice() async {
+    _clearPendingVoiceReminder();
+    final hadActiveReminder =
+        _isReminderPlaybackInFlight ||
+        _activeSpokenReminderMessage != null ||
+        _voiceAudioPlayer.state == PlayerState.playing ||
+        _voiceAudioPlayer.state == PlayerState.paused;
+    if (!hadActiveReminder) return;
+
+    try {
+      await _voiceAudioPlayer.stop();
+    } catch (error) {
+      debugPrint('Passive reminder interruption failed: $error');
+    }
+    _completeVoicePlayback();
+    _isReminderPlaybackInFlight = false;
+    _currentVoicePlaybackStatus = null;
+    if (_activeSpokenReminderMessage != null) {
+      _finishSpokenReminder();
+    }
+    debugPrint('Passive reminder interrupted for interactive voice session');
   }
 
   void _showSpokenReminder(CompanionStatus status, String message) {
@@ -1320,6 +1406,191 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     unawaited(_deviceSpeechRecognitionService.cancel());
     _showVoiceDemoPanel = false;
     _resetSpeechDemoState();
+    unawaited(_resumeWakeWordListenerIfEnabled());
+  }
+
+  Future<void> _setWakeWordDemoEnabled(bool enabled) async {
+    if (!enabled) {
+      await _pauseWakeWordListener();
+      if (!mounted) return;
+      setState(() {
+        _isWakeWordDemoEnabled = false;
+        _isWakeWordInitializing = false;
+        _isWakeAcknowledgementPlaying = false;
+        _wakeWordStatus = '喚醒詞尚未啟用';
+        _wakeWordError = null;
+      });
+      return;
+    }
+
+    if (_isWakeWordDemoEnabled && _wakeWordService.isListening) return;
+    setState(() {
+      _isWakeWordDemoEnabled = true;
+      _wakeWordError = null;
+    });
+    await _startWakeWordListener();
+  }
+
+  Future<void> _startWakeWordListener() async {
+    if (!_isWakeWordDemoEnabled ||
+        _isWakeWordInitializing ||
+        _wakeWordService.isListening ||
+        _isSuspendedForNavigation ||
+        _isSpeechInitializing ||
+        _isSpeechListening ||
+        _isSpeechStopping ||
+        _isSpeechSubmitting ||
+        _isAssistantDecideLoading ||
+        _isWakeAcknowledgementPlaying) {
+      return;
+    }
+
+    setState(() {
+      _isWakeWordInitializing = true;
+      _wakeWordStatus = '正在載入離線喚醒模型…';
+      _wakeWordError = null;
+    });
+
+    try {
+      await _wakeWordService.start(
+        keywordTokens: _wakeKeywordTokens,
+        onDetected: _handleWakeWordDetected,
+        onError: _handleWakeWordError,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isWakeWordInitializing = false;
+        _wakeWordStatus = '正在等待「${AssistantIdentity.wakePhrase}」';
+      });
+      await _resumeFallbackVideoAfterVoiceIfNeeded();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isWakeWordInitializing = false;
+        _wakeWordStatus = '喚醒詞啟動失敗';
+        _wakeWordError = _friendlyWakeWordError(error);
+      });
+    }
+  }
+
+  Future<void> _pauseWakeWordListener() async {
+    _wakeWordResumeRequestId += 1;
+    await _wakeWordService.stop();
+    if (!mounted) return;
+    setState(() => _isWakeWordInitializing = false);
+  }
+
+  Future<void> _resumeWakeWordListenerIfEnabled() async {
+    if (!_isWakeWordDemoEnabled) return;
+    final requestId = ++_wakeWordResumeRequestId;
+    var attemptedRestart = false;
+    const retryDelays = <Duration>[
+      Duration(milliseconds: 650),
+      Duration(milliseconds: 900),
+      Duration(milliseconds: 1300),
+      Duration(milliseconds: 1800),
+    ];
+
+    for (final delay in retryDelays) {
+      await Future<void>.delayed(delay);
+      if (!mounted ||
+          requestId != _wakeWordResumeRequestId ||
+          !_isWakeWordDemoEnabled) {
+        return;
+      }
+      if (_isSuspendedForNavigation) return;
+
+      final speechStillBusy =
+          _isSpeechInitializing ||
+          _isSpeechListening ||
+          _isSpeechStopping ||
+          _isSpeechSubmitting ||
+          _isAssistantDecideLoading ||
+          _isWakeAcknowledgementPlaying;
+      if (speechStillBusy) continue;
+
+      attemptedRestart = true;
+      await _startWakeWordListener();
+      if (_wakeWordService.isListening) {
+        if (mounted && requestId == _wakeWordResumeRequestId) {
+          setState(() {
+            _wakeWordStatus = '正在等待「${AssistantIdentity.wakePhrase}」';
+            _wakeWordError = null;
+          });
+        }
+        return;
+      }
+    }
+
+    if (mounted &&
+        requestId == _wakeWordResumeRequestId &&
+        _isWakeWordDemoEnabled &&
+        attemptedRestart) {
+      setState(() {
+        _wakeWordStatus = '喚醒詞恢復失敗，請重新開啟監聽';
+      });
+    }
+  }
+
+  Future<void> _handleWakeWordDetected(String keyword) async {
+    if (!mounted || !_isWakeWordDemoEnabled) return;
+    final acknowledgementIndex =
+        _wakeWordDetectionCount % _wakeAcknowledgementAssets.length;
+    final acknowledgement =
+        AssistantIdentity.wakeAcknowledgements[acknowledgementIndex];
+
+    setState(() {
+      _wakeWordDetectionCount += 1;
+      _isWakeAcknowledgementPlaying = true;
+      _wakeWordStatus = '已喚醒：$keyword';
+      _wakeWordError = null;
+      _companionMessage = acknowledgement;
+      _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    });
+    _triggerCharacterReaction(CompanionCharacterReaction.success);
+    await _interruptPassiveReminderForInteractiveVoice();
+
+    try {
+      final completed = _wakeAcknowledgementPlayer.onPlayerComplete.first;
+      await _wakeAcknowledgementPlayer.play(
+        AssetSource(_wakeAcknowledgementAssets[acknowledgementIndex]),
+      );
+      await completed.timeout(const Duration(seconds: 5));
+    } catch (error) {
+      debugPrint('Wake acknowledgement playback failed: $error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isWakeAcknowledgementPlaying = false;
+          _wakeWordStatus = '露米娜正在聽你說話…';
+        });
+      }
+      await _resumeFallbackVideoAfterVoiceIfNeeded();
+    }
+
+    if (mounted && _isWakeWordDemoEnabled) {
+      await _startSpeechDemo();
+    }
+  }
+
+  void _handleWakeWordError(String error) {
+    if (!mounted) return;
+    setState(() {
+      _isWakeWordInitializing = false;
+      _wakeWordStatus = '喚醒詞發生錯誤';
+      _wakeWordError = _friendlyWakeWordError(error);
+    });
+  }
+
+  String _friendlyWakeWordError(Object error) {
+    final message = error.toString();
+    if (message.contains('permission') || message.contains('權限')) {
+      return '需要麥克風權限才能使用喚醒詞。';
+    }
+    if (message.contains('Unable to load asset')) {
+      return '找不到離線喚醒模型，請重新建置 App。';
+    }
+    return message.replaceFirst('Bad state: ', '');
   }
 
   Future<void> _toggleSpeechDemo() async {
@@ -1346,6 +1617,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     });
 
     try {
+      await _interruptPassiveReminderForInteractiveVoice();
+      await _pauseWakeWordListener();
       if (_voiceAudioPlayer.state == PlayerState.playing ||
           _voiceAudioPlayer.state == PlayerState.paused) {
         await _voiceAudioPlayer.stop();
@@ -1361,6 +1634,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           _isSpeechInitializing = false;
           _speechRecognitionError = '這台裝置沒有可用的語音辨識服務。';
         });
+        unawaited(_resumeWakeWordListenerIfEnabled());
         return;
       }
 
@@ -1385,6 +1659,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         _isSpeechStopping = false;
         _speechRecognitionError = '無法開始語音辨識：$error';
       });
+      unawaited(_resumeWakeWordListenerIfEnabled());
     }
   }
 
@@ -1411,6 +1686,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     setState(() {
       _resetSpeechDemoState(clearTranscript: clearTranscript);
     });
+    unawaited(_resumeWakeWordListenerIfEnabled());
   }
 
   void _handleDeviceSpeechStatus(String status) {
@@ -1421,6 +1697,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         _isSpeechStopping = false;
       }
     });
+    if (status == 'done' || status == 'notListening') {
+      unawaited(_resumeFallbackVideoAfterVoiceIfNeeded());
+      unawaited(_resumeWakeWordListenerIfEnabled());
+    }
   }
 
   void _handleDeviceSpeechError(String error) {
@@ -1435,6 +1715,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isSpeechStopping = false;
       _speechRecognitionError = _friendlySpeechError(error);
     });
+    unawaited(_resumeWakeWordListenerIfEnabled());
   }
 
   void _handleDeviceSpeechResult(VoiceRecognitionResult result) {
@@ -1475,7 +1756,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       await _runAssistantTextDemo();
     } finally {
       if (mounted) {
-        setState(() => _isSpeechSubmitting = false);
+        try {
+          await _deviceSpeechRecognitionService.cancel();
+        } catch (error) {
+          debugPrint('STT release before wake-word resume failed: $error');
+        }
+        if (mounted) {
+          setState(() => _isSpeechSubmitting = false);
+          unawaited(_resumeWakeWordListenerIfEnabled());
+        }
       }
     }
   }
@@ -3433,6 +3722,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _buildWakeWordDemoControl(),
+        const SizedBox(height: 12),
         Row(
           children: [
             Icon(
@@ -3539,6 +3830,105 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildWakeWordDemoControl() {
+    final isActive =
+        _isWakeWordDemoEnabled &&
+        (_wakeWordService.isListening ||
+            _isWakeWordInitializing ||
+            _isWakeAcknowledgementPlaying);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFD8EEF8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isActive
+                    ? Icons.hearing_rounded
+                    : Icons.hearing_disabled_rounded,
+                color: isActive
+                    ? const Color(0xFF2F7ED8)
+                    : const Color(0xFF63758C),
+                size: 21,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '露米娜喚醒詞',
+                      style: TextStyle(
+                        color: Color(0xFF20324D),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      '僅在此頁前景離線監聽',
+                      style: TextStyle(
+                        color: Color(0xFF63758C),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch.adaptive(
+                value: _isWakeWordDemoEnabled,
+                onChanged:
+                    _isWakeWordInitializing ||
+                        _isSpeechListening ||
+                        _isSpeechInitializing
+                    ? null
+                    : (value) => unawaited(_setWakeWordDemoEnabled(value)),
+              ),
+            ],
+          ),
+          Text(
+            _wakeWordStatus,
+            style: const TextStyle(
+              color: Color(0xFF31465F),
+              fontSize: 11,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (_wakeWordDetectionCount > 0)
+            Text(
+              '本次已喚醒 $_wakeWordDetectionCount 次',
+              style: const TextStyle(
+                color: Color(0xFF2F7ED8),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          if (_wakeWordError != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              _wakeWordError!,
+              style: const TextStyle(
+                color: Color(0xFFB33A48),
+                fontSize: 10,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -4102,6 +4492,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         ),
       );
       _fallbackVideoController?.pause();
+      unawaited(_pauseWakeWordListener());
     } else if (state == AppLifecycleState.resumed) {
       // 若目前正被其他畫面覆蓋（導覽暫停中），回到前景時先別重啟相機/辨識，
       // 等真的切回本畫面（didPopNext）再恢復。
@@ -4118,6 +4509,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (!_breathingController.isAnimating) {
         _breathingController.repeat(reverse: true);
       }
+      unawaited(_resumeWakeWordListenerIfEnabled());
       _focusSyncController.start(
         studySessionController: _studySessionController,
         pomodoroController: _pomodoroController,
@@ -4307,6 +4699,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _completeVoicePlayback();
     _voicePlayerStateSubscription?.cancel();
     _voiceAudioPlayer.dispose();
+    _wakeAcknowledgementPlayer.dispose();
+    _wakeWordResumeRequestId += 1;
+    unawaited(_wakeWordService.dispose());
     unawaited(_deviceSpeechRecognitionService.cancel());
     _assistantTextController.dispose();
     _pomodoroController.removeListener(_handlePomodoroControllerChanged);
