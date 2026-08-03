@@ -303,15 +303,15 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           }
         });
     // decide() may chain two Ollama calls on the backend (intent JSON, then a
-    // chat reply for mode=chat), each bounded by the backend's 120s Ollama
-    // timeout. Keep the client-side budget above that sum so slow-but-healthy
-    // responses aren't cut off; the local parser fallback still covers real
-    // outages.
+    // chat reply for mode=chat), bounded by the backend's decide + request
+    // timeouts (60s + 60s). Keep the client-side budget above that sum so
+    // slow-but-healthy responses aren't cut off; the local parser fallback
+    // still covers real outages.
     _assistantInteractionController = AssistantInteractionController(
       decisionClient: AssistantApi(
-        ApiClient(requestTimeout: const Duration(seconds: 250)),
+        ApiClient(requestTimeout: const Duration(seconds: 130)),
       ),
-      timeout: const Duration(seconds: 255),
+      timeout: const Duration(seconds: 135),
     );
     _focusSyncController = FocusSyncController(authSession: _authSession);
     _focusSyncController.start(

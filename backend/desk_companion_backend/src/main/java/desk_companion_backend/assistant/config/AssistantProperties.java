@@ -10,13 +10,15 @@ public class AssistantProperties {
     private String ollamaBaseUrl = "http://localhost:11434";
     private String model = "qwen2.5:7b";
     private Double chatTemperature = 0.8;
-    private Integer chatNumPredict = 96;
-    private Integer requestTimeoutSeconds = 30;
+    // Full companion replies (up to ~two short paragraphs). With the GPU no
+    // longer sharing bandwidth with a big model it generates ~20 tokens/s, so
+    // this no longer hurts latency the way it did during the earlier crawl.
+    private Integer chatNumPredict = 256;
+    private Integer requestTimeoutSeconds = 60;
     private Double decideTemperature = 0.15;
-    // The slim decide contract only needs ~35 tokens of JSON; 48 leaves margin
-    // without paying for output that the shared GPU generates at <1 token/s.
+    // The slim decide contract only needs ~35 tokens of JSON; 48 leaves margin.
     private Integer decideNumPredict = 48;
-    private Integer decideTimeoutSeconds = 120;
+    private Integer decideTimeoutSeconds = 60;
 
     public String getOllamaBaseUrl() {
         return ollamaBaseUrl;
