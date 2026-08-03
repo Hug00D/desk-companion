@@ -6,21 +6,50 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
-    'falls back to local voice parser for clear action when decide times out',
+    'handles clear local action without contacting assistant backend',
     () async {
+      final decisionClient = _UnexpectedDecisionClient();
       final controller = AssistantInteractionController(
-        decisionClient: _TimeoutDecisionClient(),
-        timeout: const Duration(milliseconds: 1),
+        decisionClient: decisionClient,
       );
 
       final result = await controller.handleText(text: '幫我開一個 25 分鐘番茄鐘');
 
-      expect(result.usedFallback, isTrue);
+      expect(result.usedFallback, isFalse);
       expect(result.command?.type, VoiceCommandType.startPomodoro);
       expect(result.command?.durationMinutes, 25);
       expect(result.shouldRunAction, isTrue);
+      expect(decisionClient.decideCallCount, 0);
+      expect(decisionClient.chatCallCount, 0);
     },
   );
+
+  test('keeps every supported app command on device', () async {
+    final decisionClient = _UnexpectedDecisionClient();
+    final controller = AssistantInteractionController(
+      decisionClient: decisionClient,
+    );
+    final cases = <String, VoiceCommandType>{
+      '暫停番茄鐘': VoiceCommandType.pausePomodoro,
+      '繼續番茄鐘': VoiceCommandType.resumePomodoro,
+      '停止番茄鐘': VoiceCommandType.stopPomodoro,
+      '番茄鐘還剩多久': VoiceCommandType.requestTimerStatus,
+      '幫我看今天的專注摘要': VoiceCommandType.requestFocusSummary,
+      '我有點累': VoiceCommandType.reportTired,
+      '我剛剛分心': VoiceCommandType.reportDistracted,
+      '我想休息': VoiceCommandType.requestBreak,
+    };
+
+    for (final entry in cases.entries) {
+      final result = await controller.handleText(text: entry.key);
+      expect(result.command?.type, entry.value, reason: entry.key);
+      expect(result.shouldRunAction, isTrue, reason: entry.key);
+      expect(result.usedFallback, isFalse, reason: entry.key);
+    }
+
+    expect(decisionClient.decideCallCount, 0);
+    expect(decisionClient.chatCallCount, 0);
+  });
 
   test('uses chat instead of local unknown for normal conversation', () async {
     final controller = AssistantInteractionController(
@@ -37,7 +66,10 @@ void main() {
   });
 }
 
-class _TimeoutDecisionClient implements AssistantDecisionClient {
+class _UnexpectedDecisionClient implements AssistantDecisionClient {
+  int decideCallCount = 0;
+  int chatCallCount = 0;
+
   @override
   Future<AssistantReply> decide({
     required String message,
@@ -45,12 +77,9 @@ class _TimeoutDecisionClient implements AssistantDecisionClient {
     Map<String, dynamic>? context,
     String? accessToken,
   }) {
-    return Future<AssistantReply>.delayed(
-      const Duration(seconds: 1),
-      () => const AssistantReply(
-        mode: AssistantMode.chat,
-        message: 'late response',
-      ),
+    decideCallCount += 1;
+    return Future<AssistantReply>.error(
+      StateError('Local commands must not call decide().'),
     );
   }
 
@@ -61,12 +90,9 @@ class _TimeoutDecisionClient implements AssistantDecisionClient {
     Map<String, dynamic>? context,
     String? accessToken,
   }) {
-    return Future<AssistantReply>.delayed(
-      const Duration(seconds: 1),
-      () => const AssistantReply(
-        mode: AssistantMode.chat,
-        message: 'late chat response',
-      ),
+    chatCallCount += 1;
+    return Future<AssistantReply>.error(
+      StateError('Local commands must not call chat().'),
     );
   }
 }

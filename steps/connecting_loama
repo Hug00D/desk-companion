@@ -13,5 +13,5 @@ $env:OLLAMA_CHAT_NUM_PREDICT="32"
 mvn spring-boot:run
 
 
-之後開發時,只要這個 tunnel 視窗開著,本地跑的 Spring Boot 後端把 ASSISTANT_SERVICE_URL 
+之後開發時,只要這個 tunnel 視窗開著,本地跑的 Spring Boot 後端把 ASSISTANT_SERVICE_URL
 設成 http://localhost:11434 就能呼叫到遠端的 qwen2.5:7b。

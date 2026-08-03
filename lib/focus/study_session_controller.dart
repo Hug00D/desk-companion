@@ -147,11 +147,8 @@ class StudySessionController {
       case CompanionStatus.distracted:
         distractedEventCount += 1;
         break;
-      case CompanionStatus.drowsy:
+      case CompanionStatus.sleeping:
         drowsyEventCount += 1;
-        break;
-      case CompanionStatus.postureDown:
-        postureDownEventCount += 1;
         break;
       case CompanionStatus.userMissing:
         focusUserMissingEventCount += 1;
@@ -211,16 +208,26 @@ class StudySessionController {
     );
   }
 
-  String buildSummary(PomodoroController pomodoroController) {
-    final focusText = _formatDuration(focusedDuration);
+  String buildSummary(
+    PomodoroController pomodoroController, {
+    Duration? currentFocusDuration,
+    Duration? currentDistractedDuration,
+    int? currentFocusEventCount,
+  }) {
+    final focusText = _formatDuration(currentFocusDuration ?? focusedDuration);
     final awayText = _formatDuration(awayDuration);
-    final distractedText = _formatDuration(distractedDuration);
+    final distractedText = _formatDuration(
+      currentDistractedDuration ?? distractedDuration,
+    );
     final timerText = pomodoroController.isActive
         ? '目前番茄鐘還剩 ${pomodoroController.formattedRemaining}'
         : '目前沒有進行中的番茄鐘';
+    final focusEventText = currentFocusEventCount == null
+        ? '疲勞提醒 $fatigueEventCount 次，注意力提醒 $attentionWarningCount 次'
+        : '專注事件 $currentFocusEventCount 次';
 
-    return '今天目前專注 $focusText，分心 $distractedText，離開 $awayText。'
-        '疲勞提醒 $fatigueEventCount 次，注意力提醒 $attentionWarningCount 次，'
+    return '目前這輪有效專注 $focusText，分心 $distractedText，離開 $awayText。'
+        '$focusEventText，'
         '番茄鐘完成 $pomodoroCompletedCount 輪、暫停 $pomodoroPausedCount 次。$timerText。';
   }
 

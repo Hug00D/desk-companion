@@ -49,6 +49,11 @@ class AssistantInteractionController {
     Map<String, dynamic>? context,
     String? accessToken,
   }) async {
+    final localCommand = _parseLocalCommand(text);
+    if (_shouldUseLocalFallbackCommand(localCommand, text)) {
+      return _localActionResult(localCommand, usedFallback: false);
+    }
+
     try {
       final reply = await _decisionClient
           .decide(
@@ -148,15 +153,7 @@ class AssistantInteractionController {
   }) async {
     final localCommand = _parseLocalCommand(text);
     if (_shouldUseLocalFallbackCommand(localCommand, text)) {
-      return AssistantInteractionResult(
-        reply: const AssistantReply(
-          mode: AssistantMode.action,
-          message: 'Assistant decide failed; used local parser fallback.',
-        ),
-        response: responseBuilder.fromVoiceCommand(localCommand),
-        command: localCommand,
-        usedFallback: true,
-      );
+      return _localActionResult(localCommand, usedFallback: true);
     }
 
     try {
@@ -185,6 +182,27 @@ class AssistantInteractionController {
         usedFallback: true,
       );
     }
+  }
+
+  AssistantInteractionResult _localActionResult(
+    VoiceCommand command, {
+    required bool usedFallback,
+  }) {
+    return AssistantInteractionResult(
+      reply: AssistantReply(
+        mode: AssistantMode.action,
+        message: usedFallback
+            ? 'Assistant unavailable; used local command parser.'
+            : 'Handled by local command parser.',
+        intent: command.type.name,
+        parameters: command.durationMinutes == null
+            ? const <String, dynamic>{}
+            : <String, dynamic>{'durationMinutes': command.durationMinutes},
+      ),
+      response: responseBuilder.fromVoiceCommand(command),
+      command: command,
+      usedFallback: usedFallback,
+    );
   }
 
   VoiceCommand _parseLocalCommand(String text) {

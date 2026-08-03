@@ -1,5 +1,6 @@
 import '../companion/companion_response.dart';
 import '../voice/voice_command.dart';
+import 'focus_session_monitor.dart';
 import 'pomodoro_controller.dart';
 import 'study_session_controller.dart';
 
@@ -22,6 +23,7 @@ class PomodoroActionDispatcher {
     required VoiceCommand command,
     required PomodoroController controller,
     StudySessionController? studySession,
+    FocusSessionMonitor? focusSessionMonitor,
   }) {
     switch (command.type) {
       case VoiceCommandType.startPomodoro:
@@ -38,7 +40,15 @@ class PomodoroActionDispatcher {
             source: CompanionResponseSource.voice,
             tone: CompanionResponseTone.action,
             message:
-                studySession?.buildSummary(controller) ?? '我可以幫你整理今天的專注狀態。',
+                studySession?.buildSummary(
+                  controller,
+                  currentFocusDuration:
+                      focusSessionMonitor?.effectiveFocusDuration,
+                  currentDistractedDuration:
+                      focusSessionMonitor?.distractedDuration,
+                  currentFocusEventCount: focusSessionMonitor?.totalEventCount,
+                ) ??
+                '我可以幫你整理今天的專注狀態。',
             actionLabel: 'show_focus_summary',
           ),
           shouldStartTimer: false,

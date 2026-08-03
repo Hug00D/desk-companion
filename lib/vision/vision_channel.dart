@@ -53,4 +53,26 @@ class VisionChannel {
   Future<void> resetVision() {
     return _channel.invokeMethod<void>('resetVision');
   }
+
+  Future<String?> copyNativeAssetToCache({
+    required String assetName,
+    required String outputFileName,
+  }) {
+    return _channel.invokeMethod<String>('copyNativeAssetToCache', {
+      'assetName': assetName,
+      'outputFileName': outputFileName,
+    });
+  }
+
+  Future<Uint8List?> extractVideoFrame({
+    required String videoPath,
+    required int timeMs,
+    int quality = 85,
+  }) {
+    return _channel.invokeMethod<Uint8List>('extractVideoFrame', {
+      'videoPath': videoPath,
+      'timeMs': timeMs,
+      'quality': quality,
+    });
+  }
 }

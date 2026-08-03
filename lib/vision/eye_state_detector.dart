@@ -14,14 +14,16 @@ class EyeDetectionResult {
 
 class EyeStateDetector {
   const EyeStateDetector({
-    this.eyeClosedThreshold = 0.2,
+    this.singleEyeClosedThreshold = 0.18,
+    this.averageEyeClosedThreshold = 0.28,
     this.attentionClosedFrames = 1,
     this.fatigueClosedFrames = 3,
     this.maxReliableHeadOffsetScore = 55,
-    this.maxReliableHeadPitch = 45,
+    this.maxReliableHeadPitch = 70,
   });
 
-  final double eyeClosedThreshold;
+  final double singleEyeClosedThreshold;
+  final double averageEyeClosedThreshold;
   final int attentionClosedFrames;
   final int fatigueClosedFrames;
   final double maxReliableHeadOffsetScore;
@@ -49,9 +51,13 @@ class EyeStateDetector {
       );
     }
 
+    final minimumEyeOpen = result.leftEyeOpen! < result.rightEyeOpen!
+        ? result.leftEyeOpen!
+        : result.rightEyeOpen!;
+    final averageEyeOpen = (result.leftEyeOpen! + result.rightEyeOpen!) / 2.0;
     final eyesClosed =
-        result.leftEyeOpen! < eyeClosedThreshold &&
-        result.rightEyeOpen! < eyeClosedThreshold;
+        minimumEyeOpen < singleEyeClosedThreshold &&
+        averageEyeOpen < averageEyeClosedThreshold;
     final closedFrameCount = eyesClosed ? previousClosedFrameCount + 1 : 0;
 
     if (closedFrameCount >= fatigueClosedFrames) {

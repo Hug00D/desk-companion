@@ -18,9 +18,14 @@ class PoseDetectionResult {
 
 class PoseStateDetector {
   const PoseStateDetector({
-    this.drowsyPitchThreshold = 32,
-    this.drowsyHeadLowThreshold = 55,
-    this.drowsyNoseDropThreshold = 70,
+    this.drowsyPitchThreshold = 26,
+    this.drowsyHeadLowThreshold = 45,
+    this.drowsyNoseDropThreshold = 28,
+    this.readingProtectionHeadLowMax = 95,
+    this.readingProtectionPostureScoreMax = 35,
+    this.readingProtectionShoulderDropMax = 24,
+    this.readingProtectionShoulderShrinkMax = 25,
+    this.readingProtectionSideProneMax = 30,
     this.drowsyMaxShoulderDropScore = 50,
     this.drowsyMaxShoulderShrinkScore = 45,
   });
@@ -28,6 +33,11 @@ class PoseStateDetector {
   final double drowsyPitchThreshold;
   final double drowsyHeadLowThreshold;
   final double drowsyNoseDropThreshold;
+  final double readingProtectionHeadLowMax;
+  final double readingProtectionPostureScoreMax;
+  final double readingProtectionShoulderDropMax;
+  final double readingProtectionShoulderShrinkMax;
+  final double readingProtectionSideProneMax;
   final double drowsyMaxShoulderDropScore;
   final double drowsyMaxShoulderShrinkScore;
 
@@ -96,11 +106,31 @@ class PoseStateDetector {
     final noseDropScore = postureDownResult.noseDropScore ?? 0;
     final shoulderDropScore = postureDownResult.shoulderDropScore ?? 0;
     final shoulderShrinkScore = postureDownResult.shoulderShrinkScore ?? 0;
+    final sideProneScore = postureDownResult.sideProneScore ?? 0;
+
+    final stableReadingBody =
+        postureDownResult.downFrameCount == 0 &&
+        (postureDownResult.score ?? 0) < readingProtectionPostureScoreMax &&
+        shoulderDropScore < readingProtectionShoulderDropMax &&
+        shoulderShrinkScore < readingProtectionShoulderShrinkMax &&
+        sideProneScore < readingProtectionSideProneMax;
+    if (stableReadingBody && headLowScore < readingProtectionHeadLowMax) {
+      return false;
+    }
+
+    final pitchSupportsHeadDrop =
+        headPitch.abs() >= drowsyPitchThreshold &&
+        (headLowScore >= 35 || noseDropScore >= 40);
+    final geometrySupportsHeadDrop =
+        headLowScore >= drowsyHeadLowThreshold &&
+        noseDropScore >= drowsyNoseDropThreshold;
+    final extremeHeadLowSupportsDrowsy =
+        headLowScore >= readingProtectionHeadLowMax;
 
     return eyeState == EyeState.fatigue &&
-        headPitch >= drowsyPitchThreshold &&
-        headLowScore >= drowsyHeadLowThreshold &&
-        noseDropScore >= drowsyNoseDropThreshold &&
+        (pitchSupportsHeadDrop ||
+            geometrySupportsHeadDrop ||
+            extremeHeadLowSupportsDrowsy) &&
         shoulderDropScore < drowsyMaxShoulderDropScore &&
         shoulderShrinkScore < drowsyMaxShoulderShrinkScore;
   }

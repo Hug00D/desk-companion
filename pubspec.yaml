@@ -38,9 +38,13 @@ dependencies:
   video_player: ^2.8.1              # 用來播你的測試影片
   path_provider: ^2.1.2             # 用來處理暫存檔案
   video_thumbnail: ^0.5.3
-  rive: ^0.14.8
+  flutter_live2d:
+    path: third_party/flutter_live2d
   http: ^1.6.0
   audioplayers: ^6.5.1
+  speech_to_text: ^7.4.0
+  record: ^6.1.2
+  sherpa_onnx: ^1.13.4
 
 dev_dependencies:
   flutter_test:
@@ -65,10 +69,14 @@ flutter:
   uses-material-design: true
   assets:
     - assets/test.mp4
-    - assets/test_face.mp4
     - assets/mock/
     - assets/audio/reminders/
-    - assets/test2.riv
+    - assets/audio/wake/
+    - assets/models/wake_word/
+    - assets/March 7th/
+    - assets/March 7th/exp/
+    - assets/March 7th/motions/
+    - assets/March 7th/March 7th.4096/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -7,10 +7,11 @@ enum PomodoroStatus { idle, running, paused, completed }
 
 enum PomodoroPauseReason {
   manual,
+  navigation,
+  appBackground,
   distracted,
   fatigue,
-  drowsy,
-  postureDown,
+  sleeping,
   userMissing,
 }
 
@@ -28,6 +29,7 @@ class PomodoroController extends ChangeNotifier {
 
   Timer? _ticker;
   DateTime? _deadline;
+  bool _suspended = false;
 
   bool get isRunning => status == PomodoroStatus.running;
   bool get isActive =>
@@ -57,6 +59,10 @@ class PomodoroController extends ChangeNotifier {
   void pause({PomodoroPauseReason reason = PomodoroPauseReason.manual}) {
     if (status != PomodoroStatus.running) return;
     _refreshRemaining();
+    if (status != PomodoroStatus.running) {
+      notifyListeners();
+      return;
+    }
     status = PomodoroStatus.paused;
     pauseReason = reason;
     _deadline = null;
@@ -86,6 +92,31 @@ class PomodoroController extends ChangeNotifier {
   void tick() {
     if (status != PomodoroStatus.running) return;
     _refreshRemaining();
+    notifyListeners();
+  }
+
+  /// 凍結倒數計時（例如切換到其他畫面時）。
+  ///
+  /// 與 [pause] 不同：這裡「不會」改變 [status]、也「不會」觸發任何暫停事件，
+  /// 只是先把目前的剩餘時間定住、停掉每秒的計時器。切回畫面時用
+  /// [resumeTicking] 從原本的剩餘時間繼續，不會少算或多算時間。
+  void suspendTicking() {
+    if (_suspended || status != PomodoroStatus.running) return;
+    _refreshRemaining();
+    if (status != PomodoroStatus.running) return; // 剛好在此刻倒數結束
+    _ticker?.cancel();
+    _ticker = null;
+    _deadline = null;
+    _suspended = true;
+  }
+
+  /// 從 [suspendTicking] 的凍結狀態恢復倒數。
+  void resumeTicking() {
+    if (!_suspended) return;
+    _suspended = false;
+    if (status != PomodoroStatus.running || remaining <= Duration.zero) return;
+    _deadline = DateTime.now().add(remaining);
+    _startTicker();
     notifyListeners();
   }
 

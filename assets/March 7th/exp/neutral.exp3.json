@@ -1,0 +1,15 @@
+{
+  "Type": "Live2D Expression",
+  "FadeInTime": 0.35,
+  "FadeOutTime": 0.35,
+  "Parameters": [
+    { "Id": "Param26", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param27", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param28", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param30", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param31", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param32", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param33", "Value": 0, "Blend": "Overwrite" },
+    { "Id": "Param37", "Value": 0, "Blend": "Overwrite" }
+  ]
+}

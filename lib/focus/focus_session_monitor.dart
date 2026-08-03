@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../vision/companion_state_evaluator.dart';
+import 'focus_session_report.dart';
 
 enum FocusInterventionType {
   reminder,
@@ -50,6 +51,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   Duration effectiveFocusDuration = Duration.zero;
   Duration distractedDuration = Duration.zero;
+  FocusSessionReport? lastCompletedReport;
 
   bool severeAutoPauseEnabled = true;
   bool longDistractionAutoPauseEnabled = false;
@@ -65,9 +67,31 @@ class FocusSessionMonitor extends ChangeNotifier {
     effectiveFocusDuration = Duration.zero;
     distractedDuration = Duration.zero;
     _eventCounts.clear();
+    lastCompletedReport = null;
     _lastSampleAt = now ?? DateTime.now();
     _clearAllState();
     notifyListeners();
+  }
+
+  FocusSessionReport completeSession({
+    required Duration plannedDuration,
+    DateTime? now,
+  }) {
+    final report = FocusSessionReport(
+      completedAt: now ?? DateTime.now(),
+      plannedDuration: plannedDuration,
+      effectiveFocusDuration: effectiveFocusDuration,
+      distractedDuration: distractedDuration,
+      eventCounts: <CompanionStatus, int>{
+        for (final status in CompanionStatus.values)
+          if (eventCountFor(status) > 0) status: eventCountFor(status),
+      },
+    );
+    lastCompletedReport = report;
+    _lastSampleAt = null;
+    _clearAllState();
+    notifyListeners();
+    return report;
   }
 
   void endSession() {
@@ -272,9 +296,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   Duration _reminderThresholdFor(CompanionStatus status) {
     switch (status) {
-      case CompanionStatus.postureDown:
-        return const Duration(seconds: 1);
-      case CompanionStatus.drowsy:
+      case CompanionStatus.sleeping:
         return const Duration(seconds: 2);
       case CompanionStatus.normal:
       case CompanionStatus.attention:
@@ -333,13 +355,7 @@ class FocusSessionMonitor extends ChangeNotifier {
         threshold = const Duration(seconds: 10);
         type = FocusInterventionType.offerPause;
         break;
-      case CompanionStatus.drowsy:
-        threshold = const Duration(seconds: 10);
-        type = severeAutoPauseEnabled
-            ? FocusInterventionType.autoPause
-            : FocusInterventionType.offerPause;
-        break;
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         threshold = const Duration(seconds: 8);
         type = severeAutoPauseEnabled
             ? FocusInterventionType.autoPause
