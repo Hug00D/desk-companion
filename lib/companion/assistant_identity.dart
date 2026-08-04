@@ -6,7 +6,7 @@ class AssistantIdentity {
   static const String wakeKeyword = '嘿露米娜';
 
   static const List<String> wakeAcknowledgements = <String>[
-    '嗯？我在。',
+    '我在，有什麼事嗎？',
     '怎麼了？',
     '我有在聽。',
   ];

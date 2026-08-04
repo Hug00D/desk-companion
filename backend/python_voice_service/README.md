@@ -42,13 +42,15 @@ From the project root:
 Useful options:
 
 ```powershell
-.\backend\python_voice_service\start.ps1 -SkipPrewarm
 .\backend\python_voice_service\start.ps1 -DisableGptSoVits
 ```
 
-The first normal launch starts GPT-SoVITS on `127.0.0.1:9880`, starts the app
-voice API on port `8001`, and pre-generates three fixed reminders for each
-supported vision status. Later launches reuse cached WAV files.
+The normal launch starts GPT-SoVITS on `127.0.0.1:9880` and starts the app
+voice API on port `8001`. Fixed reminder clips are bundled with the Flutter
+app, so this service only generates one-shot audio for dynamic text. Each WAV
+is deleted 30 seconds after `GET /audio/<filename>` finishes so the app can
+retry a dropped download. Files left by interrupted downloads are removed after
+ten minutes or at the next service startup.
 
 Android emulator URL:
 
@@ -61,6 +63,42 @@ Physical phone example:
 ```powershell
 flutter run --dart-define=VOICE_SERVICE_URL=http://192.168.1.23:8001
 ```
+
+Dynamic AI replies are opt-in in Flutter. Enable them only when this service
+is reachable:
+
+```powershell
+flutter run `
+  --dart-define=API_BASE_URL=http://100.119.136.81:8080/api/v1 `
+  --dart-define=VOICE_SERVICE_URL=http://100.119.136.81:8001 `
+  --dart-define=DYNAMIC_ASSISTANT_VOICE_ENABLED=true
+```
+
+## Linux / systemd
+
+The service can use a bundled Linux Conda runtime or paths supplied through
+environment variables. The model and runtime directories remain local-only
+and must be copied to the server separately.
+
+1. Copy `desk-companion-voice.env.example` to
+   `/etc/desk-companion/voice.env` and update its user, paths, and Tailscale
+   address.
+2. Verify the service interactively with `bash start.sh`.
+3. Copy `desk-companion-voice.service.example` to
+   `/etc/systemd/system/desk-companion-voice.service` and update the Linux
+   user and project directory if necessary.
+4. Start it with:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now desk-companion-voice
+sudo systemctl status desk-companion-voice
+journalctl -u desk-companion-voice -f
+```
+
+Port `9880` stays bound to localhost for GPT-SoVITS. Port `8001` should bind
+to the teacher server's Tailscale address and does not need to be exposed to
+the public internet.
 
 ## API
 

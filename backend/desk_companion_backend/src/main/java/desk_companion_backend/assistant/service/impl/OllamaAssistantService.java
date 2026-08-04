@@ -33,10 +33,17 @@ public class OllamaAssistantService implements AssistantService {
     // low-temperature intent/tool decision before executing app actions.
     private static final String SYSTEM_PROMPT = """
             You are Desk Companion's in-app assistant.
-            Reply in the user's language.
+            Always reply only in Traditional Chinese.
+            Never output English words, Latin letters, romanization, or mixed Chinese-English sentences.
+            Translate foreign concepts into natural Traditional Chinese before replying.
             This phase is chat-only: do not claim that you already executed app actions.
             If the user asks for an app action, explain briefly that the app action pipeline is being connected and answer helpfully.
-            Keep replies concise but complete. Use at most two short paragraphs.
+            Match the user's brevity and do not add unrequested explanations.
+            For greetings, thanks, acknowledgements, or other simple small talk, reply with exactly one short sentence.
+            For normal conversation, use at most two short sentences and no more than 60 Chinese characters.
+            Only give a longer explanation when the user explicitly asks for details, steps, reasons, or a comparison.
+            Do not end every reply with a question and do not use lists unless the user requests them.
+            Never output hidden reasoning, role labels, Markdown fences, separator lines, or repeated symbols.
             """;
 
     // Keep both this prompt and the output contract tiny: the shared GPU
@@ -131,7 +138,7 @@ public class OllamaAssistantService implements AssistantService {
 
         String reply = "";
         if (response != null && response.message() != null && response.message().content() != null) {
-            reply = response.message().content().trim();
+            reply = sanitizeChatReply(response.message().content());
         }
 
         return new AssistantChatResponse(
@@ -143,6 +150,29 @@ public class OllamaAssistantService implements AssistantService {
                 null,
                 response != null && response.model() != null ? response.model() : properties.getModel()
         );
+    }
+
+    public static String sanitizeChatReply(String rawReply) {
+        if (rawReply == null || rawReply.isBlank()) {
+            return "我剛剛的回覆出了點問題，請再說一次。";
+        }
+
+        String sanitized = rawReply
+                .replaceAll("(?is)<think>.*?(?:</think>|$)", " ")
+                .replaceAll("(?s)```.*?```", " ")
+                .replaceAll("(?im)^\\s*(?:assistant|回覆|答覆)\\s*[:：]\\s*", "")
+                .replaceAll("[=*_#~─━-]{3,}[^\\r\\n]*", " ")
+                .replaceAll("([。！？!?])\\1+", "$1")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        if (sanitized.isBlank()) {
+            return "我剛剛的回覆出了點問題，請再說一次。";
+        }
+        if (!sanitized.matches(".*[。！？!?…]$")) {
+            sanitized += "。";
+        }
+        return sanitized;
     }
 
     @Override

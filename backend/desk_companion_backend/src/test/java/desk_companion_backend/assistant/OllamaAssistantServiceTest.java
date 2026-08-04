@@ -59,4 +59,18 @@ class OllamaAssistantServiceTest {
         assertThat(response.intent()).isNull();
         assertThat(response.chatReply()).isNotBlank();
     }
+
+    @Test
+    void sanitizeChatReplyRemovesModelSeparatorArtifacts() {
+        assertThat(OllamaAssistantService.sanitizeChatReply(
+                "好 ==========================================================…"
+        )).isEqualTo("好。");
+    }
+
+    @Test
+    void sanitizeChatReplyRemovesHiddenReasoning() {
+        assertThat(OllamaAssistantService.sanitizeChatReply(
+                "<think>internal reasoning</think>我陪你聊點輕鬆的。"
+        )).isEqualTo("我陪你聊點輕鬆的。");
+    }
 }
