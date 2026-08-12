@@ -203,7 +203,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       ),
       _ReminderClip(
         'assets/audio/reminders/attention_3.wav',
-        '先把視線移開幾秒，眼睛會舒服一點。',
+        '注意力好像有點波動，先眨眨眼、調整一下視線吧。',
       ),
     ],
     CompanionStatus.fatigue: [
@@ -1255,7 +1255,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   ) {
     switch (status) {
       case CompanionStatus.attention:
-        return '眼睛有點累了，先眨眨眼休息一下。';
+        return '注意力好像有點波動，先眨眨眼、調整一下視線吧。';
       case CompanionStatus.fatigue:
         return '你看起來很累，先停一下，讓眼睛休息。';
       case CompanionStatus.distracted:

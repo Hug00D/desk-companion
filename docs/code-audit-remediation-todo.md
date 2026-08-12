@@ -181,9 +181,48 @@ enum CompanionCause {
   - 尚未在實體裝置確認 drowsy/postureDown 音檔內容、播放選擇及 Tasks pause caption。
   - 門檻常數集中尚未處理；本次刻意不移動或調整 detector threshold，避免在無 replay 數據時改變判斷結果。
 
+#### 2026-08-12｜修正 attention 提醒的過度推論文案
+
+- 狀態變更：
+  - 修改前：`進行中`
+  - 修改後：`進行中`
+
+- 修改背景：
+  - 實測 `attention / eyeClosed` 提醒播放「先把視線移開幾秒，眼睛會舒服一點」，但現有 detector 只能觀察短暫閉眼訊號，無法判斷使用者主觀上是否眼睛不舒服。
+
+- 修改檔案：
+  - `assets/audio/reminders/attention_3.wav`
+  - `lib/screens/face_detection_screen.dart`
+  - `backend/python_voice_service/app/main.py`
+  - `docs/voice-system-maintenance-log.md`
+
+- 修改方法：
+  - 將文案改為「注意力好像有點波動，先眨眨眼、調整一下視線吧」。
+  - 使用專案既有 Staff A GPT-SoVITS 產生新版固定 WAV。
+  - 同步更新 Flutter clip 字幕、attention fallback 文案與 Python reminder catalog，避免固定音檔和動態生成再次出現舊句。
+
+- 修改後行為：
+  - `attention_3` 不再宣稱已判斷眼睛舒服程度，語意能涵蓋短暫閉眼、眨眼與辨識波動。
+  - 播放音檔、畫面文字與動態 reminder catalog 使用相同句子。
+
+- 測試方式：
+  - 以 Python `wave` 模組檢查 RIFF/WAVE 結構、聲道、sample width、sample rate、frames 與時長。
+  - 執行 Flutter 靜態分析與 Python 語法檢查。
+  - 執行 Python voice service 8 項測試與 Focus monitor 8 項測試。
+  - 搜尋舊文案，確認 runtime code 不再引用。
+
+- 數據佐證：
+  - 修改前：`attention_3.wav` 258,604 bytes；文案為「先把視線移開幾秒，眼睛會舒服一點」。
+  - 修改後：新版 WAV 323,884 bytes、單聲道、16-bit、32 kHz、161,920 frames、5.06 秒。
+  - 結論：音檔與程式文案已完成替換；Python voice service 8/8、Focus monitor 8/8 測試通過，尚待 App 實際播放確認語音內容與聽感。
+
+- 殘留風險：
+  - 尚未在 Android 模擬器或實機實際聽取新版固定音檔，因此 AUDIT-001 維持 `進行中`。
+
 ### 驗證與數據佐證
 
 - 2026-08-12：Focus/session 自動測試 12/12 通過；本次修改檔案靜態分析 0 issue。
+- 2026-08-12：依實測 attention Log，將會過度推論「眼睛舒服程度」的 `attention_3` 文案改為「注意力好像有點波動，先眨眨眼、調整一下視線吧」；以 Staff A GPT-SoVITS 生成 5.06 秒新版 WAV，並同步 Flutter 字幕與 Python catalog。尚待 App 實際播放確認。
 - 待補：各狀態 replay 的 primary status、cause、event type、提醒音檔與後端 signals 對照。
 - 待補：實體 Android 裝置上的 drowsy／postureDown 提醒選檔與 pauseReason 顯示。
 - 待補：修復或繞過 vision test runner 無輸出卡住問題後，執行完整 temporal vision 測試。
