@@ -4,6 +4,7 @@ import 'package:desk_companion/vision/eye_state_detector.dart';
 import 'package:desk_companion/vision/head_offset_detector.dart';
 import 'package:desk_companion/vision/pose_state_detector.dart';
 import 'package:desk_companion/vision/posture_down_detector.dart';
+import 'package:desk_companion/vision/vision_event.dart';
 import 'package:desk_companion/vision/vision_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -140,6 +141,41 @@ void main() {
       expect(protectedReading.state, PoseState.normal);
       expect(eyesClosed.state, PoseState.drowsy);
       expect(eyesClosedWithOppositePitchSign.state, PoseState.drowsy);
+    });
+
+    test('sleeping status retains drowsy cause in vision event', () {
+      final evaluator = CompanionStateEvaluator(
+        postureDownDetector: _QueuedPostureDownDetector([
+          const PostureDownDetectionResult(
+            state: PostureDownState.normal,
+            score: 11,
+            downFrameCount: 0,
+            headLowScore: 96,
+            noseDropScore: 50,
+            shoulderDropScore: 8,
+            shoulderShrinkScore: 12,
+            sideProneScore: 0,
+          ),
+        ]),
+      );
+
+      final analysis = evaluator.evaluate(
+        result: _visionResult(
+          headPitch: 40,
+          leftEyeOpen: 0.05,
+          rightEyeOpen: 0.05,
+        ),
+        previousClosedFrameCount: 2,
+        previousDistractedFrameCount: 0,
+        isFreshPoseResult: true,
+        observedAt: DateTime(2026, 7, 12, 10, 10),
+      );
+      final event = VisionEvent.fromAnalysis(analysis);
+
+      expect(analysis.status, CompanionStatus.sleeping);
+      expect(analysis.cause, CompanionCause.drowsy);
+      expect(event.type, VisionEventType.drowsyDetected);
+      expect(event.toSignalsJson()['cause'], 'drowsy');
     });
 
     test('stable reading head drop does not become sleeping on face loss', () {
@@ -356,6 +392,11 @@ void main() {
       );
       expect(confirmed.postureDownResult.downFrameCount, 2);
       expect(confirmed.status, CompanionStatus.sleeping);
+      expect(confirmed.cause, CompanionCause.postureDown);
+      expect(
+        VisionEvent.fromAnalysis(confirmed).type,
+        VisionEventType.postureDownDetected,
+      );
     });
 
     test('confirmed posture clears after two fresh recovered poses', () {

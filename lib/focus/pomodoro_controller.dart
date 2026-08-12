@@ -11,7 +11,8 @@ enum PomodoroPauseReason {
   appBackground,
   distracted,
   fatigue,
-  sleeping,
+  drowsy,
+  postureDown,
   userMissing,
 }
 

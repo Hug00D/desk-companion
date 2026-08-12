@@ -166,6 +166,22 @@
 - 驗證：Dart 靜態分析通過；Flutter test runner 受既有 daemon 卡住並於 120 秒逾時。待模擬器連續執行喚醒、辨識及聊天確認。
 - 成效：待 App 實測確認成功逐字稿不再被晚到錯誤覆蓋。
 
+### VOICE-013：sleeping 提醒未保留 drowsy／postureDown 原因
+
+- 日期：2026-08-12
+- 狀態：`進行中`
+- 對應項目：`AUDIT-001`
+- 症狀：前端刻意將 drowsy 與 postureDown 統一顯示為 `sleeping`，但本地提醒 request 只攜帶 status，兩種情況都會選擇 drowsy 音檔；既有 `posture_down_*.wav` 沒有被使用。
+- 根因：UI status 與內部判斷原因共用同一個 `CompanionStatus`，`CompanionAnalysis`、Focus intervention、pending reminder 與播放前狀態檢查均未保留 cause。
+- 修改：
+  - 保留 `CompanionStatus.sleeping` 作為 UI 群組，新增 `CompanionCause.drowsy` 與 `CompanionCause.postureDown`。
+  - 本地提醒 request、播放中 request 與 pending request 同時攜帶 status/cause。
+  - drowsy 選擇 `drowsy_*.wav`；postureDown 選擇 `posture_down_*.wav`，並使用不同事件名稱與提示文字。
+  - 播放前同時比對最新 status 與 cause；若 cause 已切換，舊提醒不再播放。
+  - cooldown 仍沿用 `sleeping` status 共用冷卻時間；全域提醒間隔與完整 ReminderManager 留待 `AUDIT-004`。
+- 驗證：本次修改檔案靜態分析 0 issue；Focus monitor、Focus report 與 StudySession cause 共 12 項測試全部通過。新增 vision cause mapping 測試，但本機 Flutter vision test runner 在載入前無輸出卡住，尚未取得結果。
+- 成效：程式路徑已可依 cause 選擇不同提醒資產，待實體 Android 裝置分別觸發 drowsy 與 postureDown，確認實際播放內容、cooldown 與播放前取消行為。
+
 ## 每次修改後的最低驗收
 
 1. 連續執行至少 10 次「喚醒 → STT → LLM → TTS → 播放」。

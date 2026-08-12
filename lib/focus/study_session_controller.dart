@@ -141,14 +141,18 @@ class StudySessionController {
     pomodoroCompletedCount += 1;
   }
 
-  void recordFocusEvent(CompanionStatus status) {
+  void recordFocusEvent(CompanionStatus status, CompanionCause cause) {
     ensureStarted();
     switch (status) {
       case CompanionStatus.distracted:
         distractedEventCount += 1;
         break;
       case CompanionStatus.sleeping:
-        drowsyEventCount += 1;
+        if (cause == CompanionCause.postureDown) {
+          postureDownEventCount += 1;
+        } else {
+          drowsyEventCount += 1;
+        }
         break;
       case CompanionStatus.userMissing:
         focusUserMissingEventCount += 1;
