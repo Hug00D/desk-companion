@@ -14,13 +14,36 @@ enum CompanionStatus {
   userMissing,
 }
 
+enum CompanionCause {
+  none,
+  frequentBlink,
+  eyeClosed,
+  headTurned,
+  drowsy,
+  postureDown,
+  faceMissing,
+  userAway,
+}
+
+class CompanionState {
+  const CompanionState({required this.status, required this.cause});
+
+  static const CompanionState normal = CompanionState(
+    status: CompanionStatus.normal,
+    cause: CompanionCause.none,
+  );
+
+  final CompanionStatus status;
+  final CompanionCause cause;
+}
+
 extension CompanionStatusLabel on CompanionStatus {
   String get label {
     switch (this) {
       case CompanionStatus.normal:
         return '狀態：正常';
       case CompanionStatus.attention:
-        return '注意：眨眼頻繁';
+        return '注意：短暫注意力下降';
       case CompanionStatus.fatigue:
         return '疲勞警告：偵測到閉眼';
       case CompanionStatus.distracted:
@@ -41,7 +64,7 @@ class CompanionAnalysis {
     required this.postureDownResult,
     required this.poseResult,
     required this.presenceState,
-    required this.status,
+    required this.state,
   });
 
   final VisionResult visionResult;
@@ -50,7 +73,10 @@ class CompanionAnalysis {
   final PostureDownDetectionResult postureDownResult;
   final PoseDetectionResult poseResult;
   final PresenceState presenceState;
-  final CompanionStatus status;
+  final CompanionState state;
+
+  CompanionStatus get status => state.status;
+  CompanionCause get cause => state.cause;
 
   PoseState get poseState => poseResult.state;
 }
@@ -96,6 +122,7 @@ class CompanionStateEvaluator {
   int _fullyAbsentFrameCount = 0;
   int _faceUprightFrames = 0;
   int _recentStrongPostureCandidateFrames = 0;
+  CompanionCause _lastResolvedCause = CompanionCause.none;
 
   CompanionAnalysis evaluate({
     required VisionResult result,
@@ -133,7 +160,7 @@ class CompanionStateEvaluator {
       isFreshPoseResult: isFreshPoseResult,
     );
     _updateStrongPostureCandidateContext(postureDownResult);
-    final combinedStatus = _combine(
+    final combinedState = _combine(
       eyeResult: eyeResult,
       headOffsetState: headOffsetResult.state,
       poseState: poseResult.state,
@@ -148,7 +175,7 @@ class CompanionStateEvaluator {
       result: result,
       postureDownResult: postureDownResult,
       eyeState: eyeResult.state,
-      baseStatus: combinedStatus,
+      baseStatus: combinedState.status,
       isFreshPoseResult: isFreshPoseResult,
       observedAt: timestamp,
     );
@@ -161,6 +188,16 @@ class CompanionStateEvaluator {
           )
         : headOffsetResult;
 
+    final resolvedCause = _causeForResolvedStatus(
+      status: resolvedStatus,
+      baseState: combinedState,
+      result: result,
+      eyeState: eyeResult.state,
+      poseState: poseResult.state,
+      presenceState: presenceState,
+    );
+    _lastResolvedCause = resolvedCause;
+
     return CompanionAnalysis(
       visionResult: result,
       eyeResult: eyeResult,
@@ -168,33 +205,106 @@ class CompanionStateEvaluator {
       postureDownResult: postureDownResult,
       poseResult: poseResult,
       presenceState: presenceState,
-      status: resolvedStatus,
+      state: CompanionState(status: resolvedStatus, cause: resolvedCause),
     );
   }
 
-  CompanionStatus _combine({
+  CompanionState _combine({
     required EyeDetectionResult eyeResult,
     required HeadOffsetState headOffsetState,
     required PoseState poseState,
     required PresenceState presenceState,
     required bool suppressEyeWarning,
   }) {
-    if (poseState == PoseState.postureDown || poseState == PoseState.drowsy) {
-      return CompanionStatus.sleeping;
+    if (poseState == PoseState.postureDown) {
+      return const CompanionState(
+        status: CompanionStatus.sleeping,
+        cause: CompanionCause.postureDown,
+      );
+    }
+    if (poseState == PoseState.drowsy) {
+      return const CompanionState(
+        status: CompanionStatus.sleeping,
+        cause: CompanionCause.drowsy,
+      );
     }
     // A side turn can distort eye landmarks. Once head-offset evidence is
     // confirmed, classify it as distraction before considering eye warnings.
     if (headOffsetState == HeadOffsetState.distracted) {
-      return CompanionStatus.distracted;
+      return const CompanionState(
+        status: CompanionStatus.distracted,
+        cause: CompanionCause.headTurned,
+      );
     }
     if (!suppressEyeWarning) {
-      if (eyeResult.state == EyeState.fatigue) return CompanionStatus.fatigue;
+      if (eyeResult.state == EyeState.fatigue) {
+        return const CompanionState(
+          status: CompanionStatus.fatigue,
+          cause: CompanionCause.eyeClosed,
+        );
+      }
       if (eyeResult.state == EyeState.attention) {
-        return CompanionStatus.attention;
+        return const CompanionState(
+          status: CompanionStatus.attention,
+          cause: CompanionCause.eyeClosed,
+        );
       }
     }
-    if (presenceState == PresenceState.away) return CompanionStatus.userMissing;
-    return CompanionStatus.normal;
+    if (presenceState == PresenceState.away) {
+      return const CompanionState(
+        status: CompanionStatus.userMissing,
+        cause: CompanionCause.userAway,
+      );
+    }
+    return CompanionState.normal;
+  }
+
+  CompanionCause _causeForResolvedStatus({
+    required CompanionStatus status,
+    required CompanionState baseState,
+    required VisionResult result,
+    required EyeState eyeState,
+    required PoseState poseState,
+    required PresenceState presenceState,
+  }) {
+    switch (status) {
+      case CompanionStatus.normal:
+        return CompanionCause.none;
+      case CompanionStatus.attention:
+        if (!result.hasFace || eyeState == EyeState.noFace) {
+          return CompanionCause.faceMissing;
+        }
+        if (baseState.status == CompanionStatus.attention) {
+          return baseState.cause;
+        }
+        if (eyeState == EyeState.attention) {
+          return CompanionCause.eyeClosed;
+        }
+        return CompanionCause.none;
+      case CompanionStatus.fatigue:
+        return CompanionCause.eyeClosed;
+      case CompanionStatus.distracted:
+        return CompanionCause.headTurned;
+      case CompanionStatus.sleeping:
+        if (_isPostureDownLatched ||
+            poseState == PoseState.postureDown ||
+            baseState.cause == CompanionCause.postureDown) {
+          return CompanionCause.postureDown;
+        }
+        if (poseState == PoseState.drowsy ||
+            baseState.cause == CompanionCause.drowsy) {
+          return CompanionCause.drowsy;
+        }
+        if (_lastResolvedCause == CompanionCause.postureDown ||
+            _lastResolvedCause == CompanionCause.drowsy) {
+          return _lastResolvedCause;
+        }
+        return CompanionCause.drowsy;
+      case CompanionStatus.userMissing:
+        return presenceState == PresenceState.away
+            ? CompanionCause.userAway
+            : CompanionCause.faceMissing;
+    }
   }
 
   bool _shouldSuppressEyeWarning({
@@ -662,5 +772,6 @@ class CompanionStateEvaluator {
     _fullyAbsentFrameCount = 0;
     _faceUprightFrames = 0;
     _recentStrongPostureCandidateFrames = 0;
+    _lastResolvedCause = CompanionCause.none;
   }
 }

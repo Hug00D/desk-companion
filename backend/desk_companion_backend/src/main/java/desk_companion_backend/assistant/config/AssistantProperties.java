@@ -10,10 +10,9 @@ public class AssistantProperties {
     private String ollamaBaseUrl = "http://localhost:11434";
     private String model = "qwen2.5:7b";
     private Double chatTemperature = 0.8;
-    // Full companion replies (up to ~two short paragraphs). With the GPU no
-    // longer sharing bandwidth with a big model it generates ~20 tokens/s, so
-    // this no longer hurts latency the way it did during the earlier crawl.
-    private Integer chatNumPredict = 256;
+    // Companion replies are intentionally brief by default. Detailed answers
+    // are still possible when the user explicitly asks for them.
+    private Integer chatNumPredict = 96;
     private Integer requestTimeoutSeconds = 60;
     private Double decideTemperature = 0.15;
     // The slim decide contract only needs ~35 tokens of JSON; 48 leaves margin.

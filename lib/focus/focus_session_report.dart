@@ -9,17 +9,24 @@ class FocusSessionReport {
     required this.effectiveFocusDuration,
     required this.distractedDuration,
     required Map<CompanionStatus, int> eventCounts,
-  }) : eventCounts = Map<CompanionStatus, int>.unmodifiable(eventCounts);
+    Map<CompanionCause, int> causeEventCounts = const <CompanionCause, int>{},
+  }) : eventCounts = Map<CompanionStatus, int>.unmodifiable(eventCounts),
+       causeEventCounts = Map<CompanionCause, int>.unmodifiable(
+         causeEventCounts,
+       );
 
   final DateTime completedAt;
   final Duration plannedDuration;
   final Duration effectiveFocusDuration;
   final Duration distractedDuration;
   final Map<CompanionStatus, int> eventCounts;
+  final Map<CompanionCause, int> causeEventCounts;
 
   Duration get observedDuration => effectiveFocusDuration + distractedDuration;
 
   int eventCountFor(CompanionStatus status) => eventCounts[status] ?? 0;
+
+  int causeEventCountFor(CompanionCause cause) => causeEventCounts[cause] ?? 0;
 
   int get totalEventCount =>
       eventCounts.values.fold<int>(0, (total, count) => total + count);

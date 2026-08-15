@@ -52,8 +52,9 @@ void main() {
   });
 
   test('uses chat instead of local unknown for normal conversation', () async {
+    final decisionClient = _DecideFailsChatSucceedsClient();
     final controller = AssistantInteractionController(
-      decisionClient: _DecideFailsChatSucceedsClient(),
+      decisionClient: decisionClient,
       timeout: const Duration(seconds: 1),
     );
 
@@ -63,6 +64,23 @@ void main() {
     expect(result.command, isNull);
     expect(result.response.actionLabel, 'assistant_chat');
     expect(result.response.message, '我在，慢慢說。');
+    expect(decisionClient.decideCallCount, 0);
+    expect(decisionClient.chatCallCount, 1);
+  });
+
+  test('answers common greetings locally without contacting backend', () async {
+    final decisionClient = _UnexpectedDecisionClient();
+    final controller = AssistantInteractionController(
+      decisionClient: decisionClient,
+    );
+
+    final result = await controller.handleText(text: '早安');
+
+    expect(result.response.message, '早安，今天也一起加油吧！');
+    expect(result.reply.model, 'local-social');
+    expect(result.usedFallback, isFalse);
+    expect(decisionClient.decideCallCount, 0);
+    expect(decisionClient.chatCallCount, 0);
   });
 }
 
@@ -98,6 +116,9 @@ class _UnexpectedDecisionClient implements AssistantDecisionClient {
 }
 
 class _DecideFailsChatSucceedsClient implements AssistantDecisionClient {
+  int decideCallCount = 0;
+  int chatCallCount = 0;
+
   @override
   Future<AssistantReply> decide({
     required String message,
@@ -105,6 +126,7 @@ class _DecideFailsChatSucceedsClient implements AssistantDecisionClient {
     Map<String, dynamic>? context,
     String? accessToken,
   }) {
+    decideCallCount += 1;
     return Future<AssistantReply>.error(Exception('decide unavailable'));
   }
 
@@ -115,6 +137,7 @@ class _DecideFailsChatSucceedsClient implements AssistantDecisionClient {
     Map<String, dynamic>? context,
     String? accessToken,
   }) async {
+    chatCallCount += 1;
     return const AssistantReply(
       mode: AssistantMode.chat,
       message: '我在，慢慢說。',

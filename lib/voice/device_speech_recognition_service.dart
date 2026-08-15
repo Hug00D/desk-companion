@@ -67,9 +67,15 @@ class DeviceSpeechRecognitionService {
     );
   }
 
-  Future<void> stop() => _speech.stop();
+  Future<void> stop() async {
+    if (!_speech.isListening) return;
+    await _speech.stop();
+  }
 
-  Future<void> cancel() => _speech.cancel();
+  Future<void> cancel() async {
+    if (!_speech.isListening) return;
+    await _speech.cancel();
+  }
 
   Future<void> _resolvePreferredLocale() async {
     final locales = await _speech.locales();

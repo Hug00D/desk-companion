@@ -30,13 +30,21 @@ class CompanionResponseBuilder {
           actionLabel: 'head_offset_reminder',
         );
       case CompanionStatus.sleeping:
-        return const CompanionResponse(
-          source: CompanionResponseSource.vision,
-          tone: CompanionResponseTone.warning,
-          message: '偵測到疑似睡著，建議先坐直休息一下再繼續。',
-          actionLabel: 'sleeping_reminder',
-          shouldNotify: true,
-        );
+        return analysis.cause == CompanionCause.postureDown
+            ? const CompanionResponse(
+                source: CompanionResponseSource.vision,
+                tone: CompanionResponseTone.warning,
+                message: '偵測到姿勢趴低，建議先坐直或起身伸展。',
+                actionLabel: 'posture_down_reminder',
+                shouldNotify: true,
+              )
+            : const CompanionResponse(
+                source: CompanionResponseSource.vision,
+                tone: CompanionResponseTone.warning,
+                message: '偵測到疑似打瞌睡，建議先坐直休息一下再繼續。',
+                actionLabel: 'drowsy_reminder',
+                shouldNotify: true,
+              );
       case CompanionStatus.userMissing:
         return const CompanionResponse(
           source: CompanionResponseSource.vision,

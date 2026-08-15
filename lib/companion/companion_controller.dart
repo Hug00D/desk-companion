@@ -18,6 +18,7 @@ class CompanionController {
   int get postureDownFrameCount => _postureDownFrameCount;
   CompanionAnalysis? get lastAnalysis => _lastAnalysis;
   CompanionStatus get status => _lastAnalysis?.status ?? CompanionStatus.normal;
+  CompanionCause get cause => _lastAnalysis?.cause ?? CompanionCause.none;
 
   CompanionAnalysis analyze(VisionResult result, {DateTime? observedAt}) {
     final poseSequence = result.poseSequence;

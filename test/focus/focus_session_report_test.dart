@@ -16,12 +16,17 @@ void main() {
           CompanionStatus.distracted: 2,
           CompanionStatus.sleeping: 1,
         },
+        causeEventCounts: const <CompanionCause, int>{
+          CompanionCause.headTurned: 2,
+          CompanionCause.postureDown: 1,
+        },
       );
 
       expect(report.hasEnoughData, isTrue);
       expect(report.focusRatio, closeTo(0.8, 0.001));
       expect(report.attentionEventCount, 2);
       expect(report.fatigueEventCount, 1);
+      expect(report.causeEventCountFor(CompanionCause.postureDown), 1);
       expect(report.score, 82);
       expect(report.grade, 'A');
     });
@@ -49,6 +54,7 @@ void main() {
     for (var seconds = 0; seconds <= 6; seconds += 2) {
       monitor.update(
         status: CompanionStatus.distracted,
+        cause: CompanionCause.headTurned,
         sessionActive: true,
         sessionRunning: true,
         sessionAutoPaused: false,

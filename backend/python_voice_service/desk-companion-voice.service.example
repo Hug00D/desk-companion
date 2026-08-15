@@ -1,0 +1,18 @@
+[Unit]
+Description=Desk Companion GPT-SoVITS voice service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=desk_companion
+Group=desk_companion
+WorkingDirectory=/home/desk_companion/desk-companion/backend/python_voice_service
+EnvironmentFile=/etc/desk-companion/voice.env
+ExecStart=/usr/bin/bash /home/desk_companion/desk-companion/backend/python_voice_service/start.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

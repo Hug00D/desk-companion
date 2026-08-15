@@ -54,6 +54,27 @@ class AssistantInteractionController {
       return _localActionResult(localCommand, usedFallback: false);
     }
 
+    final localChatReply = _localSocialReply(text);
+    if (localChatReply != null) {
+      return _localChatResult(localChatReply);
+    }
+
+    if (!_shouldAskBackendToDecide(localCommand, text)) {
+      try {
+        final reply = await _decisionClient
+            .chat(
+              message: text,
+              history: history,
+              context: context,
+              accessToken: accessToken,
+            )
+            .timeout(timeout);
+        return _fromAssistantReply(reply, text);
+      } catch (error) {
+        return _assistantUnavailableResult(error);
+      }
+    }
+
     try {
       final reply = await _decisionClient
           .decide(
@@ -167,21 +188,25 @@ class AssistantInteractionController {
           .timeout(timeout);
       return _fromAssistantReply(chatReply, text);
     } catch (_) {
-      return AssistantInteractionResult(
-        reply: AssistantReply(
-          mode: AssistantMode.chat,
-          message: 'Assistant unavailable after decide failure: $error',
-        ),
-        response: const CompanionResponse(
-          source: CompanionResponseSource.voice,
-          tone: CompanionResponseTone.supportive,
-          message: 'AI 服務暫時連不上；如果你要操作番茄鐘，可以直接說「開始、暫停、繼續、停止」。',
-          actionLabel: 'assistant_unavailable',
-          shouldNotify: true,
-        ),
-        usedFallback: true,
-      );
+      return _assistantUnavailableResult(error);
     }
+  }
+
+  AssistantInteractionResult _assistantUnavailableResult(Object error) {
+    return AssistantInteractionResult(
+      reply: AssistantReply(
+        mode: AssistantMode.chat,
+        message: 'Assistant unavailable: $error',
+      ),
+      response: const CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.supportive,
+        message: 'AI 服務暫時連不上；番茄鐘仍可直接說「開始、暫停、繼續、停止」。',
+        actionLabel: 'assistant_unavailable',
+        shouldNotify: true,
+      ),
+      usedFallback: true,
+    );
   }
 
   AssistantInteractionResult _localActionResult(
@@ -203,6 +228,51 @@ class AssistantInteractionController {
       command: command,
       usedFallback: usedFallback,
     );
+  }
+
+  AssistantInteractionResult _localChatResult(String message) {
+    return AssistantInteractionResult(
+      reply: AssistantReply(
+        mode: AssistantMode.chat,
+        message: message,
+        chatReply: message,
+        model: 'local-social',
+      ),
+      response: CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.supportive,
+        message: message,
+        actionLabel: 'assistant_chat',
+      ),
+    );
+  }
+
+  String? _localSocialReply(String text) {
+    final normalized = text
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll(RegExp(r'[，。！？,.!?]'), '');
+    if (normalized.length > 12) return null;
+
+    if (_containsAny(normalized, const ['早安', '早上好'])) {
+      return '早安，今天也一起加油吧！';
+    }
+    if (normalized.contains('午安')) {
+      return '午安，記得讓自己喘口氣。';
+    }
+    if (normalized.contains('晚安')) {
+      return '晚安，今天辛苦了。';
+    }
+    if (_containsAny(normalized, const ['你好', '嗨', '哈囉', 'hello'])) {
+      return '你好，我在這裡。';
+    }
+    if (_containsAny(normalized, const ['謝謝', '感謝'])) {
+      return '不客氣，我一直都在。';
+    }
+    if (_containsAny(normalized, const ['掰掰', '再見'])) {
+      return '再見，等等再來找我吧。';
+    }
+    return null;
   }
 
   VoiceCommand _parseLocalCommand(String text) {
@@ -253,6 +323,26 @@ class AssistantInteractionController {
       case VoiceCommandType.ignored:
         return false;
     }
+  }
+
+  bool _shouldAskBackendToDecide(VoiceCommand command, String text) {
+    if (!command.isActionable) return false;
+    final normalized = text
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll(RegExp(r'[，。！？,.!?]'), '');
+    return _containsAny(normalized, const [
+      '番茄鐘',
+      '專注鐘',
+      '計時器',
+      '開始',
+      '暫停',
+      '繼續',
+      '停止',
+      '剩多久',
+      '摘要',
+      '統計',
+    ]);
   }
 
   bool _containsAny(String text, List<String> keywords) {

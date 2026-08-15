@@ -153,6 +153,7 @@ void main() {
         isEmpty,
       );
       expect(monitor.eventCountFor(CompanionStatus.sleeping), 1);
+      expect(monitor.causeEventCountFor(CompanionCause.drowsy), 1);
 
       expect(
         _step(
@@ -204,6 +205,39 @@ void main() {
       expect(_types(latest), [FocusInterventionType.autoPause]);
     });
 
+    test('sleeping interventions retain posture-down cause', () {
+      final monitor = FocusSessionMonitor.detached();
+      final start = DateTime(2026, 7, 6, 10);
+      monitor.beginSession(now: start);
+
+      _step(
+        monitor,
+        CompanionStatus.sleeping,
+        start,
+        0,
+        cause: CompanionCause.postureDown,
+      );
+      final reminder = _step(
+        monitor,
+        CompanionStatus.sleeping,
+        start,
+        2,
+        cause: CompanionCause.postureDown,
+      );
+      final recorded = _step(
+        monitor,
+        CompanionStatus.sleeping,
+        start,
+        5,
+        cause: CompanionCause.postureDown,
+      );
+
+      expect(reminder.single.cause, CompanionCause.postureDown);
+      expect(recorded.single.cause, CompanionCause.postureDown);
+      expect(monitor.causeEventCountFor(CompanionCause.postureDown), 1);
+      expect(monitor.causeEventCountFor(CompanionCause.drowsy), 0);
+    });
+
     test('tracks effective and distracted time separately', () {
       final monitor = FocusSessionMonitor.detached();
       final start = DateTime(2026, 7, 6, 10);
@@ -224,17 +258,35 @@ List<FocusIntervention> _step(
   CompanionStatus status,
   DateTime start,
   int seconds, {
+  CompanionCause? cause,
   bool sessionActive = true,
   bool sessionRunning = true,
   bool sessionAutoPaused = false,
 }) {
   return monitor.update(
     status: status,
+    cause: cause ?? _defaultCauseForStatus(status),
     sessionActive: sessionActive,
     sessionRunning: sessionRunning,
     sessionAutoPaused: sessionAutoPaused,
     now: start.add(Duration(seconds: seconds)),
   );
+}
+
+CompanionCause _defaultCauseForStatus(CompanionStatus status) {
+  switch (status) {
+    case CompanionStatus.normal:
+      return CompanionCause.none;
+    case CompanionStatus.attention:
+    case CompanionStatus.fatigue:
+      return CompanionCause.eyeClosed;
+    case CompanionStatus.distracted:
+      return CompanionCause.headTurned;
+    case CompanionStatus.sleeping:
+      return CompanionCause.drowsy;
+    case CompanionStatus.userMissing:
+      return CompanionCause.userAway;
+  }
 }
 
 List<FocusInterventionType> _types(List<FocusIntervention> interventions) {

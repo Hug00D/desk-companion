@@ -9,15 +9,49 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_ROOT = SERVICE_ROOT / "runtime" / "GPT-SoVITS"
-RUNTIME_PYTHON = SERVICE_ROOT / "runtime" / "miniconda" / "python.exe"
-OPEN_JTALK_DICT_ROOT = SERVICE_ROOT / "runtime" / "open_jtalk_dic_utf_8-1.11"
-CONFIG_PATH = SERVICE_ROOT / "gpt_sovits_config.yaml"
-MODEL_ROOT = SERVICE_ROOT / "models" / "staff_a" / "Staff_A_GPT-SoVITS_v2ProPlus"
-API_BASE_URL = "http://127.0.0.1:9880"
+
+
+def _configured_path(environment_name: str, default: Path) -> Path:
+    configured = os.environ.get(environment_name, "").strip()
+    if not configured:
+        return default
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else SERVICE_ROOT / path
+
+
+def _default_runtime_python() -> Path:
+    executable = "python.exe" if sys.platform == "win32" else "bin/python"
+    return SERVICE_ROOT / "runtime" / "miniconda" / executable
+
+
+RUNTIME_ROOT = _configured_path(
+    "GPT_SOVITS_ROOT",
+    SERVICE_ROOT / "runtime" / "GPT-SoVITS",
+)
+RUNTIME_PYTHON = _configured_path(
+    "GPT_SOVITS_PYTHON",
+    _default_runtime_python(),
+)
+OPEN_JTALK_DICT_ROOT = _configured_path(
+    "GPT_SOVITS_OPEN_JTALK_DICT",
+    SERVICE_ROOT / "runtime" / "open_jtalk_dic_utf_8-1.11",
+)
+CONFIG_PATH = _configured_path(
+    "GPT_SOVITS_CONFIG",
+    SERVICE_ROOT / "gpt_sovits_config.yaml",
+)
+MODEL_ROOT = _configured_path(
+    "GPT_SOVITS_MODEL_ROOT",
+    SERVICE_ROOT / "models" / "staff_a" / "Staff_A_GPT-SoVITS_v2ProPlus",
+)
+API_BASE_URL = os.environ.get(
+    "GPT_SOVITS_API_URL",
+    "http://127.0.0.1:9880",
+).rstrip("/")
 
 REFERENCE_STYLES = {
     "normal": {
@@ -75,22 +109,34 @@ class GptSoVitsEngine:
 
         self._patch_windows_torchaudio_compatibility()
         env = os.environ.copy()
-        conda_root = RUNTIME_PYTHON.parent
-        env["PATH"] = os.pathsep.join(
+        environment_root = (
+            RUNTIME_PYTHON.parent
+            if sys.platform == "win32"
+            else RUNTIME_PYTHON.parent.parent
+        )
+        runtime_paths = (
             (
-                str(conda_root),
-                str(conda_root / "Scripts"),
-                str(conda_root / "Library" / "bin"),
-                env.get("PATH", ""),
+                environment_root,
+                environment_root / "Scripts",
+                environment_root / "Library" / "bin",
             )
+            if sys.platform == "win32"
+            else (environment_root / "bin",)
+        )
+        env["PATH"] = os.pathsep.join(
+            tuple(str(path) for path in runtime_paths) + (env.get("PATH", ""),)
         )
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["OPEN_JTALK_DICT_DIR"] = str(OPEN_JTALK_DICT_ROOT)
 
+        RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
         stdout_path = RUNTIME_ROOT / "gpt_sovits_stdout.log"
         stderr_path = RUNTIME_ROOT / "gpt_sovits_stderr.log"
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        api_url = urlparse(API_BASE_URL)
+        api_host = api_url.hostname or "127.0.0.1"
+        api_port = api_url.port or 9880
         with stdout_path.open("ab") as stdout_file, stderr_path.open("ab") as stderr_file:
             self._process = subprocess.Popen(
                 (
@@ -99,9 +145,9 @@ class GptSoVitsEngine:
                     "-c",
                     str(CONFIG_PATH),
                     "-a",
-                    "127.0.0.1",
+                    api_host,
                     "-p",
-                    "9880",
+                    str(api_port),
                 ),
                 cwd=RUNTIME_ROOT,
                 env=env,
@@ -175,9 +221,16 @@ class GptSoVitsEngine:
             raise RuntimeError("GPT-SoVITS returned an empty audio response")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = output_path.with_suffix(".tmp.wav")
-        temporary_path.write_bytes(audio_bytes)
-        temporary_path.replace(output_path)
-        return _duration_of_wav(output_path)
+        try:
+            temporary_path.write_bytes(audio_bytes)
+            duration = _duration_of_wav(temporary_path)
+            if duration <= 0:
+                raise RuntimeError("GPT-SoVITS returned a zero-duration WAV")
+            temporary_path.replace(output_path)
+            return duration
+        except Exception as error:
+            temporary_path.unlink(missing_ok=True)
+            raise RuntimeError(f"GPT-SoVITS returned an invalid WAV: {error}") from error
 
     def status(self) -> dict:
         return {
@@ -185,6 +238,9 @@ class GptSoVitsEngine:
             "ready": self.is_ready(),
             "voice": "staff_a_v2_pro_plus",
             "apiUrl": API_BASE_URL,
+            "runtimeRoot": str(RUNTIME_ROOT),
+            "runtimePython": str(RUNTIME_PYTHON),
+            "modelRoot": str(MODEL_ROOT),
             "openJTalkDictionary": str(OPEN_JTALK_DICT_ROOT),
             "lastError": self.last_error,
         }
