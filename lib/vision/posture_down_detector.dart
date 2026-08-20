@@ -51,6 +51,7 @@ class PostureDownDetector {
     this.motionHistoryFrames = 5,
     this.upwardMotionVetoFrames = 10,
     this.motionReliableShoulderVisibility = 0.6,
+    this.faceVisibleShoulderShrinkFloor = 25,
     this.shoulderDropRatioForMaxScore = 0.06,
     this.noseDropRatioForMaxScore = 0.06,
     this.noseDropScoreWeight = 0.5,
@@ -79,6 +80,7 @@ class PostureDownDetector {
   final int motionHistoryFrames;
   final int upwardMotionVetoFrames;
   final double motionReliableShoulderVisibility;
+  final double faceVisibleShoulderShrinkFloor;
   final double shoulderDropRatioForMaxScore;
   final double noseDropRatioForMaxScore;
   final double noseDropScoreWeight;
@@ -318,8 +320,16 @@ class PostureDownDetector {
   }
 
   bool _isPostureDownEvidence(_PostureScore score) {
+    // Leaning forward to read drops the shoulders in frame but keeps them just
+    // as wide, while collapsing onto the desk also compresses the shoulder line
+    // or hides the face. Shoulder drop alone is therefore not body-collapse
+    // evidence as long as the face is still tracked.
+    final shoulderDropCounts =
+        !score.hasFace ||
+        score.shoulderShrink >= faceVisibleShoulderShrinkFloor;
     final bodyCollapsed =
-        score.shoulderDrop >= 24 || score.shoulderShrink >= 45;
+        (score.shoulderDrop >= 24 && shoulderDropCounts) ||
+        score.shoulderShrink >= 45;
     final headCollapsed =
         score.headLow >= 55 || (score.noseDrop >= 35 && score.headLow >= 35);
     final proneContext = !score.hasFace || score.sideProne >= 65;

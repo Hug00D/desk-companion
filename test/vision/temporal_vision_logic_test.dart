@@ -5,6 +5,7 @@ import 'package:desk_companion/vision/head_offset_detector.dart';
 import 'package:desk_companion/vision/pose_state_detector.dart';
 import 'package:desk_companion/vision/posture_down_detector.dart';
 import 'package:desk_companion/vision/vision_event.dart';
+import 'package:desk_companion/vision/vision_event_tracker.dart';
 import 'package:desk_companion/vision/vision_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -65,6 +66,165 @@ void main() {
         sustained = step(80);
       }
       expect(sustained!.state, HeadOffsetState.distracted);
+    });
+
+    test('settled reading gaze releases distraction until head recenters', () {
+      final detector = HeadOffsetDetector();
+      final start = DateTime(2026, 7, 12, 14, 30);
+      var frame = 0;
+      var previousCount = 0;
+
+      HeadOffsetDetectionResult step(double score) {
+        final result = detector.evaluate(
+          result: _visionResult(headOffsetScore: score),
+          previousDistractedFrameCount: previousCount,
+          observedAt: start.add(Duration(milliseconds: 800 * frame++)),
+        );
+        previousCount = result.distractedFrameCount;
+        return result;
+      }
+
+      for (var index = 0; index < 3; index++) {
+        step(80);
+      }
+      expect(step(80).state, HeadOffsetState.distracted);
+
+      // Head settles onto a book beside the screen: still off baseline, but
+      // parked on one spot instead of wandering.
+      HeadOffsetDetectionResult? settled;
+      for (var index = 0; index < 16; index++) {
+        settled = step(50);
+      }
+      expect(settled!.state, HeadOffsetState.normal);
+
+      // Keeping that same angle must not immediately re-trigger.
+      expect(step(50).state, HeadOffsetState.normal);
+      expect(step(50).state, HeadOffsetState.normal);
+
+      // Back to the screen re-arms the detector.
+      step(0);
+      HeadOffsetDetectionResult? reentered;
+      for (var index = 0; index < 3; index++) {
+        reentered = step(80);
+      }
+      expect(reentered!.state, HeadOffsetState.distracted);
+    });
+
+    test('half lidded eyes at reading pitch are not counted as closed', () {
+      const detector = EyeStateDetector();
+
+      final upright = detector.evaluate(
+        result: _visionResult(leftEyeOpen: 0.15, rightEyeOpen: 0.15),
+        previousClosedFrameCount: 0,
+      );
+      final reading = detector.evaluate(
+        result: _visionResult(
+          headPitch: 35,
+          leftEyeOpen: 0.15,
+          rightEyeOpen: 0.15,
+        ),
+        previousClosedFrameCount: 0,
+      );
+      final shutWhileReading = detector.evaluate(
+        result: _visionResult(
+          headPitch: 35,
+          leftEyeOpen: 0.05,
+          rightEyeOpen: 0.05,
+        ),
+        previousClosedFrameCount: 2,
+      );
+
+      expect(upright.state, EyeState.attention);
+      expect(reading.state, EyeState.open);
+      expect(shutWhileReading.state, EyeState.fatigue);
+    });
+
+    test('leaning forward to read never votes posture down', () {
+      final controller = CompanionController();
+      final start = DateTime(2026, 7, 12, 17);
+      var sequence = 0;
+
+      for (var index = 0; index < 6; index++) {
+        controller.analyze(
+          _visionResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      for (var index = 0; index < 6; index++) {
+        final analysis = controller.analyze(
+          _readingLeanForwardResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        expect(analysis.postureDownResult.downFrameCount, 0);
+        expect(analysis.status, isNot(CompanionStatus.sleeping));
+      }
+    });
+
+    test('recovering from distraction is not a user-returned event', () {
+      final controller = CompanionController();
+      final tracker = VisionEventTracker();
+      final start = DateTime(2026, 7, 12, 17, 30);
+      var sequence = 0;
+      final seenTypes = <VisionEventType>[];
+
+      void feed(VisionResult result) {
+        final analysis = controller.analyze(
+          result,
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        final tracked = tracker.track(
+          analysis,
+          now: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        seenTypes.add(tracked.event.type);
+      }
+
+      for (var index = 0; index < 6; index++) {
+        feed(_visionResult(poseSequence: ++sequence));
+      }
+      for (var index = 0; index < 8; index++) {
+        feed(_visionResult(poseSequence: ++sequence, headOffsetScore: 80));
+      }
+      expect(seenTypes, contains(VisionEventType.distracted));
+
+      for (var index = 0; index < 8; index++) {
+        feed(_visionResult(poseSequence: ++sequence));
+      }
+
+      expect(seenTypes, isNot(contains(VisionEventType.userReturned)));
+    });
+
+    test('returning after a real absence still reports user returned', () {
+      final controller = CompanionController();
+      final tracker = VisionEventTracker();
+      final start = DateTime(2026, 7, 12, 18);
+      var sequence = 0;
+      final seenTypes = <VisionEventType>[];
+
+      void feed(VisionResult result) {
+        final analysis = controller.analyze(
+          result,
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        final tracked = tracker.track(
+          analysis,
+          now: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        seenTypes.add(tracked.event.type);
+      }
+
+      for (var index = 0; index < 6; index++) {
+        feed(_visionResult(poseSequence: ++sequence));
+      }
+      for (var index = 0; index < 20; index++) {
+        feed(_missingUserResult(poseSequence: ++sequence));
+      }
+      for (var index = 0; index < 8; index++) {
+        feed(_visionResult(poseSequence: ++sequence));
+      }
+
+      expect(seenTypes, contains(VisionEventType.userReturned));
     });
 
     test('small page-to-page head movement is tolerated', () {
@@ -464,6 +624,41 @@ void main() {
       },
     );
 
+    test('single-frame full absence does not flicker to userMissing', () {
+      final controller = CompanionController();
+      final start = DateTime(2026, 7, 12, 12, 30);
+      var sequence = 0;
+
+      for (var index = 0; index < 6; index++) {
+        controller.analyze(
+          _visionResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      final singleMiss = controller.analyze(
+        _missingUserResult(poseSequence: ++sequence),
+        observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+      );
+      expect(singleMiss.status, isNot(CompanionStatus.userMissing));
+
+      final recovered = controller.analyze(
+        _visionResult(poseSequence: ++sequence),
+        observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+      );
+      expect(recovered.status, CompanionStatus.normal);
+
+      CompanionStatus? confirmedMissing;
+      for (var index = 0; index < 3; index++) {
+        final analysis = controller.analyze(
+          _missingUserResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        confirmedMissing = analysis.status;
+      }
+      expect(confirmedMissing, CompanionStatus.userMissing);
+    });
+
     test('side face loss becomes distraction without voting sleep', () {
       final controller = CompanionController();
       final start = DateTime(2026, 7, 12, 13);
@@ -777,6 +972,38 @@ VisionResult _readingHeadDownResult({required int poseSequence}) {
     rightEyeOpen: 0.8,
     headYaw: 0,
     headPitch: 18,
+    headOffsetScore: 0,
+    shoulderWidth: 400,
+  );
+}
+
+VisionResult _readingLeanForwardResult({required int poseSequence}) {
+  return VisionResult(
+    raw: const <dynamic, dynamic>{},
+    hasPose: true,
+    hasFace: true,
+    imageWidth: 1000,
+    imageHeight: 1000,
+    poseSequence: poseSequence,
+    // Torso leans in over the desk: shoulders sit lower in frame but stay
+    // just as wide, and the face keeps tracking.
+    leftShoulderX: 300,
+    leftShoulderY: 570,
+    rightShoulderX: 700,
+    rightShoulderY: 570,
+    leftShoulderVisibility: 0.95,
+    rightShoulderVisibility: 0.95,
+    poseNoseX: 500,
+    poseNoseY: 480,
+    poseNoseVisibility: 0.95,
+    poseLeftEyeVisibility: 0.95,
+    poseRightEyeVisibility: 0.95,
+    poseLeftEarVisibility: 0.95,
+    poseRightEarVisibility: 0.95,
+    leftEyeOpen: 0.8,
+    rightEyeOpen: 0.8,
+    headYaw: 0,
+    headPitch: 40,
     headOffsetScore: 0,
     shoulderWidth: 400,
   );

@@ -272,10 +272,12 @@ public class OllamaAssistantService implements AssistantService {
         String text = normalize(request.message());
         Integer durationMinutes = extractDurationMinutes(text);
 
-        if (containsAny(text, "\u505c\u6b62", "\u4e2d\u6b62", "\u95dc\u6389", "\u53d6\u6d88")) {
+        if (!hasNegatedStateChange(text) &&
+                containsAny(text, "\u505c\u6b62", "\u4e2d\u6b62", "\u95dc\u6389", "\u53d6\u6d88")) {
             return actionDecision("stop_pomodoro", 0.92, null);
         }
-        if (containsAny(text, "\u66ab\u505c", "\u505c\u4e00\u4e0b", "\u5148\u7b49\u4e00\u4e0b")) {
+        if (!hasNegatedStateChange(text) &&
+                containsAny(text, "\u66ab\u505c", "\u505c\u4e00\u4e0b", "\u5148\u7b49\u4e00\u4e0b")) {
             return actionDecision("pause_pomodoro", 0.9, null);
         }
         if (containsAny(text, "\u7e7c\u7e8c", "\u6062\u5fa9", "\u63a5\u8457", "\u56de\u4f86\u4e86")) {
@@ -296,8 +298,8 @@ public class OllamaAssistantService implements AssistantService {
         if (containsAny(text, "\u60f3\u4f11\u606f", "\u8b93\u6211\u4f11\u606f", "\u4f11\u606f\u4e00\u4e0b")) {
             return actionDecision("request_break", 0.88, null);
         }
-        if (containsAny(text, "\u756a\u8304\u9418", "\u5c08\u6ce8\u9418") &&
-                containsAny(text, "\u958b", "\u958b\u59cb", "\u5e6b\u6211", "\u8a2d\u5b9a")) {
+        if (containsAny(text, "\u958b", "\u958b\u59cb", "\u5e6b\u6211", "\u8a2d\u5b9a") &&
+                containsAny(text, "\u756a\u8304\u9418", "\u5c08\u6ce8\u9418", "\u8a08\u6642", "\u5c08\u6ce8")) {
             Map<String, Object> parameters = new LinkedHashMap<>();
             if (durationMinutes != null) {
                 parameters.put("durationMinutes", durationMinutes);
@@ -320,7 +322,7 @@ public class OllamaAssistantService implements AssistantService {
                 "action",
                 intent,
                 confidence,
-                false,
+                CONFIRMATION_REQUIRED_INTENTS.contains(intent),
                 confirmationTextFor(intent, parameters),
                 null,
                 parameters == null ? Map.of() : parameters,
@@ -361,6 +363,22 @@ public class OllamaAssistantService implements AssistantService {
             }
         }
         return false;
+    }
+
+    private boolean hasNegatedStateChange(String text) {
+        return containsAny(
+                text,
+                "\u4e0d\u8981\u505c\u6b62",
+                "\u4e0d\u60f3\u505c\u6b62",
+                "\u5148\u4e0d\u505c\u6b62",
+                "\u5148\u4e0d\u8981\u505c\u6b62",
+                "\u4e0d\u662f\u505c\u6b62",
+                "\u4e0d\u8981\u66ab\u505c",
+                "\u4e0d\u60f3\u66ab\u505c",
+                "\u5148\u4e0d\u66ab\u505c",
+                "\u5148\u4e0d\u8981\u66ab\u505c",
+                "\u4e0d\u662f\u66ab\u505c"
+        );
     }
 
     private Integer extractDurationMinutes(String text) {

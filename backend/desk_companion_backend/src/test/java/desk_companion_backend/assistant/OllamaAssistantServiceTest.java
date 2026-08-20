@@ -29,8 +29,21 @@ class OllamaAssistantServiceTest {
 
         assertThat(response.mode()).isEqualTo("action");
         assertThat(response.intent()).isEqualTo("start_pomodoro");
-        assertThat(response.needsConfirmation()).isFalse();
+        assertThat(response.needsConfirmation()).isTrue();
         assertThat(response.parameters()).containsEntry("durationMinutes", 25);
+    }
+
+    @Test
+    void decideUsesLocalRulesForStartTimerRequest() {
+        var response = service.decide(new AssistantDecideRequest(
+                "\u958b\u59cb\u8a08\u6642",
+                null,
+                null
+        ));
+
+        assertThat(response.mode()).isEqualTo("action");
+        assertThat(response.intent()).isEqualTo("start_pomodoro");
+        assertThat(response.needsConfirmation()).isTrue();
     }
 
     @Test

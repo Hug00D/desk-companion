@@ -1,7 +1,11 @@
 import 'companion_event.dart';
 
 class CompanionEventBuffer {
+  CompanionEventBuffer({this.maxPendingEvents = 1000});
+
+  final int maxPendingEvents;
   final List<CompanionEvent> _pending = <CompanionEvent>[];
+  final Set<String> _pendingIds = <String>{};
 
   List<CompanionEvent> get pending =>
       List<CompanionEvent>.unmodifiable(_pending);
@@ -9,10 +13,12 @@ class CompanionEventBuffer {
   int get length => _pending.length;
 
   void add(CompanionEvent event) {
-    if (_pending.any((item) => item.clientEventId == event.clientEventId)) {
+    if (_pendingIds.contains(event.clientEventId)) {
       return;
     }
     _pending.add(event);
+    _pendingIds.add(event.clientEventId);
+    _trimToMaxPendingEvents();
   }
 
   void addAll(Iterable<CompanionEvent> events) {
@@ -34,7 +40,22 @@ class CompanionEventBuffer {
   void markUploaded(Iterable<String> clientEventIds) {
     final uploaded = clientEventIds.toSet();
     _pending.removeWhere((event) => uploaded.contains(event.clientEventId));
+    _pendingIds.removeAll(uploaded);
   }
 
-  void clear() => _pending.clear();
+  void clear() {
+    _pending.clear();
+    _pendingIds.clear();
+  }
+
+  void _trimToMaxPendingEvents() {
+    if (maxPendingEvents <= 0) {
+      clear();
+      return;
+    }
+    while (_pending.length > maxPendingEvents) {
+      final dropped = _pending.removeAt(0);
+      _pendingIds.remove(dropped.clientEventId);
+    }
+  }
 }

@@ -82,6 +82,75 @@ void main() {
     expect(decisionClient.decideCallCount, 0);
     expect(decisionClient.chatCallCount, 0);
   });
+
+  test('clarifies single ambiguous stop signal without backend calls', () async {
+    final decisionClient = _UnexpectedDecisionClient();
+    final controller = AssistantInteractionController(
+      decisionClient: decisionClient,
+    );
+
+    for (final text in const ['\u505c', '\u505c\u3002', ' \u505c ']) {
+      final result = await controller.handleText(text: text);
+
+      expect(result.reply.mode, AssistantMode.clarify, reason: text);
+      expect(result.reply.model, 'local-clarify', reason: text);
+      expect(
+        result.response.message,
+        '\u4f60\u662f\u60f3\u66ab\u505c\u756a\u8304\u9418\uff0c\u9084\u662f\u8981\u76f4\u63a5\u505c\u6b62\u5462\uff1f',
+        reason: text,
+      );
+      expect(
+        result.response.actionLabel,
+        'assistant_clarify_stop_signal',
+        reason: text,
+      );
+      expect(result.command, isNull, reason: text);
+      expect(result.pendingAction, isNull, reason: text);
+      expect(result.shouldRunAction, isFalse, reason: text);
+    }
+
+    expect(decisionClient.decideCallCount, 0);
+    expect(decisionClient.chatCallCount, 0);
+  });
+
+  test('sends action-like unknown text to decide instead of chat', () async {
+    final decisionClient = _DecideSucceedsClient(
+      const AssistantReply(
+        mode: AssistantMode.action,
+        message: 'ok',
+        intent: 'start_pomodoro',
+        confidence: 0.9,
+      ),
+    );
+    final controller = AssistantInteractionController(
+      decisionClient: decisionClient,
+    );
+
+    final result = await controller.handleText(
+      text: '\u958b\u59cb\u8a08\u6642',
+    );
+
+    expect(result.command?.type, VoiceCommandType.startPomodoro);
+    expect(decisionClient.decideCallCount, 1);
+    expect(decisionClient.chatCallCount, 0);
+  });
+
+  test('negated stop text is not executed by local fallback', () async {
+    final decisionClient = _DecideFailsChatSucceedsClient();
+    final controller = AssistantInteractionController(
+      decisionClient: decisionClient,
+      timeout: const Duration(seconds: 1),
+    );
+
+    final result = await controller.handleText(
+      text: '\u5148\u4e0d\u8981\u505c\u6b62',
+    );
+
+    expect(result.command, isNull);
+    expect(result.shouldRunAction, isFalse);
+    expect(decisionClient.decideCallCount, 1);
+    expect(decisionClient.chatCallCount, 1);
+  });
 }
 
 class _UnexpectedDecisionClient implements AssistantDecisionClient {
@@ -142,6 +211,38 @@ class _DecideFailsChatSucceedsClient implements AssistantDecisionClient {
       mode: AssistantMode.chat,
       message: '我在，慢慢說。',
       chatReply: '我在，慢慢說。',
+    );
+  }
+}
+
+class _DecideSucceedsClient implements AssistantDecisionClient {
+  _DecideSucceedsClient(this.reply);
+
+  final AssistantReply reply;
+  int decideCallCount = 0;
+  int chatCallCount = 0;
+
+  @override
+  Future<AssistantReply> decide({
+    required String message,
+    List<AssistantConversationMessage> history = const [],
+    Map<String, dynamic>? context,
+    String? accessToken,
+  }) async {
+    decideCallCount += 1;
+    return reply;
+  }
+
+  @override
+  Future<AssistantReply> chat({
+    required String message,
+    List<AssistantConversationMessage> history = const [],
+    Map<String, dynamic>? context,
+    String? accessToken,
+  }) {
+    chatCallCount += 1;
+    return Future<AssistantReply>.error(
+      StateError('Action-like text must call decide().'),
     );
   }
 }

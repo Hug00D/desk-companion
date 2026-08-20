@@ -53,6 +53,16 @@ void main() {
       expect(command.durationMinutes, 25);
     });
 
+    test('does not start when text only mentions pomodoro status', () {
+      final command = parser.parse(
+        _voiceResult(
+          '\u4f60\u5e6b\u6211\u958b\u59cb\u8a08\u6642\u4e86\u4f46\u756a\u8304\u9418\u4f3c\u4e4e\u6c92\u5728\u52d5',
+        ),
+      );
+
+      expect(command.type, VoiceCommandType.unknown);
+    });
+
     test(
       'asks for confirmation when a low confidence result resembles pomodoro',
       () {

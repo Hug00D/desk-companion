@@ -94,6 +94,7 @@ class CompanionStateEvaluator {
     this.faceMissingDistractionDuration = const Duration(milliseconds: 900),
     this.strongPostureCandidateHoldFrames = 3,
     this.strongPostureFatigueClosedFrames = 5,
+    this.presenceAwayConfirmationFrames = 3,
   }) : headOffsetDetector = headOffsetDetector ?? HeadOffsetDetector(),
        postureDownDetector = postureDownDetector ?? PostureDownDetector();
 
@@ -108,6 +109,7 @@ class CompanionStateEvaluator {
   final Duration faceMissingDistractionDuration;
   final int strongPostureCandidateHoldFrames;
   final int strongPostureFatigueClosedFrames;
+  final int presenceAwayConfirmationFrames;
   CompanionStatus _lastFaceVisibleContext = CompanionStatus.normal;
   CompanionStatus? _lastFaceMissingContext;
   DateTime? _faceMissingStartedAt;
@@ -122,6 +124,8 @@ class CompanionStateEvaluator {
   int _fullyAbsentFrameCount = 0;
   int _faceUprightFrames = 0;
   int _recentStrongPostureCandidateFrames = 0;
+  int _presenceAwayFrameCount = 0;
+  PresenceState _lastStablePresenceState = PresenceState.present;
   CompanionCause _lastResolvedCause = CompanionCause.none;
 
   CompanionAnalysis evaluate({
@@ -153,7 +157,8 @@ class CompanionStateEvaluator {
       isPostureDown: postureDownResult.state == PostureDownState.down,
       eyeState: eyeResult.state,
     );
-    final presenceState = presenceDetector.evaluate(result);
+    final rawPresenceState = presenceDetector.evaluate(result);
+    final presenceState = _debouncePresenceState(rawPresenceState);
     _updateRecentPoseContext(
       result: result,
       postureDownResult: postureDownResult,
@@ -207,6 +212,21 @@ class CompanionStateEvaluator {
       presenceState: presenceState,
       state: CompanionState(status: resolvedStatus, cause: resolvedCause),
     );
+  }
+
+  PresenceState _debouncePresenceState(PresenceState rawState) {
+    if (rawState != PresenceState.away) {
+      _presenceAwayFrameCount = 0;
+      _lastStablePresenceState = rawState;
+      return rawState;
+    }
+
+    _presenceAwayFrameCount++;
+    if (_presenceAwayFrameCount >= presenceAwayConfirmationFrames) {
+      _lastStablePresenceState = PresenceState.away;
+      return PresenceState.away;
+    }
+    return _lastStablePresenceState;
   }
 
   CompanionState _combine({
@@ -772,6 +792,8 @@ class CompanionStateEvaluator {
     _fullyAbsentFrameCount = 0;
     _faceUprightFrames = 0;
     _recentStrongPostureCandidateFrames = 0;
+    _presenceAwayFrameCount = 0;
+    _lastStablePresenceState = PresenceState.present;
     _lastResolvedCause = CompanionCause.none;
   }
 }

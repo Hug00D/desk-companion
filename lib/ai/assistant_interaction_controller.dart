@@ -54,6 +54,10 @@ class AssistantInteractionController {
       return _localActionResult(localCommand, usedFallback: false);
     }
 
+    if (_isAmbiguousStopSignal(text)) {
+      return _clarifyStopSignalResult();
+    }
+
     final localChatReply = _localSocialReply(text);
     if (localChatReply != null) {
       return _localChatResult(localChatReply);
@@ -247,6 +251,34 @@ class AssistantInteractionController {
     );
   }
 
+  bool _isAmbiguousStopSignal(String text) {
+    final normalized = text
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll(RegExp(r'[\uFF0C\u3002\uFF01\uFF1F,.!?]'), '');
+    return _ambiguousStopSignals.contains(normalized);
+  }
+
+  AssistantInteractionResult _clarifyStopSignalResult() {
+    const message =
+        '\u4f60\u662f\u60f3\u66ab\u505c\u756a\u8304\u9418\uff0c\u9084\u662f\u8981\u76f4\u63a5\u505c\u6b62\u5462\uff1f';
+    return AssistantInteractionResult(
+      reply: const AssistantReply(
+        mode: AssistantMode.clarify,
+        message: message,
+        chatReply: message,
+        model: 'local-clarify',
+      ),
+      response: const CompanionResponse(
+        source: CompanionResponseSource.voice,
+        tone: CompanionResponseTone.supportive,
+        message: message,
+        actionLabel: 'assistant_clarify_stop_signal',
+        shouldNotify: true,
+      ),
+    );
+  }
+
   String? _localSocialReply(String text) {
     final normalized = text
         .toLowerCase()
@@ -311,8 +343,9 @@ class AssistantInteractionController {
             (_containsAny(normalized, const ['開始', '設定', '設置', '幫我']) &&
                 _containsAny(normalized, const ['專注', '分心']));
       case VoiceCommandType.pausePomodoro:
-      case VoiceCommandType.resumePomodoro:
       case VoiceCommandType.stopPomodoro:
+        return !_hasNegatedStateChange(normalized);
+      case VoiceCommandType.resumePomodoro:
       case VoiceCommandType.requestTimerStatus:
       case VoiceCommandType.reportTired:
       case VoiceCommandType.reportDistracted:
@@ -326,11 +359,11 @@ class AssistantInteractionController {
   }
 
   bool _shouldAskBackendToDecide(VoiceCommand command, String text) {
-    if (!command.isActionable) return false;
     final normalized = text
         .toLowerCase()
         .replaceAll(RegExp(r'\s+'), '')
         .replaceAll(RegExp(r'[，。！？,.!?]'), '');
+    if (_containsAny(normalized, _backendDecisionSignals)) return true;
     return _containsAny(normalized, const [
       '番茄鐘',
       '專注鐘',
@@ -345,7 +378,49 @@ class AssistantInteractionController {
     ]);
   }
 
+  bool _hasNegatedStateChange(String normalized) {
+    return _containsAny(normalized, const [
+      '\u4e0d\u8981\u505c\u6b62',
+      '\u4e0d\u60f3\u505c\u6b62',
+      '\u5148\u4e0d\u505c\u6b62',
+      '\u5148\u4e0d\u8981\u505c\u6b62',
+      '\u4e0d\u662f\u505c\u6b62',
+      '\u4e0d\u8981\u66ab\u505c',
+      '\u4e0d\u60f3\u66ab\u505c',
+      '\u5148\u4e0d\u66ab\u505c',
+      '\u5148\u4e0d\u8981\u66ab\u505c',
+      '\u4e0d\u662f\u66ab\u505c',
+    ]);
+  }
+
   bool _containsAny(String text, List<String> keywords) {
     return keywords.any(text.contains);
   }
 }
+
+const List<String> _ambiguousStopSignals = ['\u505c'];
+
+const List<String> _backendDecisionSignals = [
+  '\u756a\u8304\u9418',
+  '\u756a\u8304\u4e2d',
+  '\u5c08\u6ce8\u9418',
+  '\u5c08\u6ce8\u6642\u9593',
+  '\u8a08\u6642',
+  '\u8a08\u6642\u5668',
+  '\u958b\u59cb',
+  '\u958b',
+  '\u8a2d\u5b9a',
+  '\u8a2d\u7f6e',
+  '\u66ab\u505c',
+  '\u505c\u4e00\u4e0b',
+  '\u558a\u505c',
+  '\u505c\u6b62',
+  '\u4e2d\u6b62',
+  '\u95dc\u6389',
+  '\u53d6\u6d88',
+  '\u7e7c\u7e8c',
+  '\u6062\u5fa9',
+  '\u5269\u591a\u4e45',
+  '\u9084\u5269',
+  '\u5269\u5e7e\u5206',
+];

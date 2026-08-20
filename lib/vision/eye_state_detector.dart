@@ -20,6 +20,8 @@ class EyeStateDetector {
     this.fatigueClosedFrames = 3,
     this.maxReliableHeadOffsetScore = 55,
     this.maxReliableHeadPitch = 70,
+    this.readingPitchThreshold = 25,
+    this.readingClosedThresholdScale = 0.6,
   });
 
   final double singleEyeClosedThreshold;
@@ -28,6 +30,14 @@ class EyeStateDetector {
   final int fatigueClosedFrames;
   final double maxReliableHeadOffsetScore;
   final double maxReliableHeadPitch;
+
+  /// Reading tilts the head down far enough that the eyelids cover part of the
+  /// iris, so the reported openness drops even with the eyes wide open. Past
+  /// [readingPitchThreshold] degrees the closed thresholds tighten so half
+  /// lidded eyes stop counting, while genuinely shut eyes still register on
+  /// the usual frame count and keep drowsiness detection responsive.
+  final double readingPitchThreshold;
+  final double readingClosedThresholdScale;
 
   EyeDetectionResult evaluate({
     required VisionResult result,
@@ -51,13 +61,20 @@ class EyeStateDetector {
       );
     }
 
+    final isReadingPitch =
+        headPitch != null && headPitch >= readingPitchThreshold;
+    final singleThreshold = isReadingPitch
+        ? singleEyeClosedThreshold * readingClosedThresholdScale
+        : singleEyeClosedThreshold;
+    final averageThreshold = isReadingPitch
+        ? averageEyeClosedThreshold * readingClosedThresholdScale
+        : averageEyeClosedThreshold;
     final minimumEyeOpen = result.leftEyeOpen! < result.rightEyeOpen!
         ? result.leftEyeOpen!
         : result.rightEyeOpen!;
     final averageEyeOpen = (result.leftEyeOpen! + result.rightEyeOpen!) / 2.0;
     final eyesClosed =
-        minimumEyeOpen < singleEyeClosedThreshold &&
-        averageEyeOpen < averageEyeClosedThreshold;
+        minimumEyeOpen < singleThreshold && averageEyeOpen < averageThreshold;
     final closedFrameCount = eyesClosed ? previousClosedFrameCount + 1 : 0;
 
     if (closedFrameCount >= fatigueClosedFrames) {
