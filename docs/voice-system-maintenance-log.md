@@ -187,7 +187,7 @@
 ### VOICE-014：DGX Spark 語音服務缺少隔離的 ARM64 GPU 部署方式
 
 - 日期：2026-08-21
-- 狀態：`待伺服器實測`
+- 狀態：`已完成`
 - 症狀：本機使用 Windows Miniconda runtime，老 DGX Spark 為 ARM64 / CUDA 13，直接執行 `start.sh` 無對應 Python 環境，也可能影響學長的 SGLang 容器。
 - 根因：專案僅提供本機與 systemd 範例，未固定 DGX Spark 的 NVIDIA PyTorch base image、GPU 參數、模型掛載與健康檢查。
 - 修改：
@@ -200,8 +200,9 @@
   - 新增 `compose.server.yaml`，使用獨立容器名、`gpus: all`、`ipc: host`、memlock/stack ulimit，並僅將 8001 綁定在伺服器 Tailscale IP。
   - Python app、GPT-SoVITS runtime、Staff A 模型、Open JTalk 與 output 以 bind mount 提供；重建容器不刪除模型。
   - 健康檢查同時要求 `/health.ok=true` 與 `gptSovits.ready=true`，避免只有 FastAPI 啟動卻沒有語音模型。
-- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；容器 health 已達 `healthy`、`gptSovits.ready=true`，可用記憶體由 35 GiB 降至 31 GiB。首次 `/tts` 請求進入推論後，定位最後失敗為 TorchCodec 讀檔依賴；跨平台 `librosa` 補丁已加入單元測試，尚待伺服器再次生成驗證。
-- 成效：已將語音服務與 SGLang/Spring Boot 分離，Python 程式更新只需 pull + restart；相依變更才需 rebuild；模型更換才需重傳。
+  - README 新增日常啟動、停止、重啟、狀態、近期 Log 與記憶體檢查指令，並說明關閉 SSH 不會停止容器。
+- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；容器 health 已達 `healthy`、`gptSovits.ready=true`，可用記憶體由 35 GiB 降至 31 GiB。修正 TorchCodec 讀檔相容性後，`POST /tts` 已成功以 `mode=gpt_sovits` 產生 4,660 ms Staff A WAV，回傳 `ok=true` 與可下載的 `audioUrl`；Python 語音服務 9 項測試全部通過。
+- 成效：已將語音服務與 SGLang/Spring Boot 分離，Python 程式更新只需 pull + restart；相依變更才需 rebuild；模型更換才需重傳。平常可用 `stop` 釋放模型佔用的約 4 GiB 統一記憶體，且不影響其他容器或主機模型檔案。
 
 ## 每次修改後的最低驗收
 

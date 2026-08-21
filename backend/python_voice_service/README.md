@@ -160,11 +160,53 @@ Rebuild only after changing `requirements*.txt` or `Dockerfile.server`:
 docker compose -f compose.server.yaml up -d --build
 ```
 
-Stop only this service without touching the senior's containers:
+### Daily server operations
+
+Run these commands from the voice service directory. Closing SSH does not stop
+the container; it remains available until explicitly stopped.
+
+```bash
+cd ~/desk-companion/backend/python_voice_service
+```
+
+Start an existing container without rebuilding the image or reloading model
+files from disk unnecessarily:
+
+```bash
+docker compose -f compose.server.yaml start
+```
+
+Stop only the Desk Companion voice service without touching the senior's
+SGLang, Spring Boot, or other containers:
 
 ```bash
 docker compose -f compose.server.yaml stop
 ```
+
+Restart after pulling normal Python or configuration changes:
+
+```bash
+docker compose -f compose.server.yaml restart
+```
+
+Check status, recent logs, and available unified memory:
+
+```bash
+docker compose -f compose.server.yaml ps
+docker compose -f compose.server.yaml logs --since=5m --tail=100
+free -h
+```
+
+Use `up -d` instead of `start` only when the container has not been created yet
+or the Compose definition changed:
+
+```bash
+docker compose -f compose.server.yaml up -d
+```
+
+Use `down` only when the container and its Compose network should be removed.
+The bind-mounted models and runtime remain on the host, but normal temporary
+shutdowns should use `stop`.
 
 Models and runtime files are host bind mounts and survive container rebuilds
 or removal. Before loading the model, check `free -h`; stop this voice service
