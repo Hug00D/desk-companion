@@ -105,7 +105,9 @@ the public internet.
 The teacher server uses an ARM64 NVIDIA DGX Spark. Its supported deployment
 uses `nvcr.io/nvidia/pytorch:25.09-py3`, which was verified with CUDA 13.0 and
 the NVIDIA GB10 GPU. The container is separate from the existing SGLang and
-Spring Boot containers.
+Spring Boot containers. The ARM64 NGC image does not bundle TorchAudio, so the
+Docker build compiles TorchAudio `v2.9.0` against NVIDIA's installed Torch;
+never add a normal `pip install torchaudio` that could replace the CUDA build.
 
 Required host-only assets must exist before the first build:
 

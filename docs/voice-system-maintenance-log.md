@@ -191,12 +191,13 @@
 - 症狀：本機使用 Windows Miniconda runtime，老 DGX Spark 為 ARM64 / CUDA 13，直接執行 `start.sh` 無對應 Python 環境，也可能影響學長的 SGLang 容器。
 - 根因：專案僅提供本機與 systemd 範例，未固定 DGX Spark 的 NVIDIA PyTorch base image、GPU 參數、模型掛載與健康檢查。
 - 修改：
-  - 新增 `Dockerfile.server`，固定 `nvcr.io/nvidia/pytorch:25.09-py3`，保留 base image 內與 CUDA 13 對齊的 torch/torchaudio。
+  - 新增 `Dockerfile.server`，固定 `nvcr.io/nvidia/pytorch:25.09-py3`，保留 base image 內與 CUDA 13 對齊的 Torch。
+  - DGX Spark 首次建置確認 ARM64 NGC image 未內建 TorchAudio；改為在 image 內將 TorchAudio `v2.9.0` 對現有 NVIDIA Torch 原始碼編譯，不從 PyPI 安裝可能替換 CUDA Torch 的 wheel。
   - 新增 TTS-only GPT-SoVITS requirements，不安裝不需要的 ASR 服務。
   - 新增 `compose.server.yaml`，使用獨立容器名、`gpus: all`、`ipc: host`、memlock/stack ulimit，並僅將 8001 綁定在伺服器 Tailscale IP。
   - Python app、GPT-SoVITS runtime、Staff A 模型、Open JTalk 與 output 以 bind mount 提供；重建容器不刪除模型。
   - 健康檢查同時要求 `/health.ok=true` 與 `gptSovits.ready=true`，避免只有 FastAPI 啟動卻沒有語音模型。
-- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；Compose config 可正常解析。模型啟動、語音生成與記憶體增量尚待伺服器建置。
+- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；Compose config 可正常解析。第一次 image build 成功，並定位 GPT-SoVITS 啟動失敗為 `ModuleNotFoundError: torchaudio`；TorchAudio 原始碼建置與模型啟動尚待伺服器再驗證。
 - 成效：已將語音服務與 SGLang/Spring Boot 分離，Python 程式更新只需 pull + restart；相依變更才需 rebuild；模型更換才需重傳。
 
 ## 每次修改後的最低驗收
