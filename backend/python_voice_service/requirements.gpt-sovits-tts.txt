@@ -1,0 +1,37 @@
+# TTS-only subset of GPT-SoVITS requirements at
+# bf81cdb14a38b674b6e9996dabc97340bc9978d2.
+# torch and torchaudio come from the NVIDIA PyTorch base image.
+numpy<2.0
+scipy
+librosa==0.10.2
+numba
+pytorch-lightning>=2.4
+torchmetrics<=1.5
+ffmpeg-python
+soundfile
+onnxruntime
+tqdm
+cn2an
+pypinyin
+pyopenjtalk>=0.4.1
+g2p_en
+sentencepiece
+transformers>=4.43,<=4.50
+peft<0.18.0
+chardet
+PyYAML
+psutil
+jieba_fast
+jieba
+split-lang
+fast_langdetect>=0.3.1
+wordsegment
+rotary_embedding_torch
+opencc
+requests
+x_transformers
+pydantic<=2.10.6
+av>=11
+typeguard
+huggingface-hub
+

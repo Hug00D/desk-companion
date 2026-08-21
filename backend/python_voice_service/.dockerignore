@@ -1,0 +1,9 @@
+.git
+__pycache__/
+*.py[cod]
+.venv/
+models/
+output/
+runtime/
+tests/
+

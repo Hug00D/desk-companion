@@ -100,6 +100,75 @@ Port `9880` stays bound to localhost for GPT-SoVITS. Port `8001` should bind
 to the teacher server's Tailscale address and does not need to be exposed to
 the public internet.
 
+## DGX Spark / Docker
+
+The teacher server uses an ARM64 NVIDIA DGX Spark. Its supported deployment
+uses `nvcr.io/nvidia/pytorch:25.09-py3`, which was verified with CUDA 13.0 and
+the NVIDIA GB10 GPU. The container is separate from the existing SGLang and
+Spring Boot containers.
+
+Required host-only assets must exist before the first build:
+
+```text
+runtime/GPT-SoVITS/                         # commit bf81cdb14a38b674b6e9996dabc97340bc9978d2
+runtime/GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-hubert-base/
+runtime/GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large/
+runtime/GPT-SoVITS/GPT_SoVITS/pretrained_models/fast_langdetect/
+runtime/GPT-SoVITS/GPT_SoVITS/pretrained_models/sv/
+runtime/GPT-SoVITS/GPT_SoVITS/text/G2PWModel/
+runtime/open_jtalk_dic_utf_8-1.11/
+models/staff_a/Staff_A_GPT-SoVITS_v2ProPlus/
+```
+
+Build and start from the voice service directory:
+
+```bash
+cd ~/desk-companion/backend/python_voice_service
+free -h
+nvidia-smi
+docker compose -f compose.server.yaml build
+docker compose -f compose.server.yaml up -d
+docker compose -f compose.server.yaml logs -f
+```
+
+The published port is bound only to the server Tailscale address
+`100.119.136.82`. Clients that receive the shared-node address use
+`http://100.119.136.81:8001`.
+
+Verify from the server:
+
+```bash
+curl http://100.119.136.82:8001/health
+docker inspect --format '{{.State.Health.Status}}' desk-companion-voice
+```
+
+Normal Python/config updates do not rebuild the image because those files are
+bind-mounted:
+
+```bash
+cd ~/desk-companion
+git pull --ff-only
+cd backend/python_voice_service
+docker compose -f compose.server.yaml restart
+```
+
+Rebuild only after changing `requirements*.txt` or `Dockerfile.server`:
+
+```bash
+docker compose -f compose.server.yaml up -d --build
+```
+
+Stop only this service without touching the senior's containers:
+
+```bash
+docker compose -f compose.server.yaml stop
+```
+
+Models and runtime files are host bind mounts and survive container rebuilds
+or removal. Before loading the model, check `free -h`; stop this voice service
+if available unified memory approaches 10 GiB, swap rises quickly, or the
+existing SGLang API slows down.
+
 ## API
 
 ```text

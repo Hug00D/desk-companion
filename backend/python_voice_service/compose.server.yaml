@@ -1,0 +1,45 @@
+services:
+  desk-companion-voice:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: desk-companion-voice:25.09
+    container_name: desk-companion-voice
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "${VOICE_BIND_ADDRESS:-100.119.136.82}:8001:8001"
+    environment:
+      VOICE_HOST: 0.0.0.0
+      VOICE_PORT: 8001
+      GPT_SOVITS_PYTHON: /usr/local/bin/desk-voice-python
+      GPT_SOVITS_ROOT: /srv/voice/runtime/GPT-SoVITS
+      GPT_SOVITS_CONFIG: /srv/voice/gpt_sovits_config.yaml
+      GPT_SOVITS_MODEL_ROOT: /srv/voice/models/staff_a/Staff_A_GPT-SoVITS_v2ProPlus
+      GPT_SOVITS_OPEN_JTALK_DICT: /srv/voice/runtime/open_jtalk_dic_utf_8-1.11
+      GPT_SOVITS_API_URL: http://127.0.0.1:9880
+      VOICE_GENERATION_QUEUE_WAIT_SECONDS: 15
+      PYTHONPATH: /srv/voice/runtime/GPT-SoVITS:/srv/voice/runtime/GPT-SoVITS/GPT_SoVITS
+    volumes:
+      - ./app:/srv/voice/app:ro
+      - ./gpt_sovits_config.yaml:/srv/voice/gpt_sovits_config.yaml:ro
+      - ./models:/srv/voice/models:ro
+      - ./runtime/GPT-SoVITS:/srv/voice/runtime/GPT-SoVITS
+      - ./runtime/open_jtalk_dic_utf_8-1.11:/srv/voice/runtime/open_jtalk_dic_utf_8-1.11:ro
+      - ./output:/srv/voice/output
+      - ./runtime/cache:/root/.cache
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/desk-voice-python
+        - -c
+        - "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)); assert data.get('ok') is True and data.get('gptSovits', {}).get('ready') is True"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    stop_grace_period: 30s
