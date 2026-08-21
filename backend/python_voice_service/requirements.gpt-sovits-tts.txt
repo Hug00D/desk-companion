@@ -31,7 +31,7 @@ opencc
 requests
 x_transformers
 pydantic<=2.10.6
+python-multipart
 av>=11
 typeguard
 huggingface-hub
-
