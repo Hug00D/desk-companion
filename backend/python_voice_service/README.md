@@ -171,6 +171,11 @@ or removal. Before loading the model, check `free -h`; stop this voice service
 if available unified memory approaches 10 GiB, swap rises quickly, or the
 existing SGLang API slows down.
 
+`gpt_sovits_config.yaml` is mounted as a read-only template. The container
+copies it to `/tmp/gpt_sovits_config.runtime.yaml` on every start because
+GPT-SoVITS writes normalized values back to its active config during model
+initialization. This keeps the tracked host config clean.
+
 ## API
 
 ```text
