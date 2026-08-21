@@ -107,7 +107,7 @@ class GptSoVitsEngine:
             self.last_error = "GPT-SoVITS runtime or Staff A model is incomplete"
             return False
 
-        self._patch_windows_torchaudio_compatibility()
+        self._patch_torchaudio_loader_compatibility()
         env = os.environ.copy()
         environment_root = (
             RUNTIME_PYTHON.parent
@@ -245,9 +245,7 @@ class GptSoVitsEngine:
             "lastError": self.last_error,
         }
 
-    def _patch_windows_torchaudio_compatibility(self) -> None:
-        if sys.platform != "win32":
-            return
+    def _patch_torchaudio_loader_compatibility(self) -> None:
         tts_path = RUNTIME_ROOT / "GPT_SoVITS" / "TTS_infer_pack" / "TTS.py"
         source = tts_path.read_text(encoding="utf-8")
         old = "        raw_audio, raw_sr = torchaudio.load(ref_audio_path)"

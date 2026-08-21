@@ -195,11 +195,12 @@
   - DGX Spark 首次建置確認 ARM64 NGC image 未內建 TorchAudio；改為在 image 內將 TorchAudio `v2.9.0` 對現有 NVIDIA Torch 原始碼編譯，不從 PyPI 安裝可能替換 CUDA Torch 的 wheel。
   - TorchAudio 修正後模型繼續啟動，並確認 GPT-SoVITS 會在初始化回寫 active config；保留 Git 設定為唯讀模板，容器每次啟動複製到 `/tmp` 的可寫設定後再載入。
   - 可寫 config 修正後繼續定位 FastAPI multipart route 缺少 `python-multipart`，已補入 TTS-only image requirements。
+  - 實際 `/tts` 首次推論定位 TorchAudio 2.9 `load()` 需要額外 TorchCodec；將原本僅 Windows 執行的 `librosa.load` 相容補丁改為跨平台啟動前套用，避免引入可能與 NVIDIA Torch ABI 不相容的 TorchCodec。
   - 新增 TTS-only GPT-SoVITS requirements，不安裝不需要的 ASR 服務。
   - 新增 `compose.server.yaml`，使用獨立容器名、`gpus: all`、`ipc: host`、memlock/stack ulimit，並僅將 8001 綁定在伺服器 Tailscale IP。
   - Python app、GPT-SoVITS runtime、Staff A 模型、Open JTalk 與 output 以 bind mount 提供；重建容器不刪除模型。
   - 健康檢查同時要求 `/health.ok=true` 與 `gptSovits.ready=true`，避免只有 FastAPI 啟動卻沒有語音模型。
-- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；Compose config 可正常解析。TorchAudio 原始碼建置後已通過 import 階段，並連續定位唯讀 config 回寫與 `python-multipart` 缺失；補齊後的模型完整啟動尚待伺服器再驗證。
+- 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；容器 health 已達 `healthy`、`gptSovits.ready=true`，可用記憶體由 35 GiB 降至 31 GiB。首次 `/tts` 請求進入推論後，定位最後失敗為 TorchCodec 讀檔依賴；跨平台 `librosa` 補丁已加入單元測試，尚待伺服器再次生成驗證。
 - 成效：已將語音服務與 SGLang/Spring Boot 分離，Python 程式更新只需 pull + restart；相依變更才需 rebuild；模型更換才需重傳。
 
 ## 每次修改後的最低驗收

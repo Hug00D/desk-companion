@@ -35,6 +35,31 @@ class EngineConfigurationTest(unittest.TestCase):
 
         importlib.reload(gpt_sovits_engine)
 
+    def test_audio_loader_patch_is_cross_platform_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory)
+            tts_path = (
+                runtime_root
+                / "GPT_SoVITS"
+                / "TTS_infer_pack"
+                / "TTS.py"
+            )
+            tts_path.parent.mkdir(parents=True)
+            tts_path.write_text(
+                "        raw_audio, raw_sr = torchaudio.load(ref_audio_path)\n",
+                encoding="utf-8",
+            )
+
+            engine = gpt_sovits_engine.GptSoVitsEngine()
+            with patch.object(gpt_sovits_engine, "RUNTIME_ROOT", runtime_root):
+                engine._patch_torchaudio_loader_compatibility()
+                engine._patch_torchaudio_loader_compatibility()
+
+            patched_source = tts_path.read_text(encoding="utf-8")
+            self.assertNotIn("torchaudio.load", patched_source)
+            self.assertEqual(patched_source.count("librosa.load"), 1)
+            self.assertIn("torch.from_numpy(raw_audio_np)", patched_source)
+
 
 if __name__ == "__main__":
     unittest.main()
