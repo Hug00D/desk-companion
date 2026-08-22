@@ -5,6 +5,7 @@ import desk_companion_backend.assistant.dto.AssistantAudioResponse;
 import desk_companion_backend.assistant.service.AssistantVoiceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -37,6 +38,7 @@ public class PythonAssistantVoiceService implements AssistantVoiceService {
     private final AssistantVoiceProperties properties;
     private final RestClient restClient;
 
+    @Autowired
     public PythonAssistantVoiceService(
             AssistantVoiceProperties properties,
             RestClient.Builder restClientBuilder

@@ -217,6 +217,7 @@
   - Flutter `AssistantReply` 解碼後端音訊，播放開始時才同步顯示文字；移除 AI 聊天回覆再次直連 Python 的路徑。
   - 一般聊天與問候統一送往 AI 後端；番茄鐘等明確本地指令仍保留裝置端快速處理。
   - Spring Docker 新增 `VOICE_SERVICE_URL` 等環境變數；DGX Spark 應設定為 `http://100.119.136.82:8001`。
+  - 首次容器整合發現正式 class 同時具有 production/test 兩個建構子，Spring 無法自動選擇而進入 restart loop；正式建構子已明確標示 `@Autowired`。
 - 驗證：Spring 主程式 110 個 source files 與測試程式均編譯成功；新增的語音合成及文字降級 2 項測試全部通過。Flutter 靜態分析未發現本次修改造成的錯誤，僅保留登入頁既有 13 項 `withOpacity` 棄用提示。新增的 Flutter 複合回應測試因專案既有 test runner 啟動後長時間無輸出而中止，尚待 DGX Spark App 端到端實測。完整 Spring suite 另受既有測試硬連本機 Ollama 與 PostgreSQL 影響，非本次修改造成。
 - 成效：待實測確認。預期 Flutter 對每次 AI 聊天只發送一個 Assistant API 請求，文字與音訊共用同一回應及 requestId，降低不同步與重複 TTS 的機率。
 
