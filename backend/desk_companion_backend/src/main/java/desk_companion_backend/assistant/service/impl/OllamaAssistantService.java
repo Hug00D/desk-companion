@@ -9,6 +9,7 @@ import desk_companion_backend.assistant.dto.AssistantMessage;
 import desk_companion_backend.assistant.dto.OllamaChatRequest;
 import desk_companion_backend.assistant.dto.OllamaChatResponse;
 import desk_companion_backend.assistant.service.AssistantService;
+import desk_companion_backend.assistant.service.AssistantVoiceService;
 import desk_companion_backend.common.exception.AssistantDecisionParseException;
 import desk_companion_backend.common.exception.AssistantUnavailableException;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -96,11 +97,13 @@ public class OllamaAssistantService implements AssistantService {
     private final RestClient chatRestClient;
     private final RestClient decideRestClient;
     private final ObjectMapper objectMapper;
+    private final AssistantVoiceService voiceService;
 
     public OllamaAssistantService(
             AssistantProperties properties,
             RestClient.Builder restClientBuilder,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            AssistantVoiceService voiceService
     ) {
         this.properties = properties;
         this.chatRestClient = restClientBuilder
@@ -112,6 +115,7 @@ public class OllamaAssistantService implements AssistantService {
                 .requestFactory(buildRequestFactory(properties.getDecideTimeoutSeconds()))
                 .build();
         this.objectMapper = objectMapper;
+        this.voiceService = voiceService;
     }
 
     @Override
@@ -141,6 +145,7 @@ public class OllamaAssistantService implements AssistantService {
             reply = sanitizeChatReply(response.message().content());
         }
 
+        var audio = voiceService.synthesize(reply).orElse(null);
         return new AssistantChatResponse(
                 // Keep the response contract compatible with the planned
                 // action/chat/clarify flow, even though Phase 1 always returns chat.
@@ -148,7 +153,8 @@ public class OllamaAssistantService implements AssistantService {
                 reply,
                 null,
                 null,
-                response != null && response.model() != null ? response.model() : properties.getModel()
+                response != null && response.model() != null ? response.model() : properties.getModel(),
+                audio
         );
     }
 
@@ -233,7 +239,8 @@ public class OllamaAssistantService implements AssistantService {
                         confirmationTextFor(decision.intent(), parameters),
                         null,
                         parameters,
-                        model
+                        model,
+                        null
                 );
             }
             case "clarify" -> new AssistantDecideResponse(
@@ -244,7 +251,8 @@ public class OllamaAssistantService implements AssistantService {
                     CLARIFY_QUESTION,
                     null,
                     Map.of(),
-                    model
+                    model,
+                    null
             );
             // chat: reuse the chat pipeline for the wording so the decision
             // output itself stays tiny.
@@ -262,7 +270,8 @@ public class OllamaAssistantService implements AssistantService {
                         null,
                         chatResponse.message(),
                         Map.of(),
-                        model
+                        model,
+                        chatResponse.audio()
                 );
             }
         };
@@ -326,7 +335,8 @@ public class OllamaAssistantService implements AssistantService {
                 confirmationTextFor(intent, parameters),
                 null,
                 parameters == null ? Map.of() : parameters,
-                properties.getModel()
+                properties.getModel(),
+                null
         );
     }
 

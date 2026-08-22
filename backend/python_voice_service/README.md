@@ -64,15 +64,17 @@ Physical phone example:
 flutter run --dart-define=VOICE_SERVICE_URL=http://192.168.1.23:8001
 ```
 
-Dynamic AI replies are opt-in in Flutter. Enable them only when this service
-is reachable:
+Dynamic AI replies are coordinated by Spring Boot. Configure the backend to
+reach this service, then Flutter receives reply text and Base64 WAV together:
 
-```powershell
-flutter run `
-  --dart-define=API_BASE_URL=http://100.119.136.81:8080/api/v1 `
-  --dart-define=VOICE_SERVICE_URL=http://100.119.136.81:8001 `
-  --dart-define=DYNAMIC_ASSISTANT_VOICE_ENABLED=true
+```env
+ASSISTANT_VOICE_ENABLED=true
+VOICE_SERVICE_URL=http://100.119.136.82:8001
 ```
+
+Flutter's `VOICE_SERVICE_URL` remains available only for the voice Debug and
+health-check tools. AI chat playback no longer calls Python directly from the
+device.
 
 ## Linux / systemd
 

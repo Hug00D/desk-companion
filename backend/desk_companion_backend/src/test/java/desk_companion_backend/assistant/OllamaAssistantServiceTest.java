@@ -16,7 +16,8 @@ class OllamaAssistantServiceTest {
     private final OllamaAssistantService service = new OllamaAssistantService(
             new AssistantProperties(),
             RestClient.builder(),
-            new ObjectMapper()
+            new ObjectMapper(),
+            text -> java.util.Optional.empty()
     );
 
     @Test

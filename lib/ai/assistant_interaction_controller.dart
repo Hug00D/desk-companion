@@ -34,7 +34,7 @@ class AssistantInteractionController {
     this.intentMapper = const AssistantIntentMapper(),
     this.voiceParser = const VoiceCommandParser(),
     this.responseBuilder = const CompanionResponseBuilder(),
-    this.timeout = const Duration(seconds: 20),
+    this.timeout = const Duration(seconds: 180),
   }) : _decisionClient = decisionClient;
 
   final AssistantDecisionClient _decisionClient;
@@ -56,11 +56,6 @@ class AssistantInteractionController {
 
     if (_isAmbiguousStopSignal(text)) {
       return _clarifyStopSignalResult();
-    }
-
-    final localChatReply = _localSocialReply(text);
-    if (localChatReply != null) {
-      return _localChatResult(localChatReply);
     }
 
     if (!_shouldAskBackendToDecide(localCommand, text)) {
@@ -234,23 +229,6 @@ class AssistantInteractionController {
     );
   }
 
-  AssistantInteractionResult _localChatResult(String message) {
-    return AssistantInteractionResult(
-      reply: AssistantReply(
-        mode: AssistantMode.chat,
-        message: message,
-        chatReply: message,
-        model: 'local-social',
-      ),
-      response: CompanionResponse(
-        source: CompanionResponseSource.voice,
-        tone: CompanionResponseTone.supportive,
-        message: message,
-        actionLabel: 'assistant_chat',
-      ),
-    );
-  }
-
   bool _isAmbiguousStopSignal(String text) {
     final normalized = text
         .toLowerCase()
@@ -277,34 +255,6 @@ class AssistantInteractionController {
         shouldNotify: true,
       ),
     );
-  }
-
-  String? _localSocialReply(String text) {
-    final normalized = text
-        .toLowerCase()
-        .replaceAll(RegExp(r'\s+'), '')
-        .replaceAll(RegExp(r'[，。！？,.!?]'), '');
-    if (normalized.length > 12) return null;
-
-    if (_containsAny(normalized, const ['早安', '早上好'])) {
-      return '早安，今天也一起加油吧！';
-    }
-    if (normalized.contains('午安')) {
-      return '午安，記得讓自己喘口氣。';
-    }
-    if (normalized.contains('晚安')) {
-      return '晚安，今天辛苦了。';
-    }
-    if (_containsAny(normalized, const ['你好', '嗨', '哈囉', 'hello'])) {
-      return '你好，我在這裡。';
-    }
-    if (_containsAny(normalized, const ['謝謝', '感謝'])) {
-      return '不客氣，我一直都在。';
-    }
-    if (_containsAny(normalized, const ['掰掰', '再見'])) {
-      return '再見，等等再來找我吧。';
-    }
-    return null;
   }
 
   VoiceCommand _parseLocalCommand(String text) {

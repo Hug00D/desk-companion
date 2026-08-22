@@ -36,3 +36,8 @@ app:
     decide-temperature: ${OLLAMA_DECIDE_TEMPERATURE:0.15}
     decide-num-predict: ${OLLAMA_DECIDE_NUM_PREDICT:48}
     decide-timeout-seconds: ${OLLAMA_DECIDE_TIMEOUT_SECONDS:60}
+  assistant-voice:
+    enabled: ${ASSISTANT_VOICE_ENABLED:true}
+    base-url: ${VOICE_SERVICE_URL:http://localhost:8001}
+    connect-timeout-seconds: ${VOICE_SERVICE_CONNECT_TIMEOUT_SECONDS:3}
+    request-timeout-seconds: ${VOICE_SERVICE_REQUEST_TIMEOUT_SECONDS:150}

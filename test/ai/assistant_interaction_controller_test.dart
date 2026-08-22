@@ -68,19 +68,18 @@ void main() {
     expect(decisionClient.chatCallCount, 1);
   });
 
-  test('answers common greetings locally without contacting backend', () async {
-    final decisionClient = _UnexpectedDecisionClient();
+  test('sends greetings to chat so backend can bundle reply audio', () async {
+    final decisionClient = _DecideFailsChatSucceedsClient();
     final controller = AssistantInteractionController(
       decisionClient: decisionClient,
     );
 
     final result = await controller.handleText(text: '早安');
 
-    expect(result.response.message, '早安，今天也一起加油吧！');
-    expect(result.reply.model, 'local-social');
+    expect(result.response.message, '我在，慢慢說。');
     expect(result.usedFallback, isFalse);
     expect(decisionClient.decideCallCount, 0);
-    expect(decisionClient.chatCallCount, 0);
+    expect(decisionClient.chatCallCount, 1);
   });
 
   test('clarifies single ambiguous stop signal without backend calls', () async {

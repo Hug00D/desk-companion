@@ -10,6 +10,7 @@ public record AssistantDecideResponse(
         String confirmationText,
         String chatReply,
         Map<String, Object> parameters,
-        String model
+        String model,
+        AssistantAudioResponse audio
 ) {
 }

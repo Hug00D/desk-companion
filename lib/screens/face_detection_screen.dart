@@ -2215,19 +2215,25 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       return;
     }
 
+    final backendAudio = result.reply.audio;
     final responseMessage = result.reply.mode == AssistantMode.chat
-        ? AssistantReplyFormatter.concise(
-            sourceText: text,
-            reply: result.response.message,
-          )
+        ? backendAudio == null
+              ? AssistantReplyFormatter.concise(
+                  sourceText: text,
+                  reply: result.response.message,
+                )
+              : result.response.message.trim()
         : result.response.message;
     final shouldSynchronizeWithVoice =
         _dynamicAssistantVoiceEnabled &&
         result.reply.mode == AssistantMode.chat &&
-        !result.usedFallback;
+        !result.usedFallback &&
+        backendAudio != null &&
+        backendAudio.bytes.isNotEmpty;
     if (shouldSynchronizeWithVoice) {
-      await _speakAssistantChatReply(
+      await _playAssistantChatReply(
         responseMessage,
+        audio: backendAudio,
         requestId: assistantVoiceRequestId,
       );
       return;
@@ -2257,18 +2263,20 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     );
   }
 
-  Future<void> _speakAssistantChatReply(
+  Future<void> _playAssistantChatReply(
     String message, {
+    required AssistantAudio audio,
     required int requestId,
   }) async {
     final text = message.trim();
     if (!_dynamicAssistantVoiceEnabled ||
         text.isEmpty ||
+        audio.bytes.isEmpty ||
         requestId != _assistantVoiceRequestId) {
       return;
     }
 
-    _setVoiceSessionPhase(_VoiceSessionPhase.synthesizing);
+    _setVoiceSessionPhase(_VoiceSessionPhase.playingResponse);
     var responsePresented = false;
     try {
       if (_wakeWordService.isListening || _isWakeWordInitializing) {
@@ -2276,43 +2284,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       }
       if (!mounted || requestId != _assistantVoiceRequestId) return;
 
-      final ttsRequestId = _voiceServiceClient.createRequestId(
-        source: 'assistant',
-      );
-      debugPrint('[VOICE][request=$ttsRequestId] tts_requested text=$text');
-      final result = await _voiceServiceClient.sendReminder(
-        text: text,
-        status: 'assistant_chat',
-        eventType: 'assistant.chat_reply',
-        source: 'assistant',
-        actionLabel: 'assistant_chat',
-        requestId: ttsRequestId,
-      );
-      if (!mounted || requestId != _assistantVoiceRequestId) return;
-      if (!result.generated) {
-        debugPrint(
-          'Assistant voice skipped: ${result.reason ?? result.mode ?? 'unknown'}',
-        );
-        _presentAssistantResponse(text);
-        responsePresented = true;
-        return;
-      }
-
-      final spokenText = result.spokenText?.trim().isNotEmpty == true
-          ? result.spokenText!.trim()
-          : text;
-      _setVoiceSessionPhase(_VoiceSessionPhase.playingResponse);
       final played = await _playReminderAudio(
-        result.audioBytes,
+        audio.bytes,
         _latestDetectedCompanionStatus,
-        spokenText,
-        result.duration,
+        text,
+        audio.duration,
         reaction: CompanionCharacterReaction.success,
         onPlaybackStarted: () {
           responsePresented = true;
-          _recordAssistantPlaybackStarted(spokenText, result.duration);
+          _recordAssistantPlaybackStarted(text, audio.duration);
         },
-        requestId: result.requestId,
+        requestId: audio.requestId,
       );
       if (!played && !responsePresented) {
         _presentAssistantResponse(text);
@@ -2327,8 +2309,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       }
     } finally {
       if (mounted && requestId == _assistantVoiceRequestId) {
-        if (_voiceSessionPhase == _VoiceSessionPhase.synthesizing ||
-            _voiceSessionPhase == _VoiceSessionPhase.playingResponse) {
+        if (_voiceSessionPhase == _VoiceSessionPhase.playingResponse) {
           _setVoiceSessionPhase(_VoiceSessionPhase.idle);
         }
         unawaited(_resumeWakeWordListenerIfEnabled());

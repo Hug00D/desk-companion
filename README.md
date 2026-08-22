@@ -267,25 +267,29 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
 flutter run --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1
 ```
 
-### 4. 啟動語音服務, optional
+### 4. 啟動語音服務（AI 動態語音需要）
 
 ```powershell
 python backend\python_voice_service\app\main.py --host 0.0.0.0 --port 8001
 ```
 
-Flutter emulator 預設會呼叫：
+Spring Boot 會在 AI 產生文字後呼叫此服務，下載 WAV，並將文字與
+Base64 音訊放在同一個 `/assistant/chat` 或 `/assistant/decide` 回應。
+本機 Spring Boot 預設會呼叫：
 
 ```text
-http://10.0.2.2:8001
+http://localhost:8001
 ```
 
-實體手機可用：
+Flutter 不需要直接連線到 Python 才能播放 AI 聊天語音；只需連到
+Spring Boot：
 
 ```powershell
-flutter run `
-  --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1 `
-  --dart-define=VOICE_SERVICE_URL=http://192.168.1.23:8001
+flutter run --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1
 ```
+
+`VOICE_SERVICE_URL` 仍保留給 Flutter 的語音服務 Debug/健康檢查工具，
+不再用於 AI 聊天回覆主流程。
 
 ## 測試
 

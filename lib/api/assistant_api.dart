@@ -7,6 +7,8 @@ class AssistantApi implements AssistantDecisionClient {
 
   final ApiClient _client;
 
+  static const Duration _combinedReplyTimeout = Duration(seconds: 180);
+
   static const String _chatStyleInstruction = '''
 
 [回覆風格]
@@ -33,6 +35,7 @@ class AssistantApi implements AssistantDecisionClient {
         if (context != null && context.isNotEmpty) 'context': context,
       },
       accessToken: accessToken,
+      timeout: _combinedReplyTimeout,
     );
     return AssistantReply.fromJson(data);
   }
@@ -53,6 +56,7 @@ class AssistantApi implements AssistantDecisionClient {
         if (context != null && context.isNotEmpty) 'context': context,
       },
       accessToken: accessToken,
+      timeout: _combinedReplyTimeout,
     );
     return AssistantReply.fromJson(data);
   }

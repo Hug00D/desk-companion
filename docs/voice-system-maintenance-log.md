@@ -204,6 +204,22 @@
 - 驗證：NVIDIA PyTorch 25.09 容器已在 DGX Spark 實測 `aarch64`、CUDA 13.0、`torch.cuda.is_available()=True`、裝置 `NVIDIA GB10`；容器 health 已達 `healthy`、`gptSovits.ready=true`，可用記憶體由 35 GiB 降至 31 GiB。修正 TorchCodec 讀檔相容性後，`POST /tts` 已成功以 `mode=gpt_sovits` 產生 4,660 ms Staff A WAV，回傳 `ok=true` 與可下載的 `audioUrl`；Python 語音服務 9 項測試全部通過。
 - 成效：已將語音服務與 SGLang/Spring Boot 分離，Python 程式更新只需 pull + restart；相依變更才需 rebuild；模型更換才需重傳。平常可用 `stop` 釋放模型佔用的約 4 GiB 統一記憶體，且不影響其他容器或主機模型檔案。
 
+### VOICE-015：AI 文字與語音分兩次由 Flutter 請求造成不同步
+
+- 日期：2026-08-22
+- 狀態：`待整合實測`
+- 症狀：原流程先由 Spring Boot 將 AI 文字回傳 Flutter，再由 Flutter 呼叫 Python `/tts` 並下載 WAV；氣泡可能早於語音出現，且裝置端需同時管理 AI API 與語音 API。
+- 根因：AI 回覆與 TTS 位於兩條獨立網路請求，Flutter 同時負責工作流協調、音訊下載與 requestId 對齊。
+- 修改：
+  - Spring Boot 新增獨立 `AssistantVoiceService`，AI chat 文字完成後直接呼叫 Python `/tts` 並下載一次性 WAV。
+  - `/assistant/chat` 及 chat-mode `/assistant/decide` 在同一份 JSON 回傳文字與 `audio`，包含 requestId、contentType、Base64 WAV 與 durationMs。
+  - Python 語音失效時採文字降級，不讓整筆 AI 回應失敗。
+  - Flutter `AssistantReply` 解碼後端音訊，播放開始時才同步顯示文字；移除 AI 聊天回覆再次直連 Python 的路徑。
+  - 一般聊天與問候統一送往 AI 後端；番茄鐘等明確本地指令仍保留裝置端快速處理。
+  - Spring Docker 新增 `VOICE_SERVICE_URL` 等環境變數；DGX Spark 應設定為 `http://100.119.136.82:8001`。
+- 驗證：Spring 主程式 110 個 source files 與測試程式均編譯成功；新增的語音合成及文字降級 2 項測試全部通過。Flutter 靜態分析未發現本次修改造成的錯誤，僅保留登入頁既有 13 項 `withOpacity` 棄用提示。新增的 Flutter 複合回應測試因專案既有 test runner 啟動後長時間無輸出而中止，尚待 DGX Spark App 端到端實測。完整 Spring suite 另受既有測試硬連本機 Ollama 與 PostgreSQL 影響，非本次修改造成。
+- 成效：待實測確認。預期 Flutter 對每次 AI 聊天只發送一個 Assistant API 請求，文字與音訊共用同一回應及 requestId，降低不同步與重複 TTS 的機率。
+
 ## 每次修改後的最低驗收
 
 1. 連續執行至少 10 次「喚醒 → STT → LLM → TTS → 播放」。

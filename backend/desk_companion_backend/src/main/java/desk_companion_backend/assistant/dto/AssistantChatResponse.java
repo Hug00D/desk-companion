@@ -5,6 +5,7 @@ public record AssistantChatResponse(
         String message,
         String intent,
         String action,
-        String model
+        String model,
+        AssistantAudioResponse audio
 ) {
 }
