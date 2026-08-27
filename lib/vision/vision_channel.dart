@@ -2,6 +2,45 @@ import 'package:flutter/services.dart';
 
 import 'vision_result.dart';
 
+class VisionVideoExtractionResult {
+  const VisionVideoExtractionResult({
+    required this.outputPath,
+    required this.frameCount,
+    required this.droppedFrameCount,
+    required this.sourceFrameCount,
+    required this.metadataFrameCount,
+    required this.firstTimestampMs,
+    required this.lastTimestampMs,
+  });
+
+  final String outputPath;
+  final int frameCount;
+  final int droppedFrameCount;
+  final int? sourceFrameCount;
+  final int? metadataFrameCount;
+  final int? firstTimestampMs;
+  final int? lastTimestampMs;
+
+  factory VisionVideoExtractionResult.fromNativeMap(
+    Map<dynamic, dynamic> data,
+  ) {
+    final outputPath = data['outputPath'];
+    final frameCount = data['frameCount'];
+    if (outputPath is! String || frameCount is! num) {
+      throw const FormatException('Invalid video extraction result.');
+    }
+    return VisionVideoExtractionResult(
+      outputPath: outputPath,
+      frameCount: frameCount.toInt(),
+      droppedFrameCount: (data['droppedFrameCount'] as num?)?.toInt() ?? 0,
+      sourceFrameCount: (data['sourceFrameCount'] as num?)?.toInt(),
+      metadataFrameCount: (data['metadataFrameCount'] as num?)?.toInt(),
+      firstTimestampMs: (data['firstTimestampMs'] as num?)?.toInt(),
+      lastTimestampMs: (data['lastTimestampMs'] as num?)?.toInt(),
+    );
+  }
+}
+
 class VisionChannel {
   const VisionChannel({
     MethodChannel channel = const MethodChannel(
@@ -52,6 +91,22 @@ class VisionChannel {
 
   Future<void> resetVision() {
     return _channel.invokeMethod<void>('resetVision');
+  }
+
+  Future<VisionVideoExtractionResult> extractVideoFeaturesToCsv({
+    required String videoPath,
+    required String outputPath,
+  }) async {
+    final result = await _channel.invokeMethod<dynamic>(
+      'extractVideoFeaturesToCsv',
+      <String, String>{'videoPath': videoPath, 'outputPath': outputPath},
+    );
+    if (result is! Map) {
+      throw const FormatException('Native extraction result must be a map.');
+    }
+    return VisionVideoExtractionResult.fromNativeMap(
+      Map<dynamic, dynamic>.from(result),
+    );
   }
 
   Future<String?> copyNativeAssetToCache({

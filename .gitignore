@@ -159,3 +159,6 @@ app.*.map.json
 !**/ios/**/default.perspectivev3
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 !/dev/ci/**/Gemfile.lock
+
+# Vision Lab pilot outputs (measurement data, not source)
+vision_lab_out/

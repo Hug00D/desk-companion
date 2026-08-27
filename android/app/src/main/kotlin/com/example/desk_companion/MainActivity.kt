@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.util.Size
 import android.view.View
 import android.widget.Toast
@@ -28,6 +29,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
@@ -102,6 +104,26 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "resetVision" -> resetVision(result)
+
+                "extractVideoFeaturesToCsv" -> {
+                    val videoPath = call.argument<String>("videoPath")
+                    val outputPath = call.argument<String>("outputPath")
+                    if (videoPath.isNullOrBlank() || outputPath.isNullOrBlank()) {
+                        result.error(
+                            "INVALID_ARGUMENT",
+                            "videoPath and outputPath are required",
+                            null
+                        )
+                    } else if (isVisionCameraRunning) {
+                        result.error(
+                            "CAMERA_RUNNING",
+                            "Stop the live camera before starting offline extraction",
+                            null
+                        )
+                    } else {
+                        extractVideoFeaturesToCsv(videoPath, outputPath, result)
+                    }
+                }
 
                 else -> result.notImplemented()
             }
@@ -358,6 +380,69 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun extractVideoFeaturesToCsv(
+        videoPath: String,
+        outputPath: String,
+        result: MethodChannel.Result
+    ) {
+        visionExecutor.execute {
+            val outputFile = File(outputPath)
+            var labVisionManager: MediaPipeVisionManager? = null
+            try {
+                require(File(videoPath).isFile) { "Video does not exist: $videoPath" }
+                require(!outputFile.exists()) { "Output already exists: $outputPath" }
+                require(outputFile.parentFile?.isDirectory == true) {
+                    "Output directory does not exist: ${outputFile.parent}"
+                }
+
+                labVisionManager = MediaPipeVisionManager(applicationContext)
+                val manager = labVisionManager
+                val summary = VisionFrameCsvWriter(outputFile).use { csvWriter ->
+                    OfflineVideoFrameDecoder(MAX_ANALYSIS_DIMENSION).decode(videoPath) {
+                        frameIndex,
+                        timestampMs,
+                        bitmap ->
+                        val features = manager.analyze(
+                            bitmap = bitmap,
+                            runFace = true,
+                            runPose = true,
+                            timestampMs = timestampMs
+                        )
+                        csvWriter.writeFrame(frameIndex, timestampMs, features)
+                        if ((frameIndex + 1) % VISION_LAB_PROGRESS_INTERVAL == 0) {
+                            csvWriter.flush()
+                            Log.d(
+                                VISION_LAB_LOG_TAG,
+                                "extractedFrames=${frameIndex + 1} timestampMs=$timestampMs"
+                            )
+                        }
+                    }
+                }
+
+                mainHandler.post {
+                    result.success(
+                        mapOf(
+                            "outputPath" to outputFile.absolutePath,
+                            "frameCount" to summary.frameCount,
+                            "droppedFrameCount" to summary.droppedTimestampsMs.size,
+                            "sourceFrameCount" to summary.sourceFrameCount,
+                            "metadataFrameCount" to summary.metadataFrameCount,
+                            "firstTimestampMs" to summary.firstTimestampMs,
+                            "lastTimestampMs" to summary.lastTimestampMs
+                        )
+                    )
+                }
+            } catch (error: Exception) {
+                if (outputFile.exists()) outputFile.delete()
+                mainHandler.post {
+                    result.error("VIDEO_EXTRACTION_ERROR", error.message, null)
+                }
+            } finally {
+                labVisionManager?.close()
+            }
+        }
+    }
+
     private fun stopVisionCamera() {
         isVisionCameraRunning = false
         imageAnalysis?.clearAnalyzer()
@@ -413,6 +498,8 @@ class MainActivity : FlutterActivity() {
         private const val POSE_BOOST_INTERVAL_MS = 600L
         private const val CAMERA_WARMUP_DURATION_MS = 4_000L
         private const val ERROR_REPORT_INTERVAL_MS = 5_000L
+        private const val VISION_LAB_PROGRESS_INTERVAL = 100
+        private const val VISION_LAB_LOG_TAG = "VisionLab"
     }
 }
 

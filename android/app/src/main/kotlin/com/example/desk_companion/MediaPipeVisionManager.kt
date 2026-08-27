@@ -184,8 +184,10 @@ class MediaPipeVisionManager(context: Context) {
 
             val leftBlendOpen = blendshapeOpenProbability(firstFaceBlendshapes, "eyeBlinkLeft")
             val rightBlendOpen = blendshapeOpenProbability(firstFaceBlendshapes, "eyeBlinkRight")
-            val leftLandmarkOpen = landmarkOpenProbability(landmarks, LEFT_EYE_POINTS)
-            val rightLandmarkOpen = landmarkOpenProbability(landmarks, RIGHT_EYE_POINTS)
+            val leftEar = eyeAspectRatio(landmarks, LEFT_EYE_POINTS)
+            val rightEar = eyeAspectRatio(landmarks, RIGHT_EYE_POINTS)
+            val leftLandmarkOpen = landmarkOpenProbability(leftEar)
+            val rightLandmarkOpen = landmarkOpenProbability(rightEar)
             val transformationMatrix = faceResult.facialTransformationMatrixes()
                 .orElse(emptyList())
                 .firstOrNull()
@@ -198,7 +200,7 @@ class MediaPipeVisionManager(context: Context) {
                 rightEyeOpen = rightEyeOpen
             )
 
-            mapOf(
+            mutableMapOf<String, Any>(
                 "hasFace" to true,
                 "leftEye" to leftEyeOpen,
                 "rightEye" to rightEyeOpen,
@@ -206,7 +208,10 @@ class MediaPipeVisionManager(context: Context) {
                 "headPitch" to headPose.second,
                 "headOffsetScore" to headPose.third,
                 "headOffsetCalibrating" to (headOffsetBaseline == null)
-            )
+            ).apply {
+                if (leftEar >= 0.0f) put("leftEar", leftEar)
+                if (rightEar >= 0.0f) put("rightEar", rightEar)
+            }
         } else {
             mapOf("hasFace" to false)
         }
@@ -221,7 +226,7 @@ class MediaPipeVisionManager(context: Context) {
         return clamp01(1.0f - blinkScore)
     }
 
-    private fun landmarkOpenProbability(landmarks: List<NormalizedLandmark>, points: IntArray): Float {
+    private fun eyeAspectRatio(landmarks: List<NormalizedLandmark>, points: IntArray): Float {
         val outerCorner = landmarks.getOrNull(points[0]) ?: return -1f
         val upperOuter = landmarks.getOrNull(points[1]) ?: return -1f
         val upperInner = landmarks.getOrNull(points[2]) ?: return -1f
@@ -233,7 +238,11 @@ class MediaPipeVisionManager(context: Context) {
         val horizontal = 2.0f * distance(outerCorner, innerCorner)
         if (horizontal <= 0.0f) return -1f
 
-        val eyeAspectRatio = vertical / horizontal
+        return vertical / horizontal
+    }
+
+    private fun landmarkOpenProbability(eyeAspectRatio: Float): Float {
+        if (eyeAspectRatio < 0.0f) return -1f
         return clamp01((eyeAspectRatio - CLOSED_EYE_EAR) / (OPEN_EYE_EAR - CLOSED_EYE_EAR))
     }
 

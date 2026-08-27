@@ -323,6 +323,96 @@ cd backend\desk_companion_backend
 backend/testApi/api-tests.http
 ```
 
+## Vision Lab（離線視覺量測）
+
+Vision Lab 是與正式 app 分離的量測工具，用途是在**已錄好的影片**上逐幀抽取視覺特徵，
+產生可重現的 `frame_features.csv`，供後續比較不同時序判斷策略（單幀 vs N-of-M 投票）使用。
+
+它有獨立的 entry point，不會影響正式 app 的行為；特徵計算與正式 app 共用同一套
+`MediaPipeVisionManager`，不另外複製一份公式。
+
+### 為什麼要離線跑
+
+即時相機的每一次執行都不一樣，無法用來比較策略。改成讀固定影片、用**影片本身的
+presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會得到逐列相同的 CSV，
+策略比較才有意義。
+
+### 啟動方式
+
+測試影片放在 `assets/`，由 `lib/main_vision_lab.dart` 的 `_assetPath` 指定
+（目前是 `assets/test.mp4`），要換影片就改這個常數並確認 `pubspec.yaml` 的 `assets:` 有登錄。
+
+不需要相機，模擬器即可執行（MediaPipe 有 x86_64 native library，且走 CPU 推論）：
+
+```powershell
+flutter run -t lib/main_vision_lab.dart
+```
+
+畫面上的影片只是預覽，**不驅動推論**。按下「產生 frame_features.csv」後，由原生端
+`OfflineVideoFrameDecoder` 以 MediaCodec 逐幀解碼並送進 MediaPipe。每按一次產生一個
+以 timestamp 命名的新檔，不會覆蓋前一次的結果。
+
+進度可從 logcat 觀察（每 100 幀一筆）：
+
+```powershell
+adb logcat -s VisionLab
+```
+
+### 取出資料
+
+CSV 寫在 app 的外部專屬目錄。Android 11+ 的內建檔案管理員不允許瀏覽 `Android/data/`，
+必須用 `adb pull`：
+
+```powershell
+adb pull /storage/emulated/0/Android/data/com.example.desk_companion/files/ .ision_lab_out
+```
+
+### 可重現性驗收
+
+同一支影片跑兩次，兩份 CSV 必須逐列相同：
+
+```powershell
+fc .ision_lab_outrame_features_<run1>.csv .ision_lab_outrame_features_<run2>.csv
+```
+
+### 記錄哪些數據
+
+每一幀一列，共 14 欄：
+
+| 欄位 | 意義 | 備註 |
+| --- | --- | --- |
+| `frame_idx` | 已輸出幀的序號，從 0 開始 | 解碼器若略過某個 sample，序號仍連續，因此**不等於**容器內的 sample 序號 |
+| `timestamp_ms` | 影片真實 PTS（毫秒） | 來自 `MediaCodec` 的 `presentationTimeUs`，非系統時間、非 UI 幀率 |
+| `face_detected` | 該幀是否偵測到臉 | `true` / `false` |
+| `pose_detected` | 該幀是否偵測到姿態 | `true` / `false` |
+| `ear_l` / `ear_r` | 左／右眼 Eye Aspect Ratio | 眼睛垂直距離 ÷ 水平距離，值越小越接近閉眼；**純單幀計算** |
+| `yaw` | 頭部左右轉角（度） | 由 MediaPipe facial transformation matrix 求得；**純單幀計算** |
+| `pitch` | 頭部俯仰角（度） | 同上；**純單幀計算** |
+| `head_offset` | 頭部偏移分數（0–100） | **含跨幀狀態**，見下方說明 |
+| `raw_eye_closed` | 單幀規則：是否閉眼 | 保留欄位，尚未實作 |
+| `raw_head_turned` | 單幀規則：是否轉頭 | 保留欄位，尚未實作 |
+| `raw_posture_down` | 單幀規則：是否趴下 | 保留欄位，尚未實作 |
+| `raw_user_missing` | 單幀規則：是否離席 | 保留欄位，尚未實作 |
+| `raw_state` | 單幀規則綜合狀態 | 保留欄位，尚未實作 |
+
+偵測不到臉的幀，臉部相關欄位留空字串而不是填 0，以免把「沒有資料」誤當成「數值為 0」。
+
+### 兩個使用時必須知道的性質
+
+**1. `head_offset` 不是純單幀特徵。**
+它需要先蒐集 5 個穩定樣本建立基準線，期間固定回傳 `0.0`；之後的值是
+指數平滑後的指標與基準線中位數的差，再乘上比例並限制在 0–100。
+因此開頭數幀的 `head_offset`（以及 `yaw` / `pitch`）不能與後段直接比較，
+而且它**帶有跨幀記憶**，不適合直接餵給零記憶的單幀規則。
+`ear_l`、`ear_r`、`yaw`、`pitch` 才是純單幀值。
+
+**2. 時間戳不是等距的。**
+手機錄的影片為變動幀率，實測間隔混合 33ms 與 34ms，另有少數更大的間隔。
+換算延遲時間時要用 `timestamp_ms` 相減，不能用「幀數 × 33ms」估算。
+
+另外，解碼器可能對極少數 sample 不輸出畫面（實測 1708 幀掉 1 幀，且每次都掉同一幀）。
+這是確定性行為，不影響可重現性；掉幀數會記在 logcat 與回傳結果的 `droppedFrameCount`。
+
 ## 專題特色
 
 - 結合行動端即時視覺辨識與專注學習場景。
