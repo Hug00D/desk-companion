@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
+import 'vision/frame_feature_csv_classifier.dart';
 import 'vision/vision_channel.dart';
 
 void main() => runApp(const VisionLabApp());
@@ -36,6 +37,8 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
   static const String _cachedVideoName = 'vision_lab_test.mp4';
 
   final VisionChannel _visionChannel = const VisionChannel();
+  final FrameFeatureCsvClassifier _csvClassifier =
+      const FrameFeatureCsvClassifier();
   final List<VisionVideoExtractionResult> _completedRuns = [];
   VideoPlayerController? _videoController;
   String? _videoPath;
@@ -96,14 +99,31 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
           await getApplicationDocumentsDirectory();
       final runId = DateTime.now().microsecondsSinceEpoch;
       final outputPath = '${outputDirectory.path}/frame_features_$runId.csv';
+      final nativeOutputPath = '$outputPath.native';
       final extraction = await _visionChannel.extractVideoFeaturesToCsv(
         videoPath: videoPath,
+        outputPath: nativeOutputPath,
+      );
+      await _csvClassifier.classifyFile(
+        inputPath: nativeOutputPath,
         outputPath: outputPath,
+      );
+      await File(nativeOutputPath).delete();
+      final classifiedExtraction = VisionVideoExtractionResult(
+        outputPath: outputPath,
+        frameCount: extraction.frameCount,
+        droppedFrameCount: extraction.droppedFrameCount,
+        sourceFrameCount: extraction.sourceFrameCount,
+        metadataFrameCount: extraction.metadataFrameCount,
+        firstTimestampMs: extraction.firstTimestampMs,
+        lastTimestampMs: extraction.lastTimestampMs,
       );
       if (!mounted) return;
       setState(() {
-        _completedRuns.add(extraction);
-        _status = '完成 ${extraction.frameCount} 幀；請再跑一次後拉出兩份 CSV 做 diff。';
+        _completedRuns.add(classifiedExtraction);
+        _status =
+            '完成 ${extraction.frameCount} 幀；raw_state 是零記憶單幀輸出，'
+            '請播放影片確認眨眼幀會短暫跳動。';
       });
     } catch (error) {
       if (!mounted) return;
@@ -124,7 +144,7 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
   Widget build(BuildContext context) {
     final controller = _videoController;
     return Scaffold(
-      appBar: AppBar(title: const Text('Vision Lab Pilot v1 — Task 1')),
+      appBar: AppBar(title: const Text('Vision Lab Pilot v1')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
