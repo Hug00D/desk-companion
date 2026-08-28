@@ -359,8 +359,13 @@ flutter run -d emulator-5554 -t lib/main_vision_lab.dart
 
 畫面上的影片只是預覽，**不驅動推論**。按下「產生 frame_features.csv」後，由原生端
 `OfflineVideoFrameDecoder` 以 MediaCodec 逐幀解碼並送進 MediaPipe。每按一次產生一個
-以 timestamp 命名的新檔，不會覆蓋前一次的結果。監看器只會拉取已完成的
+新檔，不會覆蓋前一次的結果。監看器只會拉取已完成的
 `frame_features_<runId>.csv`，不會把尚在寫入的 `.native` 暫存檔當成結果。
+
+`<runId>` 的格式是 `<影片名>_<microseconds>`，例如 `assets/test.mp4` 會產生
+`frame_features_test_1787902528095107.csv`。影片名取自 `_assetPath`，因此多支影片的
+輸出放在同一個目錄也能一眼分辨；`ground_truth_<runId>.csv` 與比較結果都沿用同一個
+`<runId>`，避免把某支影片的預測配到另一支的 Ground Truth。
 
 進度可從 logcat 觀察（每 100 幀一筆）：
 

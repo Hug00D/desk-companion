@@ -82,6 +82,16 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
     }
   }
 
+  /// Derives a filename-safe identifier from [_assetPath], e.g. `test`.
+  String _videoSlug() {
+    final fileName = _assetPath.split('/').last;
+    final withoutExtension = fileName.contains('.')
+        ? fileName.substring(0, fileName.lastIndexOf('.'))
+        : fileName;
+    final slug = withoutExtension.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    return slug.isEmpty ? 'video' : slug;
+  }
+
   Future<void> _extractFeatures() async {
     final videoPath = _videoPath;
     if (_isExtracting || videoPath == null) return;
@@ -97,7 +107,10 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
       final outputDirectory =
           await getExternalStorageDirectory() ??
           await getApplicationDocumentsDirectory();
-      final runId = DateTime.now().microsecondsSinceEpoch;
+      // The video slug keeps each run identifiable once several videos share
+      // the output directory; every downstream file inherits it through the
+      // run id, so predictions and ground truth cannot be paired by mistake.
+      final runId = '${_videoSlug()}_${DateTime.now().microsecondsSinceEpoch}';
       final outputPath = '${outputDirectory.path}/frame_features_$runId.csv';
       final nativeOutputPath = '$outputPath.native';
       final extraction = await _visionChannel.extractVideoFeaturesToCsv(

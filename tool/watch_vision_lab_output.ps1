@@ -25,7 +25,7 @@ function Sync-VisionLabCsv {
     $visionDeviceFiles = @(
         & $visionAdbPath -s $DeviceId shell ls -1 $visionDeviceDirectory 2>$null |
             ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -match '^frame_features_[0-9]+\.csv$' }
+            Where-Object { $_ -match '^frame_features_[0-9A-Za-z_]+\.csv$' }
     )
     if ($LASTEXITCODE -ne 0) {
         throw "Cannot read Vision Lab output from Android device '$DeviceId'."
