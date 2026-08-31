@@ -364,6 +364,10 @@ flutter run -d emulator-5554 -t lib/main_vision_lab.dart `
 
 省略 `--dart-define` 時會使用預設的 `assets/test.mp4`。
 
+Vision Lab v2 會用影片前 4 秒的有效睜眼樣本，左右眼分別取 EAR P90 作為該次 run 的
+個人化睜眼基準。開始錄影後請先面向鏡頭、自然睜眼至少 4 秒；期間正常眨眼沒有關係，
+P90 不會像平均值一樣容易被低值拉動。有效樣本不足 30 幀時會退回固定基準 `0.27`。
+
 畫面上的影片只是預覽，**不驅動推論**。按下「產生 frame_features.csv」後，由原生端
 `OfflineVideoFrameDecoder` 以 MediaCodec 逐幀解碼並送進 MediaPipe。每按一次產生一個
 新檔，不會覆蓋前一次的結果。監看器只會拉取已完成的
@@ -420,7 +424,7 @@ fc.exe /b .\vision_lab_out\frame_features_<run1>.csv .\vision_lab_out\frame_feat
 | `yaw` | 頭部左右轉角（度） | 由 MediaPipe facial transformation matrix 求得；**純單幀計算** |
 | `pitch` | 頭部俯仰角（度） | 同上；**純單幀計算** |
 | `head_offset` | 頭部偏移分數（0–100） | **含跨幀狀態**，見下方說明 |
-| `raw_eye_closed` | 單幀規則：是否閉眼 | 僅使用當列 EAR、pitch 與 head offset |
+| `raw_eye_closed` | 單幀規則：是否閉眼 | 僅使用當列 EAR、pitch、head offset 與本次 run 固定的左右眼 P90 基準 |
 | `raw_head_turned` | 單幀規則：是否轉頭 | 當列 `head_offset >= 55` |
 | `raw_posture_down` | 單幀規則：是否趴下 | Pilot 固定規則：有 pose，且無 face 或 `abs(pitch) >= 35` |
 | `raw_user_missing` | 單幀規則：是否離席 | 同一列 face 與 pose 都未偵測到 |
@@ -428,7 +432,7 @@ fc.exe /b .\vision_lab_out\frame_features_<run1>.csv .\vision_lab_out\frame_feat
 
 偵測不到臉的幀，臉部相關欄位留空字串而不是填 0，以免把「沒有資料」誤當成「數值為 0」。
 
-### 兩個使用時必須知道的性質
+### 三個使用時必須知道的性質
 
 **1. `head_offset` 不是純單幀特徵。**
 它需要先蒐集 5 個穩定樣本建立基準線，期間固定回傳 `0.0`；之後的值是
@@ -443,6 +447,11 @@ cooldown 或投票狀態；`ear_l`、`ear_r`、`yaw`、`pitch` 則是純單幀�
 
 另外，解碼器可能對極少數 sample 不輸出畫面（實測 1708 幀掉 1 幀，且每次都掉同一幀）。
 這是確定性行為，不影響可重現性；掉幀數會記在 logcat 與回傳結果的 `droppedFrameCount`。
+
+**3. 個人化 EAR 校正與單幀規則分離。**
+CSV 分類器先從前 4 秒算出一次左右眼 P90，再將這兩個固定值傳給每一列的
+`FrameClassifier`。`FrameClassifier` 本身仍不保存前幀、計數器或狀態；相同 CSV 與相同
+校正設定會得到相同輸出。畫面完成訊息會顯示左右眼基準與校正樣本數。
 
 ### 建立 Ground Truth
 
@@ -459,9 +468,23 @@ posture_down,42200,56400
 ```
 
 可用狀態是 `normal`、`eye_closed`、`head_turned`、`posture_down`、`user_missing`。
-「分心／轉頭」使用 `head_turned`；Pilot v1 沒有獨立的「低頭」類別，因此低頭與趴下都先使用
+「分心／轉頭」使用 `head_turned`。Ground Truth 應標記產品期望輸出的使用者狀態，而不是
+直接照幾何姿勢命名：正常低頭看書仍標為 `normal`；只有專題定義的真正趴下／睡著行為才標為
 `posture_down`。邊界允許是人工估計值，但第一段到最後一段必須連續、不能留時間空洞，並且要
 覆蓋整支影片。
+
+### 用個人化基準重算既有 CSV
+
+閉眼規則改動不需要重跑 MediaPipe。保留原始檔，另產生一份 P90 後處理結果：
+
+```powershell
+dart run tool\vision_lab_reclassify.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_p90_<runId>.csv
+```
+
+命令會輸出校正樣本數、是否使用 fallback，以及左右眼 P90。接著將新檔交給下方相同的比較
+工具即可；不要覆寫原始逐幀特徵檔。
 
 ### 比較單幀與 3-of-5
 

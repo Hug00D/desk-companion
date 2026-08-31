@@ -86,7 +86,11 @@ class FrameClassifier {
   /// the strongest single-frame posture evidence available.
   final double postureDownPitchThreshold;
 
-  FrameClassification classify(FrameFeatures features) {
+  FrameClassification classify(
+    FrameFeatures features, {
+    double? leftOpenEyeEar,
+    double? rightOpenEyeEar,
+  }) {
     final userMissing = !features.faceDetected && !features.poseDetected;
     final headTurned =
         features.faceDetected &&
@@ -97,7 +101,11 @@ class FrameClassifier {
         (!features.faceDetected ||
             (features.pitch != null &&
                 features.pitch!.abs() >= postureDownPitchThreshold));
-    final eyeClosed = _isEyeClosed(features);
+    final eyeClosed = _isEyeClosed(
+      features,
+      leftOpenEyeEar: leftOpenEyeEar ?? openEyeEar,
+      rightOpenEyeEar: rightOpenEyeEar ?? openEyeEar,
+    );
 
     final state = switch ((userMissing, postureDown, headTurned, eyeClosed)) {
       (true, _, _, _) => RawFrameState.userMissing,
@@ -116,7 +124,11 @@ class FrameClassifier {
     );
   }
 
-  bool _isEyeClosed(FrameFeatures features) {
+  bool _isEyeClosed(
+    FrameFeatures features, {
+    required double leftOpenEyeEar,
+    required double rightOpenEyeEar,
+  }) {
     final leftEar = features.earLeft;
     final rightEar = features.earRight;
     if (!features.faceDetected || leftEar == null || rightEar == null) {
@@ -133,8 +145,8 @@ class FrameClassifier {
     final thresholdScale = pitch != null && pitch >= readingPitchThreshold
         ? readingClosedThresholdScale
         : 1.0;
-    final leftOpen = _earToOpenProbability(leftEar);
-    final rightOpen = _earToOpenProbability(rightEar);
+    final leftOpen = _earToOpenProbability(leftEar, leftOpenEyeEar);
+    final rightOpen = _earToOpenProbability(rightEar, rightOpenEyeEar);
     final minimumOpen = math.min(leftOpen, rightOpen);
     final averageOpen = (leftOpen + rightOpen) / 2;
 
@@ -142,8 +154,8 @@ class FrameClassifier {
         averageOpen < averageEyeClosedThreshold * thresholdScale;
   }
 
-  double _earToOpenProbability(double ear) {
-    final range = openEyeEar - closedEyeEar;
+  double _earToOpenProbability(double ear, double calibratedOpenEyeEar) {
+    final range = calibratedOpenEyeEar - closedEyeEar;
     if (range <= 0) return 0;
     return ((ear - closedEyeEar) / range).clamp(0.0, 1.0);
   }

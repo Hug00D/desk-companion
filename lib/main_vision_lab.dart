@@ -120,7 +120,7 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
         videoPath: videoPath,
         outputPath: nativeOutputPath,
       );
-      await _csvClassifier.classifyFile(
+      final classification = await _csvClassifier.classifyFile(
         inputPath: nativeOutputPath,
         outputPath: outputPath,
       );
@@ -137,8 +137,15 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
       if (!mounted) return;
       setState(() {
         _completedRuns.add(classifiedExtraction);
+        final calibration = classification.eyeCalibration;
+        final calibrationLabel = calibration.usedFallback
+            ? '固定 EAR fallback'
+            : '個人化 EAR P90 '
+                  'L=${calibration.leftOpenEar.toStringAsFixed(3)}, '
+                  'R=${calibration.rightOpenEar.toStringAsFixed(3)}';
         _status =
             '完成 ${extraction.frameCount} 幀；raw_state 是零記憶單幀輸出，'
+            '$calibrationLabel（${calibration.sampleCount} 幀）。'
             '請播放影片確認眨眼幀會短暫跳動。';
       });
     } catch (error) {
