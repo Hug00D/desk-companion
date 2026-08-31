@@ -33,7 +33,10 @@ class VisionLabScreen extends StatefulWidget {
 }
 
 class _VisionLabScreenState extends State<VisionLabScreen> {
-  static const String _assetPath = 'assets/test.mp4';
+  static const String _assetPath = String.fromEnvironment(
+    'VISION_LAB_ASSET',
+    defaultValue: 'assets/test.mp4',
+  );
   static const String _cachedVideoName = 'vision_lab_test.mp4';
 
   final VisionChannel _visionChannel = const VisionChannel();

@@ -328,6 +328,9 @@ backend/testApi/api-tests.http
 Vision Lab 是與正式 app 分離的量測工具，用途是在**已錄好的影片**上逐幀抽取視覺特徵，
 產生可重現的 `frame_features.csv`，供後續比較不同時序判斷策略（單幀 vs N-of-M 投票）使用。
 
+可讀的歷次實驗結果與後續紀錄模板放在 [`docs/vision-lab-test-log.md`](docs/vision-lab-test-log.md)；
+`vision_lab_out/` 只保存被 Git 忽略的原始 CSV 證據。
+
 它有獨立的 entry point，不會影響正式 app 的行為；特徵計算與正式 app 共用同一套
 `MediaPipeVisionManager`，不另外複製一份公式。
 
@@ -339,8 +342,9 @@ presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會�
 
 ### 啟動方式
 
-測試影片放在 `assets/`，由 `lib/main_vision_lab.dart` 的 `_assetPath` 指定
-（目前是 `assets/test.mp4`）。要換影片就改這個常數，並確認 `pubspec.yaml` 的 `assets:` 有登錄。
+測試影片放在 `assets/`，預設使用 `assets/test.mp4`。可用
+`VISION_LAB_ASSET` 的 dart define 切換影片，不需要反覆修改程式；目標影片仍須在
+`pubspec.yaml` 的 `assets:` 登錄。
 
 不需要相機，模擬器即可執行（MediaPipe 有 x86_64 native library，且走 CPU 推論）：
 
@@ -354,8 +358,11 @@ presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會�
 再從另一個 PowerShell 視窗啟動 Lab（裝置 ID 可換成實際模擬器或手機）：
 
 ```powershell
-flutter run -d emulator-5554 -t lib/main_vision_lab.dart
+flutter run -d emulator-5554 -t lib/main_vision_lab.dart `
+  --dart-define=VISION_LAB_ASSET=assets/test1.mp4
 ```
+
+省略 `--dart-define` 時會使用預設的 `assets/test.mp4`。
 
 畫面上的影片只是預覽，**不驅動推論**。按下「產生 frame_features.csv」後，由原生端
 `OfflineVideoFrameDecoder` 以 MediaCodec 逐幀解碼並送進 MediaPipe。每按一次產生一個
