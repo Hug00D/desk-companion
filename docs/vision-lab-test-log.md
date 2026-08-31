@@ -47,7 +47,7 @@ metrics CSV 放在專案根目錄的 `vision_lab_out/`，並由 `.gitignore` 排
 ### 執行版本與環境
 
 - Branch：`codex/vision-lab-pilot-v1`
-- 紀錄建立時的基準 commit：`841c817`（Name Vision Lab output by video）
+- Pilot v1 收尾 commit：`5ec01eb`（Document Vision Lab pilot results）
 - test1／test2 抽取裝置：Pixel 6a API 31 Android 模擬器，x86_64、CPU MediaPipe
 - test1／test2 使用 `VISION_LAB_ASSET` 選片參數與 pubspec asset 登錄執行；此設定納入本次
   Pilot v1 工程收尾。
@@ -130,6 +130,73 @@ Frame accuracy 以 3680 幀加權；平均延遲以 6 個已配對真實事件�
 Pilot v1 已完成，停止增加報表 UI、5-of-7、遲滯、cooldown 或批次掃描。若另開 v2，第一個
 研究問題應限定為持續性 `eye_closed` 誤判，並使用新的校正影片調整規則，再用未參與調參的
 影片驗證，避免在同一批資料上調參與宣稱改善。
+
+---
+
+## V2 診斷 1：test1 持續性閉眼誤判
+
+### 日期與問題
+
+- 日期：2026-08-31
+- Branch：`codex/vision-lab-v2-eye-calibration`
+- 問題：為什麼 test1 有 700 / 960 幀被零記憶規則判為 `eye_closed`？
+- 本階段只讀取 Pilot v1 的原始 CSV，沒有修改 FrameClassifier 或正式 app。
+
+### 三支影片的 EAR 概況
+
+`Face + EAR` 是同時有臉且左右 EAR 完整的幀數；閉眼比例以這些幀為分母。
+
+| 影片 | 總幀數 | Face + EAR | `raw_eye_closed` | 閉眼比例 | 平均 EAR 中位數 | 平均 EAR Q25–Q75 | abs(pitch) 中位數／Q95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 1707 | 1205 | 318 | 26.4% | 0.1781 | 0.1451–0.2013 | 4.4° / 47.1° |
+| test1 | 960 | 960 | 700 | 72.9% | 0.1577 | 0.1471–0.1640 | 2.4° / 4.8° |
+| test2 | 1013 | 269 | 147 | 54.6% | 0.1621 | 0.1305–0.1746 | 2.2° / 33.1° |
+
+test2 有大量趴下與離席區段，不能把上表的閉眼比例直接當正常坐姿誤判率；此表只用來比較
+輸入特徵的尺度。
+
+### test1 的 Ground Truth 分解
+
+| Ground Truth | 幀數 | 判為 `raw_eye_closed` | 比例 |
+| --- | ---: | ---: | ---: |
+| normal | 828 | 691 | 83.5% |
+| head_turned | 132 | 9 | 6.8% |
+
+test1 全部 960 幀都有臉與左右 EAR，且 abs(pitch) 中位數僅 2.4°、Q95 僅 4.8°，因此持續
+閉眼誤判不是缺臉、低頭或 reading-pitch 門檻縮放造成。左右眼 EAR 中位數分別為 0.1670 與
+0.1477，存在明顯不對稱；右眼中位數已落在目前規則的低開眼區間。
+
+目前 EAR 會先以 `[0.13, 0.27]` 映射到 `[0, 1]` 的開眼機率，再要求：
+
+```text
+min(left_open, right_open) < 0.18
+且 average(left_open, right_open) < 0.28
+```
+
+在沒有 reading-pitch 縮放且 EAR 尚未被 clamp 的範圍內，這約等於單眼 EAR 小於 0.1552，
+同時雙眼平均 EAR 小於 0.1692。test1 的正常坐姿分布大量落在這兩個門檻以下，所以形成
+持續性錯誤；3-of-5 只會保留持續錯誤，無法像過濾單次眨眼一樣消除它。
+
+### 結論與停止點
+
+- 原因定位為固定 EAR 映射／門檻不適合 test1 的人物與拍攝條件，而不是 PTS、3-of-5、
+  face detection 或 pitch 判斷失敗。
+- Pilot v1 三支影片的 `eye_closed` Ground Truth support 為 0，沒有真正閉眼樣本可估計 Recall，
+  因此現在不能根據正常幀單方面把門檻調低；那會有漏掉真正閉眼的風險。
+- 在取得校正影片以前停止修改 FrameClassifier。
+
+### 下一個最小實驗：閉眼校正影片
+
+使用同一支 iPhone 16、相近距離與光線，固定拍攝一支約 30–45 秒影片，依序包含：
+
+1. 0–8 秒：正常睜眼看前方，標為 `normal`。
+2. 8–13 秒：自然眨眼數次，Ground Truth 仍標為 `normal`。
+3. 13–18 秒：持續閉眼約 5 秒，標為 `eye_closed`。
+4. 18–26 秒：低頭但眼睛保持睜開，標為 `posture_down` 或依實際研究定義標記。
+5. 26 秒到結束：回正並正常睜眼，標為 `normal`。
+
+這支影片只用於選擇閉眼門檻；調整完成後，必須另外錄製至少一支未參與調參的驗證影片，
+再報告新的 Precision／Recall／F1，不能直接用校正影片宣稱改善。
 
 ---
 
