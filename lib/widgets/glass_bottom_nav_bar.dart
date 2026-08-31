@@ -37,27 +37,17 @@ class GlassBottomNavBar extends StatelessWidget {
       left: horizontalInset,
       right: horizontalInset,
       bottom: bottomInset,
-      child: SafeArea(
-        top: false,
-        child: animation == null
-            ? _buildGlassBody(context)
-            : AnimatedBuilder(
-                animation: animation!,
-                builder: (context, child) => _buildGlassBody(context),
-              ),
-      ),
+      child: SafeArea(top: false, child: _buildGlassBody(context)),
     );
   }
 
   Widget _buildGlassBody(BuildContext context) {
     final statusColor = glowColor ?? const Color(0xFF79D2F5);
-    final pulse = (glowPulseBuilder?.call() ?? 0.16).clamp(0.0, 1.0);
-    final glowAlpha = 0.18 + pulse * 0.32;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
         child: Container(
           height: barHeight,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -67,9 +57,9 @@ class GlassBottomNavBar extends StatelessWidget {
             border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
             boxShadow: [
               BoxShadow(
-                color: statusColor.withValues(alpha: glowAlpha),
-                blurRadius: 22 + pulse * 20,
-                spreadRadius: 0.6 + pulse * 1.8,
+                color: statusColor.withValues(alpha: 0.24),
+                blurRadius: 24,
+                spreadRadius: 0.8,
               ),
               const BoxShadow(
                 color: Color(0x24000000),
@@ -80,24 +70,16 @@ class GlassBottomNavBar extends StatelessWidget {
           ),
           child: Stack(
             children: [
-              Positioned(
-                left: 18,
-                right: 18,
-                top: 0,
-                child: Container(
-                  height: 2,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.transparent,
-                        statusColor.withValues(alpha: glowAlpha),
-                        Colors.transparent,
-                      ],
-                    ),
+              if (animation == null)
+                _buildGlowLine(statusColor, 0.16)
+              else
+                AnimatedBuilder(
+                  animation: animation!,
+                  builder: (context, child) => _buildGlowLine(
+                    statusColor,
+                    (glowPulseBuilder?.call() ?? 0.16).clamp(0.0, 1.0),
                   ),
                 ),
-              ),
               Row(
                 children: [
                   _NavItem(
@@ -130,6 +112,34 @@ class GlassBottomNavBar extends StatelessWidget {
                   ),
                 ],
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGlowLine(Color statusColor, double pulse) {
+    final glowAlpha = 0.18 + pulse * 0.32;
+    return Positioned(
+      left: 18,
+      right: 18,
+      top: 0,
+      child: Container(
+        height: 2,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: statusColor.withValues(alpha: glowAlpha * 0.7),
+              blurRadius: 4 + pulse * 6,
+            ),
+          ],
+          gradient: LinearGradient(
+            colors: [
+              Colors.transparent,
+              statusColor.withValues(alpha: glowAlpha),
+              Colors.transparent,
             ],
           ),
         ),

@@ -15,6 +15,18 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       APP_AUTH_RETURN_RESET_TOKEN_FOR_TESTING: ${APP_AUTH_RETURN_RESET_TOKEN_FOR_TESTING:-false}
       APP_AUTH_DEMO_VERIFICATION_CODE: ${APP_AUTH_DEMO_VERIFICATION_CODE:-1234}
+      # Ollama runs as a separate container published on the host's 11434.
+      # From inside this container, localhost is the container itself, so reach
+      # the host gateway instead (extra_hosts maps host.docker.internal on Linux).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # The AI reply is synthesized before this API returns. On the DGX Spark,
+      # set VOICE_SERVICE_URL=http://100.119.136.82:8001 in backend/.env.
+      ASSISTANT_VOICE_ENABLED: ${ASSISTANT_VOICE_ENABLED:-true}
+      VOICE_SERVICE_URL: ${VOICE_SERVICE_URL:-http://host.docker.internal:8001}
+      VOICE_SERVICE_CONNECT_TIMEOUT_SECONDS: ${VOICE_SERVICE_CONNECT_TIMEOUT_SECONDS:-3}
+      VOICE_SERVICE_REQUEST_TIMEOUT_SECONDS: ${VOICE_SERVICE_REQUEST_TIMEOUT_SECONDS:-150}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-8080}:8080"
     restart: unless-stopped

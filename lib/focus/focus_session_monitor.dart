@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../vision/companion_state_evaluator.dart';
+import 'focus_session_report.dart';
 
 enum FocusInterventionType {
   reminder,
@@ -14,11 +15,13 @@ class FocusIntervention {
   const FocusIntervention({
     required this.type,
     required this.status,
+    required this.cause,
     required this.episodeDuration,
   });
 
   final FocusInterventionType type;
   final CompanionStatus status;
+  final CompanionCause cause;
   final Duration episodeDuration;
 }
 
@@ -40,8 +43,10 @@ class FocusSessionMonitor extends ChangeNotifier {
   final Map<CompanionStatus, _StatusEvidence> _evidenceByStatus =
       <CompanionStatus, _StatusEvidence>{};
   final Map<CompanionStatus, int> _eventCounts = <CompanionStatus, int>{};
+  final Map<CompanionCause, int> _causeEventCounts = <CompanionCause, int>{};
 
   CompanionStatus _lastObservedStatus = CompanionStatus.normal;
+  CompanionCause _lastObservedCause = CompanionCause.none;
   CompanionStatus? _activeEpisodeStatus;
   CompanionStatus? _autoPausedStatus;
   DateTime? _lastSampleAt;
@@ -50,6 +55,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   Duration effectiveFocusDuration = Duration.zero;
   Duration distractedDuration = Duration.zero;
+  FocusSessionReport? lastCompletedReport;
 
   bool severeAutoPauseEnabled = true;
   bool longDistractionAutoPauseEnabled = false;
@@ -58,6 +64,8 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   int eventCountFor(CompanionStatus status) => _eventCounts[status] ?? 0;
 
+  int causeEventCountFor(CompanionCause cause) => _causeEventCounts[cause] ?? 0;
+
   int get totalEventCount =>
       _eventCounts.values.fold<int>(0, (total, count) => total + count);
 
@@ -65,9 +73,36 @@ class FocusSessionMonitor extends ChangeNotifier {
     effectiveFocusDuration = Duration.zero;
     distractedDuration = Duration.zero;
     _eventCounts.clear();
+    _causeEventCounts.clear();
+    lastCompletedReport = null;
     _lastSampleAt = now ?? DateTime.now();
     _clearAllState();
     notifyListeners();
+  }
+
+  FocusSessionReport completeSession({
+    required Duration plannedDuration,
+    DateTime? now,
+  }) {
+    final report = FocusSessionReport(
+      completedAt: now ?? DateTime.now(),
+      plannedDuration: plannedDuration,
+      effectiveFocusDuration: effectiveFocusDuration,
+      distractedDuration: distractedDuration,
+      eventCounts: <CompanionStatus, int>{
+        for (final status in CompanionStatus.values)
+          if (eventCountFor(status) > 0) status: eventCountFor(status),
+      },
+      causeEventCounts: <CompanionCause, int>{
+        for (final cause in CompanionCause.values)
+          if (causeEventCountFor(cause) > 0) cause: causeEventCountFor(cause),
+      },
+    );
+    lastCompletedReport = report;
+    _lastSampleAt = null;
+    _clearAllState();
+    notifyListeners();
+    return report;
   }
 
   void endSession() {
@@ -96,6 +131,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   List<FocusIntervention> update({
     required CompanionStatus status,
+    required CompanionCause cause,
     required bool sessionActive,
     required bool sessionRunning,
     required bool sessionAutoPaused,
@@ -109,9 +145,10 @@ class FocusSessionMonitor extends ChangeNotifier {
       shouldCollectEvidence: shouldCollectEvidence,
     );
     _lastObservedStatus = status;
+    _lastObservedCause = cause;
 
     if (sessionAutoPaused) {
-      final interventions = _handleAutoPausedStatus(status, timestamp);
+      final interventions = _handleAutoPausedStatus(status, cause, timestamp);
       notifyListeners();
       return interventions;
     }
@@ -127,19 +164,21 @@ class FocusSessionMonitor extends ChangeNotifier {
       _clearAllState();
       _lastSampleAt = timestamp;
       _lastObservedStatus = status;
-      _touchCurrentStatus(status, timestamp);
+      _lastObservedCause = cause;
+      _touchCurrentStatus(status, cause, timestamp);
       _updateActiveStatus(status);
       notifyListeners();
       return const <FocusIntervention>[];
     }
 
     _normalStartedAt = null;
-    _touchCurrentStatus(status, timestamp);
+    _touchCurrentStatus(status, cause, timestamp);
     _expireStaleEvidence(timestamp);
     _updateActiveStatus(status);
 
     final interventions = _evaluateEvidence(
       currentStatus: status,
+      currentCause: cause,
       sessionRunning: sessionRunning,
     );
     notifyListeners();
@@ -162,8 +201,12 @@ class FocusSessionMonitor extends ChangeNotifier {
         _lastObservedStatus != CompanionStatus.normal) {
       final evidence = _evidenceByStatus.putIfAbsent(
         _lastObservedStatus,
-        () => _StatusEvidence(seenAt: previousSampleAt),
+        () => _StatusEvidence(
+          seenAt: previousSampleAt,
+          cause: _lastObservedCause,
+        ),
       );
+      evidence.cause = _lastObservedCause;
       evidence.accumulated += delta;
       evidence.lastSeenAt = timestamp;
     }
@@ -177,12 +220,17 @@ class FocusSessionMonitor extends ChangeNotifier {
     }
   }
 
-  void _touchCurrentStatus(CompanionStatus status, DateTime timestamp) {
+  void _touchCurrentStatus(
+    CompanionStatus status,
+    CompanionCause cause,
+    DateTime timestamp,
+  ) {
     if (status == CompanionStatus.normal) return;
     final evidence = _evidenceByStatus.putIfAbsent(
       status,
-      () => _StatusEvidence(seenAt: timestamp),
+      () => _StatusEvidence(seenAt: timestamp, cause: cause),
     );
+    evidence.cause = cause;
     evidence.lastSeenAt = timestamp;
   }
 
@@ -213,6 +261,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   List<FocusIntervention> _evaluateEvidence({
     required CompanionStatus currentStatus,
+    required CompanionCause currentCause,
     required bool sessionRunning,
   }) {
     final interventions = <FocusIntervention>[];
@@ -225,12 +274,13 @@ class FocusSessionMonitor extends ChangeNotifier {
       if (isCurrentStatus &&
           !evidence.reminderSent &&
           status != CompanionStatus.userMissing &&
-          evidence.accumulated >= reminderThreshold) {
+          evidence.accumulated >= _reminderThresholdFor(status)) {
         evidence.reminderSent = true;
         interventions.add(
           FocusIntervention(
             type: FocusInterventionType.reminder,
             status: status,
+            cause: evidence.cause,
             episodeDuration: evidence.accumulated,
           ),
         );
@@ -241,10 +291,13 @@ class FocusSessionMonitor extends ChangeNotifier {
           evidence.accumulated >= eventThreshold) {
         evidence.eventRecorded = true;
         _eventCounts[status] = eventCountFor(status) + 1;
+        _causeEventCounts[evidence.cause] =
+            causeEventCountFor(evidence.cause) + 1;
         interventions.add(
           FocusIntervention(
             type: FocusInterventionType.eventRecorded,
             status: status,
+            cause: evidence.cause,
             episodeDuration: evidence.accumulated,
           ),
         );
@@ -255,6 +308,7 @@ class FocusSessionMonitor extends ChangeNotifier {
       }
       final pauseIntervention = _pauseInterventionFor(
         status: status,
+        cause: isCurrentStatus ? currentCause : evidence.cause,
         evidenceDuration: evidence.accumulated,
       );
       if (pauseIntervention == null) continue;
@@ -270,8 +324,22 @@ class FocusSessionMonitor extends ChangeNotifier {
     return interventions;
   }
 
+  Duration _reminderThresholdFor(CompanionStatus status) {
+    switch (status) {
+      case CompanionStatus.sleeping:
+        return const Duration(seconds: 2);
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+      case CompanionStatus.fatigue:
+      case CompanionStatus.distracted:
+      case CompanionStatus.userMissing:
+        return reminderThreshold;
+    }
+  }
+
   List<FocusIntervention> _handleAutoPausedStatus(
     CompanionStatus status,
+    CompanionCause cause,
     DateTime timestamp,
   ) {
     if (_recoveryPromptDelivered) return const <FocusIntervention>[];
@@ -286,8 +354,9 @@ class FocusSessionMonitor extends ChangeNotifier {
     }
 
     final recoveredStatus = _autoPausedStatus ?? CompanionStatus.normal;
-    final episodeDuration =
-        _evidenceByStatus[recoveredStatus]?.accumulated ?? Duration.zero;
+    final recoveredEvidence = _evidenceByStatus[recoveredStatus];
+    final episodeDuration = recoveredEvidence?.accumulated ?? Duration.zero;
+    final recoveredCause = recoveredEvidence?.cause ?? cause;
     _resetEvidence();
     _autoPausedStatus = null;
     _recoveryPromptDelivered = true;
@@ -295,6 +364,7 @@ class FocusSessionMonitor extends ChangeNotifier {
       FocusIntervention(
         type: FocusInterventionType.recovered,
         status: recoveredStatus,
+        cause: recoveredCause,
         episodeDuration: episodeDuration,
       ),
     ];
@@ -302,6 +372,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   FocusIntervention? _pauseInterventionFor({
     required CompanionStatus status,
+    required CompanionCause cause,
     required Duration evidenceDuration,
   }) {
     FocusInterventionType? type;
@@ -318,13 +389,7 @@ class FocusSessionMonitor extends ChangeNotifier {
         threshold = const Duration(seconds: 10);
         type = FocusInterventionType.offerPause;
         break;
-      case CompanionStatus.drowsy:
-        threshold = const Duration(seconds: 10);
-        type = severeAutoPauseEnabled
-            ? FocusInterventionType.autoPause
-            : FocusInterventionType.offerPause;
-        break;
-      case CompanionStatus.postureDown:
+      case CompanionStatus.sleeping:
         threshold = const Duration(seconds: 8);
         type = severeAutoPauseEnabled
             ? FocusInterventionType.autoPause
@@ -345,6 +410,7 @@ class FocusSessionMonitor extends ChangeNotifier {
     return FocusIntervention(
       type: type,
       status: status,
+      cause: cause,
       episodeDuration: evidenceDuration,
     );
   }
@@ -354,6 +420,7 @@ class FocusSessionMonitor extends ChangeNotifier {
     _activeEpisodeStatus = null;
     _normalStartedAt = null;
     _lastObservedStatus = CompanionStatus.normal;
+    _lastObservedCause = CompanionCause.none;
   }
 
   void _clearAllState() {
@@ -364,9 +431,11 @@ class FocusSessionMonitor extends ChangeNotifier {
 }
 
 class _StatusEvidence {
-  _StatusEvidence({required DateTime seenAt}) : lastSeenAt = seenAt;
+  _StatusEvidence({required DateTime seenAt, required this.cause})
+    : lastSeenAt = seenAt;
 
   DateTime lastSeenAt;
+  CompanionCause cause;
   Duration accumulated = Duration.zero;
   bool reminderSent = false;
   bool eventRecorded = false;

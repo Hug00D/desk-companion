@@ -1,8 +1,0 @@
-cd E:\Android\desk_buddy\desk-companion\backend
-docker compose up -d db
-
-cd E:\Android\desk_buddy\desk-companion\backend\desk_companion_backend
-mvn spring-boot:run
-
-模擬器flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
-手機flutter run --dart-define=API_BASE_URL=http://10.89.249.122:8080

@@ -82,6 +82,21 @@ void main() {
       candidates: <VoiceCandidate>[
         VoiceCandidate(text: '幫我開始番茄鐘', confidence: 0.91),
       ],
+      recognitionParts: <VoiceRecognitionPart>[
+        VoiceRecognitionPart(
+          text: '幫我開始番茄鐘',
+          formattedText: '幫我開始番茄鐘。',
+          timestampMs: 120,
+          confidence: 0.9,
+        ),
+      ],
+      alternatives: <VoiceAlternativeSpan>[
+        VoiceAlternativeSpan(
+          startIndex: 0,
+          endIndex: 8,
+          texts: <String>['幫我啟動番茄鐘'],
+        ),
+      ],
     );
 
     final event = VoiceEventPayload.fromRecognition(
@@ -94,6 +109,12 @@ void main() {
     expect(recognitionJson.containsKey('transcript'), isFalse);
     expect(recognitionJson['candidates'], <Map<String, dynamic>>[
       <String, dynamic>{'confidence': 0.91},
+    ]);
+    expect(recognitionJson['recognitionParts'], <Map<String, dynamic>>[
+      <String, dynamic>{'timestampMs': 120, 'confidence': 0.9},
+    ]);
+    expect(recognitionJson['alternatives'], <Map<String, dynamic>>[
+      <String, dynamic>{'startIndex': 0, 'endIndex': 8},
     ]);
   });
 

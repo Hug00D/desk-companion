@@ -1,0 +1,55 @@
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.09-py3
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUTF8=1 \
+    PYTHONIOENCODING=utf-8
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        ffmpeg \
+        git \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsndfile1 \
+        ninja-build \
+        pkg-config \
+        swig \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.gpt-sovits-tts.txt /tmp/requirements.gpt-sovits-tts.txt
+COPY requirements.txt /tmp/requirements.voice-service.txt
+
+# The NGC image already contains the matching CUDA build of Torch.
+# It does not ship torchaudio on ARM64, so build TorchAudio against the
+# installed NVIDIA Torch instead of allowing pip to replace Torch.
+RUN unset PIP_CONSTRAINT \
+    && python -m pip install --upgrade pip setuptools wheel
+
+ARG TORCHAUDIO_VERSION=v2.9.0
+RUN git clone --depth 1 --branch "${TORCHAUDIO_VERSION}" \
+        https://github.com/pytorch/audio.git /tmp/torchaudio \
+    && cd /tmp/torchaudio \
+    && unset PIP_CONSTRAINT \
+    && BUILD_SOX=0 USE_FFMPEG=0 USE_CUDA=0 BUILD_CUDA_CTC_DECODER=0 \
+        python -m pip install --no-build-isolation --no-deps . \
+    && python -c "import torch, torchaudio; print('torch=', torch.__version__, 'torchaudio=', torchaudio.__version__)" \
+    && rm -rf /tmp/torchaudio
+
+RUN unset PIP_CONSTRAINT \
+    && python -m pip install -r /tmp/requirements.gpt-sovits-tts.txt \
+    && python -m pip install -r /tmp/requirements.voice-service.txt \
+    && ln -sf "$(command -v python)" /usr/local/bin/desk-voice-python
+
+WORKDIR /srv/voice
+
+EXPOSE 8001
+
+CMD ["/usr/local/bin/desk-voice-python", "app/main.py", "--host", "0.0.0.0", "--port", "8001"]

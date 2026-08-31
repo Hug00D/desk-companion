@@ -94,15 +94,35 @@ class VoiceRecognitionResult {
         'formattedTranscript': formattedTranscript,
       'isFinal': isFinal,
       'candidates': candidates
-          .map((candidate) => candidate.toJson())
+          .map(
+            (candidate) => <String, dynamic>{
+              if (includeTranscript) 'text': candidate.text,
+              if (candidate.confidence != null)
+                'confidence': candidate.confidence,
+            },
+          )
           .toList(growable: false),
       if (audio != null) 'audio': audio!.toJson(),
       if (language != null) 'language': language!.toJson(),
       'recognitionParts': recognitionParts
-          .map((part) => part.toJson())
+          .map(
+            (part) => <String, dynamic>{
+              if (includeTranscript) 'text': part.text,
+              if (includeTranscript && part.formattedText != null)
+                'formattedText': part.formattedText,
+              if (part.timestampMs != null) 'timestampMs': part.timestampMs,
+              if (part.confidence != null) 'confidence': part.confidence,
+            },
+          )
           .toList(growable: false),
       'alternatives': alternatives
-          .map((alternative) => alternative.toJson())
+          .map(
+            (alternative) => <String, dynamic>{
+              'startIndex': alternative.startIndex,
+              'endIndex': alternative.endIndex,
+              if (includeTranscript) 'texts': alternative.texts,
+            },
+          )
           .toList(growable: false),
       if (error != null) 'error': error!.toJson(),
     };

@@ -6,8 +6,8 @@ import 'package:flutter/services.dart';
 import '../focus/focus_session_monitor.dart';
 import '../focus/pomodoro_controller.dart';
 import '../vision/companion_state_evaluator.dart';
+import '../widgets/focus_session_report_dialog.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
-import '../widgets/rive_asset_background.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
 
@@ -40,10 +40,6 @@ class _TasksScreenState extends State<TasksScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const RiveAssetBackground(
-            assetPath: 'assets/test2.riv',
-            motionIntensity: 5,
-          ),
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -219,6 +215,35 @@ class _TasksScreenState extends State<TasksScreen> {
           _buildDurationSelector(enabled: !isActive),
           const SizedBox(height: 18),
           _buildTimerControls(status),
+          if (status == PomodoroStatus.completed &&
+              _focusSessionMonitor.lastCompletedReport != null) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: OutlinedButton.icon(
+                onPressed: () => showFocusSessionReportDialog(
+                  context: context,
+                  report: _focusSessionMonitor.lastCompletedReport!,
+                ),
+                icon: const Icon(Icons.auto_graph_rounded, size: 20),
+                label: const Text('查看本輪專注報告'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF9FF3D0),
+                  side: BorderSide(
+                    color: const Color(0xFF9FF3D0).withValues(alpha: 0.45),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -398,7 +423,7 @@ class _TasksScreenState extends State<TasksScreen> {
         ],
         _RoundControlButton(
           icon: isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          tooltip: isRunning ? '暫停' : (isPaused ? '繼續' : '開始'),
+          tooltip: isRunning ? '暫停' : (isPaused ? '回首頁繼續' : '開始'),
           isPrimary: true,
           foregroundColor: const Color(0xFF17334B),
           onTap: () {
@@ -406,8 +431,10 @@ class _TasksScreenState extends State<TasksScreen> {
               _pomodoroController.pause();
             } else if (isPaused) {
               _pomodoroController.resume();
+              Navigator.popUntil(context, (route) => route.isFirst);
             } else {
               _pomodoroController.start(durationMinutes: _selectedMinutes);
+              Navigator.popUntil(context, (route) => route.isFirst);
             }
           },
         ),
@@ -516,15 +543,13 @@ class _TasksScreenState extends State<TasksScreen> {
       case CompanionStatus.normal:
         return '正常';
       case CompanionStatus.attention:
-        return '頻繁眨眼';
+        return '注意力波動';
       case CompanionStatus.fatigue:
         return '長時間閉眼';
       case CompanionStatus.distracted:
         return '分心';
-      case CompanionStatus.drowsy:
-        return '打瞌睡';
-      case CompanionStatus.postureDown:
-        return '趴下';
+      case CompanionStatus.sleeping:
+        return '疑似睡著';
       case CompanionStatus.userMissing:
         return '離席';
     }
@@ -558,14 +583,18 @@ class _TasksScreenState extends State<TasksScreen> {
 
   String _pauseCaption() {
     switch (_pomodoroController.pauseReason) {
+      case PomodoroPauseReason.navigation:
+        return '切換頁面，回首頁後自動繼續';
+      case PomodoroPauseReason.appBackground:
+        return '離開 App，回首頁後可繼續';
       case PomodoroPauseReason.distracted:
         return '分心過久，已自動暫停';
       case PomodoroPauseReason.fatigue:
         return '閉眼過久，已自動暫停';
       case PomodoroPauseReason.drowsy:
-        return '打瞌睡，已自動暫停';
+        return '疑似打瞌睡，已自動暫停';
       case PomodoroPauseReason.postureDown:
-        return '趴下過久，已自動暫停';
+        return '偵測到趴下，已自動暫停';
       case PomodoroPauseReason.userMissing:
         return '離席過久，已自動暫停';
       case PomodoroPauseReason.manual:

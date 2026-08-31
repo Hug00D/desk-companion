@@ -122,8 +122,21 @@ class VoiceCommandParser {
       textPool,
       _focusProblemKeywords,
     );
+    final hasTimerProblemKeyword = _containsAny(
+      textPool,
+      _timerProblemKeywords,
+    );
 
-    if (hasPomodoroKeyword || (hasStartKeyword && hasFocusProblemKeyword)) {
+    if (hasPomodoroKeyword && hasTimerProblemKeyword) {
+      return VoiceCommand(
+        type: VoiceCommandType.unknown,
+        sourceText: sourceText,
+        confidence: bestConfidence,
+        reason: 'Timer status or problem statement should be decided by AI.',
+      );
+    }
+
+    if (hasStartKeyword && (hasPomodoroKeyword || hasFocusProblemKeyword)) {
       return VoiceCommand(
         type: VoiceCommandType.startPomodoro,
         sourceText: sourceText,
@@ -164,7 +177,9 @@ class VoiceCommandParser {
         return int.tryParse(digitMatch.group(1)!);
       }
 
-      for (final entry in _chineseMinuteValues.entries) {
+      final minuteEntries = _chineseMinuteValues.entries.toList()
+        ..sort((a, b) => b.key.length.compareTo(a.key.length));
+      for (final entry in minuteEntries) {
         if (text.contains(entry.key)) return entry.value;
       }
     }
@@ -173,8 +188,8 @@ class VoiceCommandParser {
   }
 
   bool _looksLikePomodoroRequest(List<String> textPool) {
-    return _containsAny(textPool, _pomodoroKeywords) ||
-        (_containsAny(textPool, _startKeywords) &&
+    return _containsAny(textPool, _startKeywords) &&
+        (_containsAny(textPool, _pomodoroKeywords) ||
             _containsAny(textPool, _focusProblemKeywords));
   }
 
@@ -235,6 +250,16 @@ const List<String> _timerStatusKeywords = [
   '\u5269\u5e7e\u5206\u9418',
   '\u9084\u5269\u5e7e\u5206\u9418',
   '\u73fe\u5728\u5269',
+];
+
+const List<String> _timerProblemKeywords = [
+  '\u4f3c\u4e4e',
+  '\u597d\u50cf',
+  '\u6c92\u5728\u52d5',
+  '\u6c92\u6709\u52d5',
+  '\u6c92\u958b\u59cb',
+  '\u6c92\u53cd\u61c9',
+  '\u600e\u9ebc',
 ];
 
 const List<String> _pomodoroKeywords = [

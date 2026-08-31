@@ -1,0 +1,17 @@
+項目	設定
+SSH tunnel	ssh -L 11434:localhost:11434 desk_companion@100.119.136.81
+密碼:
+Ollama 位址(本地開發用)	http://localhost:11434
+後端	用您本機的 mvn/docker 跑,不用部署到伺服器
+
+cd E:\Android\desk_buddy\desk-companion\backend\desk_companion_backend
+$env:OLLAMA_BASE_URL="http://localhost:11434"
+$env:OLLAMA_MODEL="qwen2.5:7b"
+$env:OLLAMA_REQUEST_TIMEOUT_SECONDS="120"
+$env:OLLAMA_CHAT_NUM_PREDICT="32"
+
+mvn spring-boot:run
+
+
+之後開發時,只要這個 tunnel 視窗開著,本地跑的 Spring Boot 後端把 ASSISTANT_SERVICE_URL
+設成 http://localhost:11434 就能呼叫到遠端的 qwen2.5:7b。

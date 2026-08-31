@@ -61,6 +61,7 @@ class VisionEvent {
     required this.severity,
     required this.timestamp,
     required this.status,
+    required this.cause,
     required this.eyeState,
     required this.presenceState,
     required this.poseStateName,
@@ -74,6 +75,7 @@ class VisionEvent {
   final VisionEventSeverity severity;
   final DateTime timestamp;
   final CompanionStatus status;
+  final CompanionCause cause;
   final EyeState eyeState;
   final PresenceState presenceState;
   final String poseStateName;
@@ -96,6 +98,7 @@ class VisionEvent {
       severity: _severityFor(eventType),
       timestamp: timestamp ?? DateTime.now(),
       status: analysis.status,
+      cause: analysis.cause,
       eyeState: analysis.eyeResult.state,
       presenceState: analysis.presenceState,
       poseStateName: analysis.poseState.name,
@@ -122,6 +125,7 @@ class VisionEvent {
       'source': 'vision',
       'severity': severity.storageValue,
       'status': status.name,
+      'cause': cause.name,
       'eyeState': eyeState.name,
       'presenceState': presenceState.name,
       'poseState': poseStateName,
@@ -138,11 +142,10 @@ class VisionEvent {
     if (analysis.status == CompanionStatus.fatigue) {
       return VisionEventType.fatigueDetected;
     }
-    if (analysis.status == CompanionStatus.drowsy) {
-      return VisionEventType.drowsyDetected;
-    }
-    if (analysis.status == CompanionStatus.postureDown) {
-      return VisionEventType.postureDownDetected;
+    if (analysis.status == CompanionStatus.sleeping) {
+      return analysis.cause == CompanionCause.postureDown
+          ? VisionEventType.postureDownDetected
+          : VisionEventType.drowsyDetected;
     }
     if (analysis.status == CompanionStatus.distracted) {
       return VisionEventType.distracted;

@@ -18,25 +18,23 @@ class CompanionController {
   int get postureDownFrameCount => _postureDownFrameCount;
   CompanionAnalysis? get lastAnalysis => _lastAnalysis;
   CompanionStatus get status => _lastAnalysis?.status ?? CompanionStatus.normal;
+  CompanionCause get cause => _lastAnalysis?.cause ?? CompanionCause.none;
 
-  CompanionAnalysis analyze(VisionResult result) {
+  CompanionAnalysis analyze(VisionResult result, {DateTime? observedAt}) {
     final poseSequence = result.poseSequence;
-    final shouldUpdatePostureDown =
-        result.hasPose &&
-        poseSequence != null &&
-        (poseSequence != _lastPoseSequence ||
-            _lastAnalysis?.visionResult.hasPose != true);
+    final isFreshPoseResult =
+        poseSequence != null && poseSequence != _lastPoseSequence;
     final analysis = evaluator.evaluate(
       result: result,
       previousClosedFrameCount: _closedEyeFrameCount,
       previousDistractedFrameCount: _distractedFrameCount,
-      previousPostureDownFrameCount: _postureDownFrameCount,
-      shouldUpdatePostureDown: shouldUpdatePostureDown,
+      isFreshPoseResult: isFreshPoseResult,
+      observedAt: observedAt,
     );
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
     _distractedFrameCount = analysis.headOffsetResult.distractedFrameCount;
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
-    if (result.hasPose && shouldUpdatePostureDown) {
+    if (isFreshPoseResult) {
       _lastPoseSequence = poseSequence;
     }
     _lastAnalysis = analysis;

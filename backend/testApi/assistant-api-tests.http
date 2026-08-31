@@ -1,0 +1,128 @@
+### Desk Companion Assistant API smoke tests
+### Use with VS Code REST Client or IntelliJ HTTP Client
+###
+### Local Ollama tunnel setup:
+### 1. Keep SSH tunnel open:
+###    ssh -L 11434:localhost:11434 desk_companion@100.119.136.81
+### 2. Start local Spring Boot backend with:
+###    $env:OLLAMA_BASE_URL="http://localhost:11434"
+###    # ASSISTANT_SERVICE_URL is also accepted as an alias.
+###    $env:OLLAMA_MODEL="qwen2.5:7b"
+###    $env:OLLAMA_REQUEST_TIMEOUT_SECONDS="120"
+###    $env:OLLAMA_CHAT_NUM_PREDICT="96"
+###    # decide now uses a slim JSON contract ({mode,intent,confidence,minutes});
+###    # defaults are OLLAMA_DECIDE_NUM_PREDICT=48, OLLAMA_DECIDE_TIMEOUT_SECONDS=120.
+###    # If you previously set OLLAMA_DECIDE_NUM_PREDICT=16/25 in this shell,
+###    # clear it first or the JSON will truncate again:
+###    #   Remove-Item Env:OLLAMA_DECIDE_NUM_PREDICT
+###    mvn spring-boot:run
+
+@baseUrl = http://localhost:8080/api/v1
+
+### 1. Phase 1 chat-only smoke test
+# @name assistantChat
+POST {{baseUrl}}/assistant/chat
+Content-Type: application/json
+
+{
+  "message": "請只回覆一句繁體中文：連線成功。"
+}
+
+### 2. Phase 1 chat with app context
+POST {{baseUrl}}/assistant/chat
+Content-Type: application/json
+
+{
+  "message": "我現在讀書讀到有點累，你會怎麼陪我？",
+  "context": {
+    "pomodoro": {
+      "status": "running",
+      "remainingSeconds": 900
+    },
+    "vision": {
+      "state": "fatigue_detected"
+    },
+    "todaySummary": {
+      "focusMinutes": 45,
+      "completedPomodoros": 2
+    }
+  }
+}
+
+### 3. Phase 1 chat with short history
+POST {{baseUrl}}/assistant/chat
+Content-Type: application/json
+
+{
+  "message": "那幫我用一句話鼓勵我。",
+  "history": [
+    {
+      "role": "user",
+      "content": "我今天想專心準備期末專題。"
+    },
+    {
+      "role": "assistant",
+      "content": "好，我會陪你把注意力放回最重要的一步。"
+    }
+  ]
+}
+
+### 4. Future Phase 2 reference: user asks for an app action
+POST {{baseUrl}}/assistant/chat
+Content-Type: application/json
+
+{
+  "message": "幫我開一個 25 分鐘番茄鐘"
+}
+
+### 5. Phase 2 decide: clear app action
+# @name assistantDecideAction
+POST {{baseUrl}}/assistant/decide
+Content-Type: application/json
+
+{
+  "message": "幫我開一個 25 分鐘番茄鐘",
+  "context": {
+    "pomodoro": {
+      "status": "idle"
+    }
+  }
+}
+
+### 6. Phase 2 decide: ambiguous request should clarify
+# @name assistantDecideClarify
+POST {{baseUrl}}/assistant/decide
+Content-Type: application/json
+
+{
+  "message": "幫我一下，我快不行了",
+  "context": {
+    "pomodoro": {
+      "status": "running",
+      "remainingSeconds": 600
+    },
+    "vision": {
+      "state": "fatigue_detected"
+    }
+  }
+}
+
+### 7. Phase 2 decide: pure chat should not bind a tool
+# @name assistantDecideChat
+POST {{baseUrl}}/assistant/decide
+Content-Type: application/json
+
+{
+  "message": "我今天讀書有點挫折，可以鼓勵我一下嗎？"
+}
+
+### 8. Phase 2 decide: deliberately avoids every decideWithLocalRules() keyword
+### so this one actually has to go through Ollama's format:"json" path.
+### Use this to measure decide()'s real latency, not the local-rule shortcut.
+# @name assistantDecideForceOllama
+POST {{baseUrl}}/assistant/decide
+Content-Type: application/json
+
+{
+  "message": "我今天心情普普通通，還沒決定接下來要做什麼"
+}

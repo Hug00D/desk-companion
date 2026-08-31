@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
+import os
 import random
 import subprocess
 import struct
@@ -13,34 +13,48 @@ import threading
 import time
 import wave
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 from gpt_sovits_engine import GptSoVitsEngine
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = SERVICE_ROOT / "output"
-VOICE_CACHE_VERSION = "gpt_sovits_staff_a_v2_slow"
-CACHE_VERSION_FILE = OUTPUT_DIR / ".voice_cache_version"
-CACHE_AUDIO_KEEP_LIMIT = 120
-MIN_GENERATION_INTERVAL_SECONDS = 3.0
+TRANSIENT_AUDIO_MAX_AGE_SECONDS = 10 * 60
+AUDIO_DELETE_GRACE_SECONDS = 30.0
+GENERATION_QUEUE_WAIT_SECONDS = float(
+    os.getenv("VOICE_GENERATION_QUEUE_WAIT_SECONDS", "15")
+)
 DEFAULT_VOICE_NAME: str | None = None
 DEFAULT_VOICE_CULTURE: str | None = None
 GPT_SOVITS_ENABLED = True
 GPT_SOVITS_ENGINE = GptSoVitsEngine()
-_generation_lock = threading.Lock()
+_generation_slot = threading.Lock()
+_generation_state_lock = threading.Lock()
 _generation_in_progress = False
-_last_generation_started_at = 0.0
+_generation_waiting_requests = 0
 _catalog_lock = threading.Lock()
 _last_catalog_text: dict[str, str] = {}
+
+app = FastAPI(title="Desk Companion Voice Service")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 REMINDER_CATALOG: dict[str, tuple[str, ...]] = {
     "attention": (
         "眼睛有點累了，眨眨眼，讓視線休息一下。",
-        "看螢幕有一會兒了，稍微放鬆一下眼睛吧。",
-        "先把視線移開幾秒，眼睛會舒服一點。",
+        "眨眼變得比較頻繁，讓眼睛休息一下吧。",
+        "注意力好像有點波動，先眨眨眼、調整一下視線吧。",
     ),
     "fatigue": (
         "你看起來有點累，先休息一下再繼續。",
@@ -73,8 +87,33 @@ REMINDER_STYLE = {
 }
 
 
-def _json_bytes(payload: dict) -> bytes:
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+def _configure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def _safe_log(message: str) -> None:
+    try:
+        print(message, flush=True)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        safe_message = message.encode(
+            encoding,
+            errors="backslashreplace",
+        ).decode(encoding, errors="replace")
+        print(safe_message, flush=True)
+
+
+def _generation_status() -> dict:
+    with _generation_state_lock:
+        return {
+            "inProgress": _generation_in_progress,
+            "waitingRequests": _generation_waiting_requests,
+            "queueWaitSeconds": GENERATION_QUEUE_WAIT_SECONDS,
+        }
 
 
 def _normalize_voice_name(value: object) -> str | None:
@@ -82,18 +121,6 @@ def _normalize_voice_name(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
-
-
-def _cache_audio_path(
-    text: str,
-    engine_key: str,
-) -> Path:
-    normalized_text = " ".join(text.strip().split())
-    cache_input = f"{VOICE_CACHE_VERSION}\n{engine_key}\n{normalized_text}".encode(
-        "utf-8"
-    )
-    cache_key = hashlib.sha256(cache_input).hexdigest()[:24]
-    return OUTPUT_DIR / f"cached_voice_{cache_key}.wav"
 
 
 def _transient_audio_path(prefix: str = "voice") -> Path:
@@ -130,7 +157,7 @@ def _duration_of_wav(output_path: Path) -> float | None:
         return None
 
 
-def _is_valid_cached_audio(text: str, output_path: Path) -> bool:
+def _is_valid_audio(text: str, output_path: Path) -> bool:
     if not output_path.exists() or output_path.stat().st_size < 1024:
         return False
 
@@ -151,7 +178,7 @@ def _synthesize_gpt_sovits_validated(
 ) -> float:
     for attempt in range(1, attempts + 1):
         duration = GPT_SOVITS_ENGINE.synthesize(text, output_path, style=style)
-        if _is_valid_cached_audio(text, output_path):
+        if _is_valid_audio(text, output_path):
             return duration
 
         output_path.unlink(missing_ok=True)
@@ -322,6 +349,8 @@ def _generate_speech_wav(
     voice_name: str | None,
     voice_culture: str | None,
     style: str,
+    *,
+    allow_system_fallback: bool = True,
 ) -> tuple[str, float, Path]:
     tried_gpt_sovits = GPT_SOVITS_ENABLED and GPT_SOVITS_ENGINE.is_ready()
     if tried_gpt_sovits:
@@ -333,11 +362,16 @@ def _generate_speech_wav(
             )
             return "gpt_sovits", duration, output_path
         except (OSError, RuntimeError) as error:
-            print(f"[voice-service] GPT-SoVITS fallback: {error}", flush=True)
+            _safe_log(f"[voice-service] GPT-SoVITS failed: {error}")
             try:
                 output_path.unlink()
             except OSError:
                 pass
+            if not allow_system_fallback:
+                raise RuntimeError("GPT-SoVITS generation failed") from error
+
+    if not allow_system_fallback:
+        raise RuntimeError("GPT-SoVITS is not ready")
 
     fallback_path = _transient_audio_path()
     duration = _generate_windows_tts_wav(
@@ -403,361 +437,274 @@ $voices | ConvertTo-Json -Depth 4
     return []
 
 
-def _cleanup_old_audio_files(keep: int = 30) -> None:
-    wav_files = sorted(
-        OUTPUT_DIR.glob("voice_*.wav"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    for old_file in wav_files[keep:]:
-        try:
-            old_file.unlink()
-        except OSError:
-            pass
-
-
-def _cleanup_cached_audio_files(keep: int = CACHE_AUDIO_KEEP_LIMIT) -> None:
-    cache_files = sorted(
-        OUTPUT_DIR.glob("cached_voice_*.wav"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    for old_file in cache_files[keep:]:
-        try:
-            old_file.unlink()
-        except OSError:
-            pass
-
-
-def _prepare_cache_storage() -> None:
-    try:
-        previous_version = CACHE_VERSION_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        previous_version = ""
-    if previous_version == VOICE_CACHE_VERSION:
-        return
-
+def _cleanup_stale_audio_files(
+    max_age_seconds: float = TRANSIENT_AUDIO_MAX_AGE_SECONDS,
+) -> int:
+    cutoff = time.time() - max_age_seconds
+    candidates = set(OUTPUT_DIR.glob("voice_*.wav"))
+    candidates.update(OUTPUT_DIR.glob("cached_voice_*.wav"))
     removed = 0
-    for cache_file in OUTPUT_DIR.glob("cached_voice_*.wav"):
+    for audio_file in candidates:
         try:
-            cache_file.unlink()
+            if max_age_seconds > 0 and audio_file.stat().st_mtime > cutoff:
+                continue
+            audio_file.unlink()
             removed += 1
         except OSError:
             pass
-    CACHE_VERSION_FILE.write_text(VOICE_CACHE_VERSION, encoding="utf-8")
-    print(
-        f"[voice-service] cache version updated; removed={removed}",
-        flush=True,
-    )
+    return removed
 
 
-def _prewarm_reminder_cache() -> None:
-    if not GPT_SOVITS_ENABLED or not GPT_SOVITS_ENGINE.is_ready():
-        return
-
-    total = sum(len(messages) for messages in REMINDER_CATALOG.values())
-    generated = 0
-    reused = 0
-    print(f"[voice-service] checking {total} Staff A reminders", flush=True)
-    for status, messages in REMINDER_CATALOG.items():
-        style = REMINDER_STYLE.get(status, "normal")
-        engine_key = f"gpt_sovits_staff_a:{style}"
-        for text in messages:
-            audio_path = _cache_audio_path(text, engine_key)
-            if _is_valid_cached_audio(text, audio_path):
-                reused += 1
-                continue
-            if audio_path.exists():
-                audio_path.unlink(missing_ok=True)
-            try:
-                _synthesize_gpt_sovits_validated(text, audio_path, style)
-            except (OSError, RuntimeError) as error:
-                print(
-                    f"[voice-service] prewarm failed status={status}: {error}",
-                    flush=True,
-                )
-                continue
-            generated += 1
-            print(
-                f"[voice-service] generated {generated}/{total} status={status}",
-                flush=True,
-            )
-    _cleanup_cached_audio_files()
-    print(
-        f"[voice-service] reminder cache ready generated={generated} reused={reused}",
-        flush=True,
-    )
-
-
-def _cached_audio_payload(
-    text: str,
-    audio_path: Path,
-    host: str,
-) -> dict | None:
-    if not audio_path.exists():
-        return None
-
-    if not _is_valid_cached_audio(text, audio_path):
-        try:
-            audio_path.unlink()
-        except OSError:
-            pass
-        return None
-
-    duration = _duration_of_wav(audio_path)
-    if duration is None:
-        return None
-
+def _delete_audio_file(file_path: Path) -> None:
     try:
-        audio_path.touch()
+        file_path.unlink()
     except OSError:
         pass
 
-    return {
+
+def _schedule_audio_delete(file_path: Path) -> None:
+    if AUDIO_DELETE_GRACE_SECONDS <= 0:
+        _delete_audio_file(file_path)
+        return
+    timer = threading.Timer(
+        AUDIO_DELETE_GRACE_SECONDS,
+        _delete_audio_file,
+        args=(file_path,),
+    )
+    timer.daemon = True
+    timer.start()
+
+
+def _is_generated_audio_file(file_path: Path) -> bool:
+    return (
+        file_path.suffix.lower() == ".wav"
+        and (
+            file_path.name.startswith("voice_")
+            or file_path.name.startswith("cached_voice_")
+        )
+        and file_path.parent == OUTPUT_DIR
+        and file_path.exists()
+    )
+
+
+def _audio_response_finished(file_path: Path, content_length: int) -> None:
+    _safe_log(
+        f"[voice-service] audio served pid={os.getpid()} "
+        f"file={file_path.name} bytes={content_length}/{content_length}"
+    )
+    _schedule_audio_delete(file_path)
+
+
+def _generate_tts_payload(body: dict) -> tuple[int, dict]:
+    requested_text = str(body.get("text", "")).strip()
+    if not requested_text:
+        return 400, {"ok": False, "error": "text_required"}
+
+    request_id = str(body.get("requestId", "")).strip()[:128]
+    if not request_id:
+        request_id = f"voice-{time.time_ns()}-{threading.get_ident()}"
+
+    status = str(body.get("status") or "") or None
+    event_type = body.get("eventType")
+    source = str(body.get("source", "unknown"))
+    text = _select_reminder_text(requested_text, status, source)
+    style = REMINDER_STYLE.get(status or "", "normal")
+    voice_name = _normalize_voice_name(body.get("voiceName")) or DEFAULT_VOICE_NAME
+    voice_culture = (
+        _normalize_voice_name(body.get("voiceCulture")) or DEFAULT_VOICE_CULTURE
+    )
+    _cleanup_stale_audio_files()
+    safe_request_id = "".join(
+        character if character.isascii() and character.isalnum() else "_"
+        for character in request_id
+    )[-48:]
+    audio_path = _transient_audio_path(prefix=f"voice_{safe_request_id}")
+
+    global _generation_in_progress, _generation_waiting_requests
+    with _generation_state_lock:
+        _generation_waiting_requests += 1
+    try:
+        generation_slot_acquired = _generation_slot.acquire(
+            timeout=GENERATION_QUEUE_WAIT_SECONDS
+        )
+    finally:
+        with _generation_state_lock:
+            _generation_waiting_requests -= 1
+
+    if not generation_slot_acquired:
+        return 503, {
+            "ok": False,
+            "requestId": request_id,
+            "error": "generation_queue_timeout",
+            "message": "Voice generation stayed busy for too long",
+        }
+
+    with _generation_state_lock:
+        _generation_in_progress = True
+
+    generation_error: Exception | None = None
+    try:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        _safe_log(
+            f"[voice-service {timestamp}] request={request_id} source={source} "
+            f"status={status} event={event_type} "
+            f"voice={'staff_a' if GPT_SOVITS_ENGINE.is_ready() else voice_name or voice_culture or 'auto'} "
+            f"style={style} text={text}"
+        )
+        mode, duration, served_audio_path = _generate_speech_wav(
+            text,
+            audio_path,
+            voice_name,
+            voice_culture,
+            style,
+            allow_system_fallback=source != "assistant",
+        )
+    except Exception as error:
+        generation_error = error
+    finally:
+        with _generation_state_lock:
+            _generation_in_progress = False
+        _generation_slot.release()
+
+    if generation_error is not None:
+        _delete_audio_file(audio_path)
+        return 503, {
+            "ok": False,
+            "requestId": request_id,
+            "error": "gpt_sovits_generation_failed",
+            "message": str(generation_error),
+        }
+
+    return 200, {
         "ok": True,
-        "mode": "cached_wav",
-        "cached": True,
+        "requestId": request_id,
+        "mode": mode,
+        "cached": False,
+        "deleteAfterDownload": True,
+        "requestedText": requested_text,
+        "style": style,
+        "voiceName": voice_name,
+        "voiceCulture": voice_culture,
         "text": text,
-        "audioPath": str(audio_path),
-        "audioUrl": f"http://{host}/audio/{audio_path.name}",
+        "audioPath": str(served_audio_path),
+        "audioUrl": f"/audio/{served_audio_path.name}",
         "durationMs": int(duration * 1000),
     }
 
 
-class VoiceRequestHandler(BaseHTTPRequestHandler):
-    server_version = "DeskCompanionVoiceService/0.1"
+@app.get("/health")
+def health() -> dict:
+    return {
+        "ok": True,
+        "service": "desk_companion_voice_service",
+        "processId": os.getpid(),
+        "mode": "gpt_sovits_with_windows_fallback",
+        "audioRetention": "delete_after_download",
+        "httpServer": "uvicorn",
+        "gptSovits": GPT_SOVITS_ENGINE.status(),
+        "generation": _generation_status(),
+        "defaultVoiceName": DEFAULT_VOICE_NAME,
+        "defaultVoiceCulture": DEFAULT_VOICE_CULTURE,
+    }
 
-    def _send_json(self, status: int, payload: dict) -> None:
-        data = _json_bytes(payload)
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
 
-    def _send_audio_file(self, file_path: Path) -> None:
-        if not file_path.exists() or file_path.parent != OUTPUT_DIR:
-            self._send_json(404, {"ok": False, "error": "audio_not_found"})
-            return
-
-        data = file_path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", "audio/wav")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_OPTIONS(self) -> None:
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def do_GET(self) -> None:
-        path = urlparse(self.path).path
-        if path == "/health":
-            self._send_json(
-                200,
-                {
-                    "ok": True,
-                    "service": "desk_companion_voice_service",
-                    "mode": "gpt_sovits_with_windows_fallback",
-                    "gptSovits": GPT_SOVITS_ENGINE.status(),
-                    "defaultVoiceName": DEFAULT_VOICE_NAME,
-                    "defaultVoiceCulture": DEFAULT_VOICE_CULTURE,
-                },
-            )
-            return
-
-        if path == "/voices":
-            self._send_json(
-                200,
-                {
-                    "ok": True,
-                    "voices": _list_windows_tts_voices(),
-                    "gptSovitsVoices": [
-                        {
-                            "name": "Staff A",
-                            "id": "staff_a_v2_pro_plus",
-                            "styles": sorted(set(REMINDER_STYLE.values())),
-                            "ready": GPT_SOVITS_ENGINE.is_ready(),
-                        }
-                    ],
-                    "defaultVoiceName": DEFAULT_VOICE_NAME,
-                    "defaultVoiceCulture": DEFAULT_VOICE_CULTURE,
-                },
-            )
-            return
-
-        if path.startswith("/audio/"):
-            filename = Path(unquote(path.removeprefix("/audio/"))).name
-            self._send_audio_file(OUTPUT_DIR / filename)
-            return
-
-        self._send_json(404, {"ok": False, "error": "not_found"})
-
-    def do_POST(self) -> None:
-        path = urlparse(self.path).path
-        if path != "/tts":
-            self._send_json(404, {"ok": False, "error": "not_found"})
-            return
-
-        content_length = int(self.headers.get("Content-Length", "0"))
-        raw_body = self.rfile.read(content_length)
-        try:
-            body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        except json.JSONDecodeError:
-            self._send_json(400, {"ok": False, "error": "invalid_json"})
-            return
-
-        requested_text = str(body.get("text", "")).strip()
-        if not requested_text:
-            self._send_json(400, {"ok": False, "error": "text_required"})
-            return
-
-        status = str(body.get("status") or "") or None
-        event_type = body.get("eventType")
-        source = str(body.get("source", "unknown"))
-        text = _select_reminder_text(requested_text, status, source)
-        style = REMINDER_STYLE.get(status or "", "normal")
-        voice_name = _normalize_voice_name(body.get("voiceName")) or DEFAULT_VOICE_NAME
-        voice_culture = (
-            _normalize_voice_name(body.get("voiceCulture")) or DEFAULT_VOICE_CULTURE
-        )
-        host = self.headers.get("Host", "127.0.0.1:8001")
-        if GPT_SOVITS_ENABLED and GPT_SOVITS_ENGINE.is_ready():
-            engine_key = f"gpt_sovits_staff_a:{style}"
-        else:
-            engine_key = f"windows_tts:{voice_name or voice_culture or 'auto'}"
-        audio_path = _cache_audio_path(text, engine_key)
-        cached_payload = _cached_audio_payload(text, audio_path, host)
-        if cached_payload is not None:
-            cached_payload["requestedText"] = requested_text
-            cached_payload["style"] = style
-            cached_payload["voiceName"] = voice_name
-            cached_payload["voiceCulture"] = voice_culture
-            self._send_json(200, cached_payload)
-            return
-
-        global _generation_in_progress, _last_generation_started_at
-        now_monotonic = time.monotonic()
-        with _generation_lock:
-            seconds_since_last_generation = (
-                now_monotonic - _last_generation_started_at
-            )
-            if (
-                _generation_in_progress
-                or seconds_since_last_generation < MIN_GENERATION_INTERVAL_SECONDS
-            ):
-                reason = (
-                    "generation_already_in_progress"
-                    if _generation_in_progress
-                    else "generation_debounced"
-                )
-                self._send_json(
-                    202,
-                    {
-                        "ok": True,
-                        "mode": "skipped_debounce",
-                        "reason": reason,
-                    },
-                )
-                return
-            _generation_in_progress = True
-            _last_generation_started_at = now_monotonic
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(
-            f"[voice-service {timestamp}] source={source} "
-            f"status={status} event={event_type} "
-            f"voice={'staff_a' if GPT_SOVITS_ENGINE.is_ready() else voice_name or voice_culture or 'auto'} "
-            f"style={style} text={text}",
-            flush=True,
-        )
-
-        try:
-            mode, duration, served_audio_path = _generate_speech_wav(
-                text,
-                audio_path,
-                voice_name,
-                voice_culture,
-                style,
-            )
-            _cleanup_old_audio_files()
-            _cleanup_cached_audio_files()
-        finally:
-            with _generation_lock:
-                _generation_in_progress = False
-
-        self._send_json(
-            200,
+@app.get("/voices")
+def voices() -> dict:
+    return {
+        "ok": True,
+        "voices": _list_windows_tts_voices(),
+        "gptSovitsVoices": [
             {
-                "ok": True,
-                "mode": mode,
-                "cached": False,
-                "requestedText": requested_text,
-                "style": style,
-                "voiceName": voice_name,
-                "voiceCulture": voice_culture,
-                "text": text,
-                "audioPath": str(served_audio_path),
-                "audioUrl": f"http://{host}/audio/{served_audio_path.name}",
-                "durationMs": int(duration * 1000),
-            },
-        )
+                "name": "Staff A",
+                "id": "staff_a_v2_pro_plus",
+                "styles": sorted(set(REMINDER_STYLE.values())),
+                "ready": GPT_SOVITS_ENGINE.is_ready(),
+            }
+        ],
+        "defaultVoiceName": DEFAULT_VOICE_NAME,
+        "defaultVoiceCulture": DEFAULT_VOICE_CULTURE,
+    }
 
-    def log_message(self, format: str, *args) -> None:
-        return
+
+@app.get("/audio/{filename}")
+def audio(filename: str) -> FileResponse:
+    file_path = OUTPUT_DIR / Path(filename).name
+    if not _is_generated_audio_file(file_path):
+        raise HTTPException(status_code=404, detail="audio_not_found")
+    content_length = file_path.stat().st_size
+    return FileResponse(
+        file_path,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Audio-Length": str(content_length),
+        },
+        background=BackgroundTask(
+            _audio_response_finished,
+            file_path,
+            content_length,
+        ),
+    )
+
+
+@app.post("/tts")
+def tts(body: dict) -> JSONResponse:
+    status_code, payload = _generate_tts_payload(body)
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 def main() -> None:
     global DEFAULT_VOICE_NAME, DEFAULT_VOICE_CULTURE, GPT_SOVITS_ENABLED
 
+    _configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Desk Companion local voice service")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--voice-name", default=None)
     parser.add_argument("--voice-culture", default=None)
     parser.add_argument("--disable-gpt-sovits", action="store_true")
-    parser.add_argument("--skip-prewarm", action="store_true")
     args = parser.parse_args()
 
     DEFAULT_VOICE_NAME = _normalize_voice_name(args.voice_name)
     DEFAULT_VOICE_CULTURE = _normalize_voice_name(args.voice_culture)
     GPT_SOVITS_ENABLED = not args.disable_gpt_sovits
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _prepare_cache_storage()
+    removed = _cleanup_stale_audio_files(max_age_seconds=0)
+    try:
+        (OUTPUT_DIR / ".voice_cache_version").unlink()
+    except OSError:
+        pass
+    if removed:
+        print(
+            f"[voice-service] removed {removed} stale generated audio files",
+            flush=True,
+        )
     if GPT_SOVITS_ENABLED:
         if GPT_SOVITS_ENGINE.start():
             print("[voice-service] GPT-SoVITS Staff A is ready", flush=True)
-            if not args.skip_prewarm:
-                threading.Thread(
-                    target=_prewarm_reminder_cache,
-                    name="voice-prewarm",
-                    daemon=True,
-                ).start()
         else:
             print(
                 f"[voice-service] GPT-SoVITS unavailable: {GPT_SOVITS_ENGINE.last_error}",
                 flush=True,
             )
 
-    server = ThreadingHTTPServer((args.host, args.port), VoiceRequestHandler)
     print(
         f"[voice-service] listening on http://{args.host}:{args.port} "
         f"(output: {OUTPUT_DIR})",
         flush=True,
     )
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[voice-service] shutting down", flush=True)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="warning",
+            access_log=False,
+        )
     finally:
-        server.server_close()
+        print("\n[voice-service] shutting down", flush=True)
         GPT_SOVITS_ENGINE.stop()
+        _cleanup_stale_audio_files(max_age_seconds=0)
 
 
 if __name__ == "__main__":

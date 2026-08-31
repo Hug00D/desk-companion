@@ -94,8 +94,10 @@ class VisionEventTracker {
 
     if (stableEnough) {
       _stableType = rawType;
+      // Only an actual absence can be returned from; recovering focus after a
+      // distraction or a blink warning is not coming back to the desk.
       if (rawType == VisionEventType.normal &&
-          previousStableType != VisionEventType.normal) {
+          _isAbsenceType(previousStableType)) {
         eventType = VisionEventType.userReturned;
       }
     }
@@ -138,6 +140,11 @@ class VisionEventTracker {
     _stableType = VisionEventType.normal;
     _lastNotifyAt.clear();
     _lastPersistAt.clear();
+  }
+
+  bool _isAbsenceType(VisionEventType type) {
+    return type == VisionEventType.userAway ||
+        type == VisionEventType.partialUserDetected;
   }
 
   int _stableFrameThreshold(VisionEventType type) {

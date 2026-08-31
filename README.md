@@ -267,25 +267,29 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
 flutter run --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1
 ```
 
-### 4. 啟動語音服務, optional
+### 4. 啟動語音服務（AI 動態語音需要）
 
 ```powershell
 python backend\python_voice_service\app\main.py --host 0.0.0.0 --port 8001
 ```
 
-Flutter emulator 預設會呼叫：
+Spring Boot 會在 AI 產生文字後呼叫此服務，下載 WAV，並將文字與
+Base64 音訊放在同一個 `/assistant/chat` 或 `/assistant/decide` 回應。
+本機 Spring Boot 預設會呼叫：
 
 ```text
-http://10.0.2.2:8001
+http://localhost:8001
 ```
 
-實體手機可用：
+Flutter 不需要直接連線到 Python 才能播放 AI 聊天語音；只需連到
+Spring Boot：
 
 ```powershell
-flutter run `
-  --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1 `
-  --dart-define=VOICE_SERVICE_URL=http://192.168.1.23:8001
+flutter run --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1
 ```
+
+`VOICE_SERVICE_URL` 仍保留給 Flutter 的語音服務 Debug/健康檢查工具，
+不再用於 AI 聊天回覆主流程。
 
 ## 測試
 
@@ -318,6 +322,207 @@ cd backend\desk_companion_backend
 ```text
 backend/testApi/api-tests.http
 ```
+
+## Vision Lab（離線視覺量測）
+
+Vision Lab 是與正式 app 分離的量測工具，用途是在**已錄好的影片**上逐幀抽取視覺特徵，
+產生可重現的 `frame_features.csv`，供後續比較不同時序判斷策略（單幀 vs N-of-M 投票）使用。
+
+可讀的歷次實驗結果與後續紀錄模板放在 [`docs/vision-lab-test-log.md`](docs/vision-lab-test-log.md)；
+`vision_lab_out/` 只保存被 Git 忽略的原始 CSV 證據。
+
+它有獨立的 entry point，不會影響正式 app 的行為；特徵計算與正式 app 共用同一套
+`MediaPipeVisionManager`，不另外複製一份公式。
+
+### 為什麼要離線跑
+
+即時相機的每一次執行都不一樣，無法用來比較策略。改成讀固定影片、用**影片本身的
+presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會得到逐列相同的 CSV，
+策略比較才有意義。
+
+### 啟動方式
+
+測試影片放在 `assets/`，預設使用 `assets/test.mp4`。可用
+`VISION_LAB_ASSET` 的 dart define 切換影片，不需要反覆修改程式；目標影片仍須在
+`pubspec.yaml` 的 `assets:` 登錄。
+
+不需要相機，模擬器即可執行（MediaPipe 有 x86_64 native library，且走 CPU 推論）：
+
+先在一個 PowerShell 視窗啟動輸出監看器，它會在每次分析完成後自動把新 CSV 拉到
+專案根目錄的 `vision_lab_out/`：
+
+```powershell
+.\tool\watch_vision_lab_output.ps1
+```
+
+再從另一個 PowerShell 視窗啟動 Lab（裝置 ID 可換成實際模擬器或手機）：
+
+```powershell
+flutter run -d emulator-5554 -t lib/main_vision_lab.dart `
+  --dart-define=VISION_LAB_ASSET=assets/test1.mp4
+```
+
+省略 `--dart-define` 時會使用預設的 `assets/test.mp4`。
+
+Vision Lab v2 會用影片前 4 秒的有效睜眼樣本，左右眼分別取 EAR P90 作為該次 run 的
+個人化睜眼基準。開始錄影後請先面向鏡頭、自然睜眼至少 4 秒；期間正常眨眼沒有關係，
+P90 不會像平均值一樣容易被低值拉動。有效樣本不足 30 幀時會退回固定基準 `0.27`。
+
+畫面上的影片只是預覽，**不驅動推論**。按下「產生 frame_features.csv」後，由原生端
+`OfflineVideoFrameDecoder` 以 MediaCodec 逐幀解碼並送進 MediaPipe。每按一次產生一個
+新檔，不會覆蓋前一次的結果。監看器只會拉取已完成的
+`frame_features_<runId>.csv`，不會把尚在寫入的 `.native` 暫存檔當成結果。
+
+`<runId>` 的格式是 `<影片名>_<microseconds>`，例如 `assets/test.mp4` 會產生
+`frame_features_test_1787902528095107.csv`。影片名取自 `_assetPath`，因此多支影片的
+輸出放在同一個目錄也能一眼分辨；`ground_truth_<runId>.csv` 與比較結果都沿用同一個
+`<runId>`，避免把某支影片的預測配到另一支的 Ground Truth。
+
+進度可從 logcat 觀察（每 100 幀一筆）：
+
+```powershell
+adb logcat -s VisionLab
+```
+
+### 取出資料
+
+平常直接使用上面的監看器即可。若只想同步一次，可執行：
+
+```powershell
+.\tool\watch_vision_lab_output.ps1 -Once
+```
+
+若同時連接多台裝置，可加上 `-DeviceId <裝置 ID>`。CSV 原始位置是 app 的外部專屬目錄；
+需要手動處理時也可以執行：
+
+```powershell
+adb pull /storage/emulated/0/Android/data/com.example.desk_companion/files/ .\vision_lab_out
+```
+
+### 可重現性驗收
+
+同一支影片跑兩次，兩份 CSV 必須逐列相同：
+
+```powershell
+fc.exe /b .\vision_lab_out\frame_features_<run1>.csv .\vision_lab_out\frame_features_<run2>.csv
+```
+
+輸出若只有「正在比較檔案」而沒有差異訊息，就代表逐位元相同。PowerShell 的 `fc` 是
+`Format-Custom` 的別名，因此這裡要明確使用 `fc.exe`。
+
+### 記錄哪些數據
+
+每一幀一列，共 14 欄：
+
+| 欄位 | 意義 | 備註 |
+| --- | --- | --- |
+| `frame_idx` | 已輸出幀的序號，從 0 開始 | 解碼器若略過某個 sample，序號仍連續，因此**不等於**容器內的 sample 序號 |
+| `timestamp_ms` | 影片真實 PTS（毫秒） | 來自 `MediaCodec` 的 `presentationTimeUs`，非系統時間、非 UI 幀率 |
+| `face_detected` | 該幀是否偵測到臉 | `true` / `false` |
+| `pose_detected` | 該幀是否偵測到姿態 | `true` / `false` |
+| `ear_l` / `ear_r` | 左／右眼 Eye Aspect Ratio | 眼睛垂直距離 ÷ 水平距離，值越小越接近閉眼；**純單幀計算** |
+| `yaw` | 頭部左右轉角（度） | 由 MediaPipe facial transformation matrix 求得；**純單幀計算** |
+| `pitch` | 頭部俯仰角（度） | 同上；**純單幀計算** |
+| `head_offset` | 頭部偏移分數（0–100） | **含跨幀狀態**，見下方說明 |
+| `raw_eye_closed` | 單幀規則：是否閉眼 | 僅使用當列 EAR、pitch、head offset 與本次 run 固定的左右眼 P90 基準 |
+| `raw_head_turned` | 單幀規則：是否轉頭 | 當列 `head_offset >= 55` |
+| `raw_posture_down` | 單幀規則：是否趴下 | Pilot 固定規則：有 pose，且無 face 或 `abs(pitch) >= 35` |
+| `raw_user_missing` | 單幀規則：是否離席 | 同一列 face 與 pose 都未偵測到 |
+| `raw_state` | 單幀規則綜合狀態 | 優先序：離席 → 趴下 → 轉頭 → 閉眼 → 正常 |
+
+偵測不到臉的幀，臉部相關欄位留空字串而不是填 0，以免把「沒有資料」誤當成「數值為 0」。
+
+### 三個使用時必須知道的性質
+
+**1. `head_offset` 不是純單幀特徵。**
+它需要先蒐集 5 個穩定樣本建立基準線，期間固定回傳 `0.0`；之後的值是
+指數平滑後的指標與基準線中位數的差，再乘上比例並限制在 0–100。
+因此開頭數幀的 `head_offset` 不能與後段直接比較，而且這個輸入特徵本身帶有原生端的
+校正與平滑。Pilot 的 `FrameClassifier` 仍只讀取 CSV 當前列、自己不保存任何計數器、鎖定、
+cooldown 或投票狀態；`ear_l`、`ear_r`、`yaw`、`pitch` 則是純單幀值。
+
+**2. 時間戳不是等距的。**
+手機錄的影片為變動幀率，實測間隔混合 33ms 與 34ms，另有少數更大的間隔。
+換算延遲時間時要用 `timestamp_ms` 相減，不能用「幀數 × 33ms」估算。
+
+另外，解碼器可能對極少數 sample 不輸出畫面（實測 1708 幀掉 1 幀，且每次都掉同一幀）。
+這是確定性行為，不影響可重現性；掉幀數會記在 logcat 與回傳結果的 `droppedFrameCount`。
+
+**3. 個人化 EAR 校正與單幀規則分離。**
+CSV 分類器先從前 4 秒算出一次左右眼 P90，再將這兩個固定值傳給每一列的
+`FrameClassifier`。`FrameClassifier` 本身仍不保存前幀、計數器或狀態；相同 CSV 與相同
+校正設定會得到相同輸出。畫面完成訊息會顯示左右眼基準與校正樣本數。
+
+### 建立 Ground Truth
+
+不需要逐幀人工標記。以影片時間軸粗略切出連續區段，另存成
+`vision_lab_out/ground_truth_<runId>.csv`：
+
+```csv
+state,start_ms,end_ms
+normal,0,20500
+head_turned,20500,31900
+posture_down,31900,40000
+normal,40000,42200
+posture_down,42200,56400
+```
+
+可用狀態是 `normal`、`eye_closed`、`head_turned`、`posture_down`、`user_missing`。
+「分心／轉頭」使用 `head_turned`。Ground Truth 應標記產品期望輸出的使用者狀態，而不是
+直接照幾何姿勢命名：正常低頭看書仍標為 `normal`；只有專題定義的真正趴下／睡著行為才標為
+`posture_down`。邊界允許是人工估計值，但第一段到最後一段必須連續、不能留時間空洞，並且要
+覆蓋整支影片。
+
+### 用個人化基準重算既有 CSV
+
+閉眼規則改動不需要重跑 MediaPipe。保留原始檔，另產生一份 P90 後處理結果：
+
+```powershell
+dart run tool\vision_lab_reclassify.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_p90_<runId>.csv
+```
+
+命令會輸出校正樣本數、是否使用 fallback，以及左右眼 P90。接著將新檔交給下方相同的比較
+工具即可；不要覆寫原始逐幀特徵檔。
+
+### 比較單幀與 3-of-5
+
+比較工具直接讀同一份逐幀 CSV，不會重新執行 MediaPipe：
+
+```powershell
+dart run tool\vision_lab_compare.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_<runId>.csv `
+  vision_lab_out
+```
+
+它會產生：
+
+- `predicted_events_single_frame_<runId>.csv`
+- `predicted_events_3_of_5_<runId>.csv`
+- `comparison_metrics_<runId>.csv`
+
+這裡的 3-of-5 是因果投票：只看當前列與前四列，某一狀態至少出現三次才輸出該狀態；
+開頭不足五列或沒有過半時輸出 `normal`。Pilot v1 沒有遲滯、cooldown 或其他鎖定。
+metrics 會列出 frame accuracy、誤報事件、漏失事件、狀態切換次數、配對事件數與平均偵測延遲；
+誤報也會依四種非正常狀態分欄，方便直接讀出眨眼誤觸發數。
+
+### 測試
+
+以下測試同時驗證零記憶單幀規則、3-of-5、事件收合、指標計算，以及正式 app 原有時序判斷
+沒有因 Lab 拆分而改變：
+
+```powershell
+flutter test --no-pub `
+  test\vision\frame_classifier_test.dart `
+  test\vision\vision_lab_comparison_test.dart `
+  test\vision\temporal_vision_logic_test.dart `
+  test\vision\companion_state_cause_test.dart
+```
+
+`vision_lab_out/` 已列入 `.gitignore`。逐幀特徵、人工 Ground Truth、預測事件與 metrics 都是
+本機實驗資料，不要使用 `git add -f` 強制提交；Git 只保存可重現這些結果的程式、測試與文件。
 
 ## 專題特色
 

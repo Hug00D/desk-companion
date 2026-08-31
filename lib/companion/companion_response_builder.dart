@@ -29,22 +29,22 @@ class CompanionResponseBuilder {
           message: '視線偏離了一段時間，先把注意力帶回螢幕吧。',
           actionLabel: 'head_offset_reminder',
         );
-      case CompanionStatus.drowsy:
-        return const CompanionResponse(
-          source: CompanionResponseSource.vision,
-          tone: CompanionResponseTone.supportive,
-          message: '偵測到低頭打瞌睡，先抬頭休息一下。',
-          actionLabel: 'drowsy_head_reminder',
-          shouldNotify: true,
-        );
-      case CompanionStatus.postureDown:
-        return const CompanionResponse(
-          source: CompanionResponseSource.vision,
-          tone: CompanionResponseTone.warning,
-          message: '偵測到趴下睡覺，建議先休息一下再繼續。',
-          actionLabel: 'posture_down_reminder',
-          shouldNotify: true,
-        );
+      case CompanionStatus.sleeping:
+        return analysis.cause == CompanionCause.postureDown
+            ? const CompanionResponse(
+                source: CompanionResponseSource.vision,
+                tone: CompanionResponseTone.warning,
+                message: '偵測到姿勢趴低，建議先坐直或起身伸展。',
+                actionLabel: 'posture_down_reminder',
+                shouldNotify: true,
+              )
+            : const CompanionResponse(
+                source: CompanionResponseSource.vision,
+                tone: CompanionResponseTone.warning,
+                message: '偵測到疑似打瞌睡，建議先坐直休息一下再繼續。',
+                actionLabel: 'drowsy_reminder',
+                shouldNotify: true,
+              );
       case CompanionStatus.userMissing:
         return const CompanionResponse(
           source: CompanionResponseSource.vision,
