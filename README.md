@@ -475,16 +475,22 @@ posture_down,42200,56400
 
 ### 用個人化基準重算既有 CSV
 
-閉眼規則改動不需要重跑 MediaPipe。保留原始檔，另產生一份 P90 後處理結果：
+閉眼規則改動不需要重跑 MediaPipe。保留原始檔，分別產生固定 0.27 與 P90 後處理結果：
 
 ```powershell
 dart run tool\vision_lab_reclassify.dart `
   vision_lab_out\frame_features_<runId>.csv `
-  vision_lab_out\frame_features_p90_<runId>.csv
+  vision_lab_out\frame_features_fixed_<runId>.csv `
+  --mode=fixed
+
+dart run tool\vision_lab_reclassify.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_p90_<runId>.csv `
+  --mode=p90
 ```
 
-命令會輸出校正樣本數、是否使用 fallback，以及左右眼 P90。接著將新檔交給下方相同的比較
-工具即可；不要覆寫原始逐幀特徵檔。
+省略 `--mode` 時預設為 P90。命令會輸出模式、校正樣本數、是否使用 fallback，以及左右眼
+睜眼基準。接著將兩份新檔分別交給下方相同的比較工具；不要覆寫原始逐幀特徵檔。
 
 ### 比較單幀與 3-of-5
 

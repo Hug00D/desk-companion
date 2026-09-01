@@ -198,4 +198,26 @@ void main() {
       isTrue,
     );
   });
+
+  test('can reclassify a CSV with the fixed 0.27 eye reference', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'fixed-eye-reference-csv-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final input = File('${directory.path}/native.csv');
+    final output = File('${directory.path}/frame_features.csv');
+    const header = FrameFeatureCsvClassifier.columns;
+    await input.writeAsString(
+      '${header.join(',')}\n'
+      '0,0,true,true,0.167,0.148,0,0,0,,,,,\n',
+    );
+
+    final summary = await const FrameFeatureCsvClassifier(
+      eyeCalibrationMode: EyeOpenEarCalibrationMode.fixed,
+    ).classifyFile(inputPath: input.path, outputPath: output.path);
+
+    expect(summary.eyeCalibration.leftOpenEar, 0.27);
+    expect(summary.eyeCalibration.rightOpenEar, 0.27);
+    expect((await output.readAsLines()).last.endsWith(',eye_closed'), isTrue);
+  });
 }

@@ -3,6 +3,8 @@ import 'dart:io';
 import 'eye_open_ear_calibrator.dart';
 import 'frame_classifier.dart';
 
+enum EyeOpenEarCalibrationMode { personalizedP90, fixed }
+
 class FrameFeatureClassificationSummary {
   const FrameFeatureClassificationSummary({
     required this.frameCount,
@@ -17,10 +19,12 @@ class FrameFeatureCsvClassifier {
   const FrameFeatureCsvClassifier({
     this.frameClassifier = const FrameClassifier(),
     this.eyeOpenEarCalibrator = const EyeOpenEarCalibrator(),
+    this.eyeCalibrationMode = EyeOpenEarCalibrationMode.personalizedP90,
   });
 
   final FrameClassifier frameClassifier;
   final EyeOpenEarCalibrator eyeOpenEarCalibrator;
+  final EyeOpenEarCalibrationMode eyeCalibrationMode;
 
   static const List<String> columns = <String>[
     'frame_idx',
@@ -84,14 +88,23 @@ class FrameFeatureCsvClassifier {
       );
     }
 
-    final eyeCalibration = eyeOpenEarCalibrator.calibrate(
-      rows.map(
-        (row) => EyeOpenEarSample(
-          timestampMs: row.timestampMs,
-          features: row.features,
+    final eyeCalibration = switch (eyeCalibrationMode) {
+      EyeOpenEarCalibrationMode.personalizedP90 =>
+        eyeOpenEarCalibrator.calibrate(
+          rows.map(
+            (row) => EyeOpenEarSample(
+              timestampMs: row.timestampMs,
+              features: row.features,
+            ),
+          ),
         ),
+      EyeOpenEarCalibrationMode.fixed => EyeOpenEarCalibration(
+        leftOpenEar: frameClassifier.openEyeEar,
+        rightOpenEar: frameClassifier.openEyeEar,
+        sampleCount: 0,
+        usedFallback: false,
       ),
-    );
+    };
     final outputLines = <String>[columns.join(',')];
     for (final row in rows) {
       final values = row.values;
