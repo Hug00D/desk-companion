@@ -475,7 +475,8 @@ posture_down,42200,56400
 
 ### 用個人化基準重算既有 CSV
 
-閉眼規則改動不需要重跑 MediaPipe。保留原始檔，分別產生固定 0.27 與 P90 後處理結果：
+閉眼規則改動不需要重跑 MediaPipe。保留原始檔，可分別產生固定 0.27、P90，以及實驗性的
+P90＋連續 pitch 補償後處理結果：
 
 ```powershell
 dart run tool\vision_lab_reclassify.dart `
@@ -487,10 +488,20 @@ dart run tool\vision_lab_reclassify.dart `
   vision_lab_out\frame_features_<runId>.csv `
   vision_lab_out\frame_features_p90_<runId>.csv `
   --mode=p90
+
+dart run tool\vision_lab_reclassify.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_pitch_aware_<runId>.csv `
+  --mode=p90-pitch-aware
 ```
 
 省略 `--mode` 時預設為 P90。命令會輸出模式、校正樣本數、是否使用 fallback，以及左右眼
-睜眼基準。接著將兩份新檔分別交給下方相同的比較工具；不要覆寫原始逐幀特徵檔。
+睜眼基準。接著將各份新檔分別交給下方相同的比較工具；不要覆寫原始逐幀特徵檔。
+
+`p90-pitch-aware` 保留相同的左右眼 P90 與閉眼規則，只把原本在 `abs(pitch) >= 25°` 才突然
+套用的 `0.6` 門檻縮放改成連續過渡：`0–5°` 不補償，`5–25°` 由 `1.0` 線性降至 `0.6`，
+`25°` 以上維持 `0.6`。這是 Vision Lab 的可選實驗策略；省略該 mode 時既有結果不變，正式
+app 的 `EyeStateDetector` 也不受影響。
 
 ### 比較單幀與 3-of-5
 

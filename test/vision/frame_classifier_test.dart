@@ -86,6 +86,25 @@ void main() {
         RawFrameState.normal,
       );
     });
+
+    test('can apply continuous pitch compensation before 25 degrees', () {
+      const frame = FrameFeatures(
+        faceDetected: true,
+        poseDetected: true,
+        earLeft: 0.15,
+        earRight: 0.15,
+        pitch: 20,
+        headOffset: 0,
+      );
+
+      expect(classifier.classify(frame).state, RawFrameState.eyeClosed);
+      expect(
+        const FrameClassifier(continuousReadingPitchCompensation: true)
+            .classify(frame)
+            .state,
+        RawFrameState.normal,
+      );
+    });
   });
 
   group('EyeOpenEarCalibrator', () {

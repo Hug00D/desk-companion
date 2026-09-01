@@ -64,6 +64,8 @@ class FrameClassifier {
     this.maxReliableHeadPitch = 70,
     this.readingPitchThreshold = 25,
     this.readingClosedThresholdScale = 0.6,
+    this.continuousReadingPitchCompensation = false,
+    this.readingPitchCompensationStart = 5,
     this.headTurnedThreshold = 55,
     this.postureDownPitchThreshold = 35,
   });
@@ -78,6 +80,8 @@ class FrameClassifier {
   final double maxReliableHeadPitch;
   final double readingPitchThreshold;
   final double readingClosedThresholdScale;
+  final bool continuousReadingPitchCompensation;
+  final double readingPitchCompensationStart;
   final double headTurnedThreshold;
 
   /// This is intentionally a coarse, fixed pilot rule. The production posture
@@ -142,9 +146,7 @@ class FrameClassifier {
       return false;
     }
 
-    final thresholdScale = pitch != null && pitch >= readingPitchThreshold
-        ? readingClosedThresholdScale
-        : 1.0;
+    final thresholdScale = _readingThresholdScale(pitch);
     final leftOpen = _earToOpenProbability(leftEar, leftOpenEyeEar);
     final rightOpen = _earToOpenProbability(rightEar, rightOpenEyeEar);
     final minimumOpen = math.min(leftOpen, rightOpen);
@@ -158,5 +160,22 @@ class FrameClassifier {
     final range = calibratedOpenEyeEar - closedEyeEar;
     if (range <= 0) return 0;
     return ((ear - closedEyeEar) / range).clamp(0.0, 1.0);
+  }
+
+  double _readingThresholdScale(double? pitch) {
+    if (pitch == null || pitch < readingPitchCompensationStart) return 1;
+    if (!continuousReadingPitchCompensation) {
+      return pitch >= readingPitchThreshold
+          ? readingClosedThresholdScale
+          : 1;
+    }
+    if (pitch >= readingPitchThreshold) return readingClosedThresholdScale;
+
+    final compensationRange =
+        readingPitchThreshold - readingPitchCompensationStart;
+    if (compensationRange <= 0) return readingClosedThresholdScale;
+    final progress =
+        (pitch - readingPitchCompensationStart) / compensationRange;
+    return 1 - (1 - readingClosedThresholdScale) * progress;
   }
 }
