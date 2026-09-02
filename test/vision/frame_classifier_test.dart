@@ -99,9 +99,9 @@ void main() {
 
       expect(classifier.classify(frame).state, RawFrameState.eyeClosed);
       expect(
-        const FrameClassifier(continuousReadingPitchCompensation: true)
-            .classify(frame)
-            .state,
+        const FrameClassifier(
+          continuousReadingPitchCompensation: true,
+        ).classify(frame).state,
         RawFrameState.normal,
       );
     });
@@ -152,36 +152,93 @@ void main() {
     });
   });
 
-  test(
-    'fills raw columns while preserving extracted feature columns',
-    () async {
-      final directory = await Directory.systemTemp.createTemp(
-        'frame-classifier-test-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      final input = File('${directory.path}/native.csv');
-      final output = File('${directory.path}/frame_features.csv');
-      const header = FrameFeatureCsvClassifier.columns;
-      await input.writeAsString(
-        '${header.join(',')}\n'
-        '0,0,TRUE,TRUE,0.27,0.27,0,0,0,,,,,\n'
-        '1,33,true,true,0.13,0.13,0,0,0,,,,,\n'
-        '2,66,false,false,,,,,,,,,,\n',
-      );
+  test('fills raw columns while preserving extracted feature columns', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'frame-classifier-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final input = File('${directory.path}/native.csv');
+    final output = File('${directory.path}/frame_features.csv');
+    const header = FrameFeatureCsvClassifier.columns;
+    await input.writeAsString(
+      '${header.join(',')}\n'
+      '${_csvRow(header, <String, Object?>{'frame_idx': 0, 'timestamp_ms': 0, 'face_detected': 'TRUE', 'pose_detected': 'TRUE', 'ear_l': 0.27, 'ear_r': 0.27, 'yaw': 0, 'pitch': 0, 'head_offset': 0, 'eye_open_l': 0.91, 'eye_open_r': 0.89, 'head_offset_calibrating': false, 'image_width': 640, 'image_height': 480, 'pose_nose_x': 320.5, 'pose_nose_y': 120.25, 'pose_nose_visibility': 0.98, 'pose_left_shoulder_x': 240.0, 'pose_left_shoulder_y': 260.0, 'pose_left_shoulder_visibility': 0.95, 'pose_right_shoulder_x': 400.0, 'pose_right_shoulder_y': 260.0, 'pose_right_shoulder_visibility': 0.96, 'pose_left_hip_x': 270.0, 'pose_left_hip_y': 430.0, 'pose_left_hip_visibility': 0.90, 'pose_right_hip_x': 370.0, 'pose_right_hip_y': 430.0, 'pose_right_hip_visibility': 0.91})}\n'
+      '${_csvRow(header, <String, Object?>{'frame_idx': 1, 'timestamp_ms': 33, 'face_detected': true, 'pose_detected': true, 'ear_l': 0.13, 'ear_r': 0.13, 'yaw': 0, 'pitch': 0, 'head_offset': 0})}\n'
+      '${_csvRow(header, <String, Object?>{'frame_idx': 2, 'timestamp_ms': 66, 'face_detected': false, 'pose_detected': false})}\n',
+    );
 
-      await const FrameFeatureCsvClassifier().classifyFile(
-        inputPath: input.path,
-        outputPath: output.path,
-      );
+    await const FrameFeatureCsvClassifier().classifyFile(
+      inputPath: input.path,
+      outputPath: output.path,
+    );
 
-      expect(await output.readAsLines(), <String>[
-        header.join(','),
-        '0,0,TRUE,TRUE,0.27,0.27,0,0,0,false,false,false,false,normal',
-        '1,33,true,true,0.13,0.13,0,0,0,true,false,false,false,eye_closed',
-        '2,66,false,false,,,,,,false,false,false,true,user_missing',
-      ]);
-    },
-  );
+    expect(await output.readAsLines(), <String>[
+      header.join(','),
+      _csvRow(header, <String, Object?>{
+        'frame_idx': 0,
+        'timestamp_ms': 0,
+        'face_detected': 'TRUE',
+        'pose_detected': 'TRUE',
+        'ear_l': 0.27,
+        'ear_r': 0.27,
+        'yaw': 0,
+        'pitch': 0,
+        'head_offset': 0,
+        'eye_open_l': 0.91,
+        'eye_open_r': 0.89,
+        'head_offset_calibrating': false,
+        'image_width': 640,
+        'image_height': 480,
+        'pose_nose_x': 320.5,
+        'pose_nose_y': 120.25,
+        'pose_nose_visibility': 0.98,
+        'pose_left_shoulder_x': 240.0,
+        'pose_left_shoulder_y': 260.0,
+        'pose_left_shoulder_visibility': 0.95,
+        'pose_right_shoulder_x': 400.0,
+        'pose_right_shoulder_y': 260.0,
+        'pose_right_shoulder_visibility': 0.96,
+        'pose_left_hip_x': 270.0,
+        'pose_left_hip_y': 430.0,
+        'pose_left_hip_visibility': 0.90,
+        'pose_right_hip_x': 370.0,
+        'pose_right_hip_y': 430.0,
+        'pose_right_hip_visibility': 0.91,
+        'raw_eye_closed': false,
+        'raw_head_turned': false,
+        'raw_posture_down': false,
+        'raw_user_missing': false,
+        'raw_state': 'normal',
+      }),
+      _csvRow(header, <String, Object?>{
+        'frame_idx': 1,
+        'timestamp_ms': 33,
+        'face_detected': true,
+        'pose_detected': true,
+        'ear_l': 0.13,
+        'ear_r': 0.13,
+        'yaw': 0,
+        'pitch': 0,
+        'head_offset': 0,
+        'raw_eye_closed': true,
+        'raw_head_turned': false,
+        'raw_posture_down': false,
+        'raw_user_missing': false,
+        'raw_state': 'eye_closed',
+      }),
+      _csvRow(header, <String, Object?>{
+        'frame_idx': 2,
+        'timestamp_ms': 66,
+        'face_detected': false,
+        'pose_detected': false,
+        'raw_eye_closed': false,
+        'raw_head_turned': false,
+        'raw_posture_down': false,
+        'raw_user_missing': true,
+        'raw_state': 'user_missing',
+      }),
+    ]);
+  });
 
   test('calibrates a CSV once before classifying its rows', () async {
     final directory = await Directory.systemTemp.createTemp(
@@ -194,12 +251,32 @@ void main() {
     final inputLines = <String>[header.join(',')];
     for (var index = 0; index < 40; index++) {
       inputLines.add(
-        '$index,${index * 100},true,true,'
-        '${0.19 + index / 10000},${0.16 + index / 10000},'
-        '0,0,0,,,,,',
+        _csvRow(header, <String, Object?>{
+          'frame_idx': index,
+          'timestamp_ms': index * 100,
+          'face_detected': true,
+          'pose_detected': true,
+          'ear_l': 0.19 + index / 10000,
+          'ear_r': 0.16 + index / 10000,
+          'yaw': 0,
+          'pitch': 0,
+          'head_offset': 0,
+        }),
       );
     }
-    inputLines.add('40,5000,true,true,0.167,0.148,0,0,0,,,,,');
+    inputLines.add(
+      _csvRow(header, <String, Object?>{
+        'frame_idx': 40,
+        'timestamp_ms': 5000,
+        'face_detected': true,
+        'pose_detected': true,
+        'ear_l': 0.167,
+        'ear_r': 0.148,
+        'yaw': 0,
+        'pitch': 0,
+        'head_offset': 0,
+      }),
+    );
     await input.writeAsString('${inputLines.join('\n')}\n');
 
     final summary = await const FrameFeatureCsvClassifier().classifyFile(
@@ -228,7 +305,7 @@ void main() {
     const header = FrameFeatureCsvClassifier.columns;
     await input.writeAsString(
       '${header.join(',')}\n'
-      '0,0,true,true,0.167,0.148,0,0,0,,,,,\n',
+      '${_csvRow(header, <String, Object?>{'frame_idx': 0, 'timestamp_ms': 0, 'face_detected': true, 'pose_detected': true, 'ear_l': 0.167, 'ear_r': 0.148, 'yaw': 0, 'pitch': 0, 'head_offset': 0})}\n',
     );
 
     final summary = await const FrameFeatureCsvClassifier(
@@ -239,4 +316,56 @@ void main() {
     expect(summary.eyeCalibration.rightOpenEar, 0.27);
     expect((await output.readAsLines()).last.endsWith(',eye_closed'), isTrue);
   });
+
+  test('keeps legacy 14-column Vision Lab files reclassifiable', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'legacy-frame-features-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final input = File('${directory.path}/legacy.csv');
+    final output = File('${directory.path}/legacy-output.csv');
+    const header = FrameFeatureCsvClassifier.legacyColumns;
+    await input.writeAsString(
+      '${header.join(',')}\n'
+      '${_csvRow(header, <String, Object?>{'frame_idx': 0, 'timestamp_ms': 0, 'face_detected': true, 'pose_detected': true, 'ear_l': 0.27, 'ear_r': 0.27, 'yaw': 0, 'pitch': 0, 'head_offset': 0})}\n',
+    );
+
+    await const FrameFeatureCsvClassifier().classifyFile(
+      inputPath: input.path,
+      outputPath: output.path,
+    );
+
+    final outputLines = await output.readAsLines();
+    expect(outputLines.first, header.join(','));
+    expect(outputLines.last.endsWith(',normal'), isTrue);
+    expect(outputLines.last.split(','), hasLength(14));
+  });
+
+  test('keeps the 43-column Pose-context schema reclassifiable', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'pose-context-v1-frame-features-test-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final input = File('${directory.path}/pose-v1.csv');
+    final output = File('${directory.path}/pose-v1-output.csv');
+    const header = FrameFeatureCsvClassifier.poseContextV1Columns;
+    await input.writeAsString(
+      '${header.join(',')}\n'
+      '${_csvRow(header, <String, Object?>{'frame_idx': 0, 'timestamp_ms': 0, 'face_detected': true, 'pose_detected': true, 'ear_l': 0.27, 'ear_r': 0.27, 'yaw': 0, 'pitch': 0, 'head_offset': 0, 'image_width': 640, 'image_height': 480})}\n',
+    );
+
+    await const FrameFeatureCsvClassifier().classifyFile(
+      inputPath: input.path,
+      outputPath: output.path,
+    );
+
+    final outputLines = await output.readAsLines();
+    expect(outputLines.first, header.join(','));
+    expect(outputLines.last.endsWith(',normal'), isTrue);
+    expect(outputLines.last.split(','), hasLength(43));
+  });
+}
+
+String _csvRow(List<String> header, Map<String, Object?> values) {
+  return header.map((column) => values[column]?.toString() ?? '').join(',');
 }

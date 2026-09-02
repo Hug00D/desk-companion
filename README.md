@@ -412,7 +412,8 @@ fc.exe /b .\vision_lab_out\frame_features_<run1>.csv .\vision_lab_out\frame_feat
 
 ### 記錄哪些數據
 
-每一幀一列，共 14 欄：
+每一幀一列。新版 schema 共 46 欄；舊版 14 欄與第一版 Pose-context 43 欄 CSV 仍可交給
+重算工具使用，不需覆寫或遷移：
 
 | 欄位 | 意義 | 備註 |
 | --- | --- | --- |
@@ -424,13 +425,23 @@ fc.exe /b .\vision_lab_out\frame_features_<run1>.csv .\vision_lab_out\frame_feat
 | `yaw` | 頭部左右轉角（度） | 由 MediaPipe facial transformation matrix 求得；**純單幀計算** |
 | `pitch` | 頭部俯仰角（度） | 同上；**純單幀計算** |
 | `head_offset` | 頭部偏移分數（0–100） | **含跨幀狀態**，見下方說明 |
+| `eye_open_l` / `eye_open_r` | 正式 App 使用的左右眼融合 openness | 原生端融合 blendshape 與 landmark EAR，供完整 evaluator 回放 |
+| `head_offset_calibrating` | 頭部偏移是否仍在校正 | 完整回放時用來重現 `HeadOffsetDetector` reset 行為 |
+| `image_width` / `image_height` | MediaPipe 分析影像尺寸（pixel） | 用於把 Pose pixel 座標正規化；Pose 未偵測到時仍保留 |
+| `pose_nose_*` | 鼻子 X／Y（pixel）與 visibility | 每幀原始 Pose landmark；未偵測到時留空 |
+| `pose_left_eye_*` / `pose_right_eye_*` | 左右眼 X／Y（pixel）與 visibility | 來自 Pose Landmarker，不是 Face EAR |
+| `pose_left_ear_*` / `pose_right_ear_*` | 左右耳 X／Y（pixel）與 visibility | 可供頭部可見度與側趴分析 |
+| `pose_left_shoulder_*` / `pose_right_shoulder_*` | 左右肩 X／Y（pixel）與 visibility | 可後處理計算肩寬、肩膀中心與下降量 |
+| `pose_left_hip_*` / `pose_right_hip_*` | 左右髖 X／Y（pixel）與 visibility | 可後處理計算軀幹方向；目前單幀 baseline 尚未使用 |
 | `raw_eye_closed` | 單幀規則：是否閉眼 | 僅使用當列 EAR、pitch、head offset 與本次 run 固定的左右眼 P90 基準 |
 | `raw_head_turned` | 單幀規則：是否轉頭 | 當列 `head_offset >= 55` |
 | `raw_posture_down` | 單幀規則：是否趴下 | Pilot 固定規則：有 pose，且無 face 或 `abs(pitch) >= 35` |
 | `raw_user_missing` | 單幀規則：是否離席 | 同一列 face 與 pose 都未偵測到 |
 | `raw_state` | 單幀規則綜合狀態 | 優先序：離席 → 趴下 → 轉頭 → 閉眼 → 正常 |
 
-偵測不到臉的幀，臉部相關欄位留空字串而不是填 0，以免把「沒有資料」誤當成「數值為 0」。
+偵測不到臉或 Pose 的幀，對應 landmark 欄位留空字串而不是填 0，以免把「沒有資料」誤當成
+「座標或可見度為 0」。所有姿勢比例、速度、穩定時間與事件判斷都從這些逐幀原始欄位後處理，
+不寫回原始抽取欄位。
 
 ### 三個使用時必須知道的性質
 
@@ -497,6 +508,33 @@ dart run tool\vision_lab_reclassify.dart `
 
 省略 `--mode` 時預設為 P90。命令會輸出模式、校正樣本數、是否使用 fallback，以及左右眼
 睜眼基準。接著將各份新檔分別交給下方相同的比較工具；不要覆寫原始逐幀特徵檔。
+
+若 CSV 是新版 43 欄，可在不重跑 MediaPipe 的情況下，僅把 Pilot 的粗略趴下規則換成正式
+App 的 `PostureDownDetector` 回放。此工具使用鼻子、肩膀、影像尺寸與 visibility，不依賴
+通常拍不到且低 visibility 的髖部：
+
+```powershell
+dart run tool\vision_lab_replay_production_posture.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_production_posture_<runId>.csv
+```
+
+輸出仍是相同 schema，可直接交給比較工具。眼睛、轉頭與離席欄位保持原結果；這是正式
+**姿勢**邏輯的隔離比較，不等同完整回放 live app。
+
+新版 46 欄 CSV 可完整回放正式 `CompanionStateEvaluator`。Ground Truth 在這個產品層測試
+只使用 `normal`／`sleeping`，任何正式 cause 只要最終 status 是 `sleeping` 都算睡眠：
+
+```powershell
+dart run tool\vision_lab_replay_companion.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_sleeping_<runId>.csv `
+  vision_lab_out\companion_replay_<runId>.csv
+```
+
+輸出包含每幀正式 status、cause、eye state、pose state 與 posture score，終端會列出二元
+Precision／Recall／F1、誤報／漏失事件與 onset delay。此工具只離線回放共用正式邏輯，
+不改變 live app 行為。
 
 `p90-pitch-aware` 保留相同的左右眼 P90 與閉眼規則，只把原本在 `abs(pitch) >= 25°` 才突然
 套用的 `0.6` 門檻縮放改成連續過渡：`0–5°` 不補償，`5–25°` 由 `1.0` 線性降至 `0.6`，

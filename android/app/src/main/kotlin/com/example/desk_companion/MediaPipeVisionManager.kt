@@ -138,6 +138,8 @@ class MediaPipeVisionManager(context: Context) {
             addPoseLandmark(result, "poseRightEye", landmarks, POSE_RIGHT_EYE, imageWidth, imageHeight)
             addPoseLandmark(result, "poseLeftEar", landmarks, POSE_LEFT_EAR, imageWidth, imageHeight)
             addPoseLandmark(result, "poseRightEar", landmarks, POSE_RIGHT_EAR, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseLeftHip", landmarks, POSE_LEFT_HIP, imageWidth, imageHeight)
+            addPoseLandmark(result, "poseRightHip", landmarks, POSE_RIGHT_HIP, imageWidth, imageHeight)
             result
         } else {
             mapOf(
@@ -503,6 +505,8 @@ class MediaPipeVisionManager(context: Context) {
         private const val POSE_RIGHT_EYE = 5
         private const val POSE_LEFT_EAR = 7
         private const val POSE_RIGHT_EAR = 8
+        private const val POSE_LEFT_HIP = 23
+        private const val POSE_RIGHT_HIP = 24
         private const val NOSE_TIP = 1
         private const val FOREHEAD_TOP = 10
         private const val CHIN = 152
