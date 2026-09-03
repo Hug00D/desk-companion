@@ -536,6 +536,32 @@ dart run tool\vision_lab_replay_companion.dart `
 Precision／Recall／F1、誤報／漏失事件與 onset delay。此工具只離線回放共用正式邏輯，
 不改變 live app 行為。
 
+test6 後凍結的 Pose 低頭深度候選可用獨立工具重算；它取前 5 個正臉＋Pose 合格樣本的
+`pose_nose_y / image_height` 中位數作 baseline，使用固定相對下降門檻 `0.13`，不讀正式
+狀態機，也不改原始 CSV：
+
+```powershell
+dart run tool\vision_lab_reclassify_head_depth.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_head_depth_<runId>.csv
+```
+
+輸出的 `raw_state` 只有 `normal`／`sleeping`，可直接交給下方比較工具套單幀與 3-of-5。
+這是待獨立影片驗證的 Vision Lab 候選，不是正式 App 規則。
+
+test7 開發的睡眠情境候選保留上述固定深度路徑，另加入「正坐持續閉眼 → 兩秒內頭部下降」
+的動態觸發，觸發後直到頭部與臉穩定回正 2.5 秒才解除：
+
+```powershell
+dart run tool\vision_lab_reclassify_sleep_context.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_sleep_context_<runId>.csv
+```
+
+動態路徑只在接近正坐時收集閉眼證據，避免把低頭閱讀造成的 EAR 下降直接當成睡覺；輸出
+同樣只改後處理 CSV 的 `raw_state`。此策略使用 test7 開發，必須由未參與調參的新影片驗證，
+不能把 test7 的結果當成獨立成效。
+
 `p90-pitch-aware` 保留相同的左右眼 P90 與閉眼規則，只把原本在 `abs(pitch) >= 25°` 才突然
 套用的 `0.6` 門檻縮放改成連續過渡：`0–5°` 不補償，`5–25°` 由 `1.0` 線性降至 `0.6`，
 `25°` 以上維持 `0.6`。這是 Vision Lab 的可選實驗策略；省略該 mode 時既有結果不變，正式
