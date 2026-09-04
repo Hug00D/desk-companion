@@ -558,9 +558,40 @@ dart run tool\vision_lab_reclassify_sleep_context.dart `
   vision_lab_out\frame_features_sleep_context_<runId>.csv
 ```
 
-動態路徑只在接近正坐時收集閉眼證據，避免把低頭閱讀造成的 EAR 下降直接當成睡覺；輸出
-同樣只改後處理 CSV 的 `raw_state`。此策略使用 test7 開發，必須由未參與調參的新影片驗證，
-不能把 test7 的結果當成獨立成效。
+目前預設為 test7＋test8 開發的 `stable-arm`：累積 300 ms 閉眼證據期間，pitch 最大值減
+最小值不得超過 3°，nose ratio 最大值減最小值不得超過 0.015；超過就從當前幀重新計時。
+穩定閉眼證據成立後才允許後續下降觸發，其他深度、時限、解除與投票條件不變。
+
+重現 test8 首次獨立驗證失敗的舊規則，可明確指定 `legacy-arm`，並使用不同輸出檔名：
+
+```powershell
+dart run tool\vision_lab_reclassify_sleep_context.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_legacy_arm_<runId>.csv legacy-arm
+```
+
+兩種模式都只改衍生 CSV 的 `raw_state`，不修改原始特徵、GT 或正式 App。新模式在 test5～
+test7 的輸出未改變，test8 閱讀誤報時間縮短，但仍有深度路徑造成的短誤報。test8 已是開發
+資料，不能把改善後分數當成獨立成效。test9 獨立驗證未通過：動態觸發雖被限制，但固定
+深度路徑仍把大量正常閱讀判為 sleeping，尚不可整合正式 App。完整數據及拍攝協議見
+`docs/vision-lab-test-log.md`。比較工具所稱 `single_frame` 在此只代表「不再套 3-of-5」，
+不代表 sleep-context 本身零記憶（它含 arm 與 latch）。
+
+test9 轉為開發資料後，另有保守的 `shoulder-evidence` 模式：深度超過 0.13 仍只是候選，
+還要求可信 Pose 鼻子／雙肩座標，以及 `(雙肩平均 Y - 鼻子 Y) / 肩寬 <= 0.15`。
+鼻子與雙肩 visibility 須各 >= 0.5；肩寬以影像像素的歐氏距離計算，至少為影像高度 5%。
+缺值／低品質不視為閉眼，不使用臀部。原 stable-arm 動態路徑不變。
+
+```powershell
+dart run tool\vision_lab_reclassify_sleep_context.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\frame_features_shoulder_evidence_<runId>.csv shoulder-evidence
+```
+
+**此候選未取代預設 `stable-arm`**：test9 閱讀誤報歸零，但 test6 低頭睡眠命中從 90.8%
+降到 4.8%，test7／test8 也有明顯回歸。`unconfirmed_depth_frames` 記錄深度達標但沒有
+足夠證據、也沒有 dynamic latch 的幀；二元輸出的 normal 只表示「不發睡眠警示」，不代表
+證明清醒。這不是校正過的可靠度分數或生理睡眠判斷。詳見同份測試紀錄的 test9 開發節。
 
 `p90-pitch-aware` 保留相同的左右眼 P90 與閉眼規則，只把原本在 `abs(pitch) >= 25°` 才突然
 套用的 `0.6` 門檻縮放改成連續過渡：`0–5°` 不補償，`5–25°` 由 `1.0` 線性降至 `0.6`，

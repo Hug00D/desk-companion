@@ -78,6 +78,7 @@ flutter:
     - assets/test6.mp4
     - assets/test7.mp4
     - assets/test8.mp4
+    - assets/test9.mp4
     - assets/mock/
     - assets/audio/reminders/
     - assets/audio/wake/
