@@ -2,9 +2,11 @@ import 'package:flutter/foundation.dart';
 
 import '../vision/companion_state_evaluator.dart';
 import 'focus_session_report.dart';
+import 'reminder_policy.dart';
 
 enum FocusInterventionType {
   reminder,
+  checkIn,
   eventRecorded,
   offerPause,
   autoPause,
@@ -26,9 +28,10 @@ class FocusIntervention {
 }
 
 class FocusSessionMonitor extends ChangeNotifier {
-  FocusSessionMonitor._();
+  FocusSessionMonitor._() : reminderPolicy = ReminderPolicy();
 
-  FocusSessionMonitor.detached();
+  FocusSessionMonitor.detached({ReminderPolicy? reminderPolicy})
+    : reminderPolicy = reminderPolicy ?? ReminderPolicy();
 
   static final FocusSessionMonitor instance = FocusSessionMonitor._();
 
@@ -39,6 +42,8 @@ class FocusSessionMonitor extends ChangeNotifier {
   static const Duration reminderThreshold = Duration(seconds: 3);
   static const Duration eventThreshold = Duration(seconds: 5);
   static const Duration maximumSampleGap = Duration(seconds: 3);
+
+  final ReminderPolicy reminderPolicy;
 
   final Map<CompanionStatus, _StatusEvidence> _evidenceByStatus =
       <CompanionStatus, _StatusEvidence>{};
@@ -59,6 +64,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   bool severeAutoPauseEnabled = true;
   bool longDistractionAutoPauseEnabled = false;
+  bool experimentalReminderPolicyEnabled = false;
 
   CompanionStatus? get activeEpisodeStatus => _activeEpisodeStatus;
 
@@ -126,6 +132,29 @@ class FocusSessionMonitor extends ChangeNotifier {
   void setLongDistractionAutoPauseEnabled(bool enabled) {
     if (longDistractionAutoPauseEnabled == enabled) return;
     longDistractionAutoPauseEnabled = enabled;
+    notifyListeners();
+  }
+
+  void setExperimentalReminderPolicyEnabled(bool enabled) {
+    if (experimentalReminderPolicyEnabled == enabled) return;
+    experimentalReminderPolicyEnabled = enabled;
+    reminderPolicy.reset();
+    _resetEvidence();
+    notifyListeners();
+  }
+
+  void recordReminderResponse({
+    required CompanionStatus status,
+    required CompanionCause cause,
+    required ReminderPolicyResponse response,
+    DateTime? now,
+  }) {
+    reminderPolicy.recordResponse(
+      status: status,
+      cause: cause,
+      response: response,
+      now: now ?? DateTime.now(),
+    );
     notifyListeners();
   }
 
@@ -235,9 +264,17 @@ class FocusSessionMonitor extends ChangeNotifier {
   }
 
   void _expireStaleEvidence(DateTime timestamp) {
-    _evidenceByStatus.removeWhere((_, evidence) {
-      return timestamp.difference(evidence.lastSeenAt) >= evidenceGraceDuration;
-    });
+    final expired = _evidenceByStatus.entries
+        .where(
+          (entry) =>
+              timestamp.difference(entry.value.lastSeenAt) >=
+              evidenceGraceDuration,
+        )
+        .toList(growable: false);
+    for (final entry in expired) {
+      reminderPolicy.markEpisodeEnded(entry.key, entry.value.cause);
+      _evidenceByStatus.remove(entry.key);
+    }
   }
 
   void _updateActiveStatus(CompanionStatus currentStatus) {
@@ -271,7 +308,27 @@ class FocusSessionMonitor extends ChangeNotifier {
       final evidence = entry.value;
       final isCurrentStatus = status == currentStatus;
 
-      if (isCurrentStatus &&
+      if (experimentalReminderPolicyEnabled && isCurrentStatus) {
+        final prompt = reminderPolicy.evaluate(
+          status: status,
+          cause: evidence.cause,
+          evidenceDuration: evidence.accumulated,
+          now: evidence.lastSeenAt,
+        );
+        if (prompt != null) {
+          interventions.add(
+            FocusIntervention(
+              type: FocusInterventionType.checkIn,
+              status: prompt.status,
+              cause: prompt.cause,
+              episodeDuration: prompt.evidenceDuration,
+            ),
+          );
+        }
+      }
+
+      if (!experimentalReminderPolicyEnabled &&
+          isCurrentStatus &&
           !evidence.reminderSent &&
           status != CompanionStatus.userMissing &&
           evidence.accumulated >= _reminderThresholdFor(status)) {
@@ -306,6 +363,7 @@ class FocusSessionMonitor extends ChangeNotifier {
       if (!sessionRunning || !isCurrentStatus || evidence.pauseDecisionSent) {
         continue;
       }
+      if (experimentalReminderPolicyEnabled) continue;
       final pauseIntervention = _pauseInterventionFor(
         status: status,
         cause: isCurrentStatus ? currentCause : evidence.cause,
@@ -416,6 +474,9 @@ class FocusSessionMonitor extends ChangeNotifier {
   }
 
   void _resetEvidence() {
+    for (final entry in _evidenceByStatus.entries) {
+      reminderPolicy.markEpisodeEnded(entry.key, entry.value.cause);
+    }
     _evidenceByStatus.clear();
     _activeEpisodeStatus = null;
     _normalStartedAt = null;
@@ -425,6 +486,7 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   void _clearAllState() {
     _resetEvidence();
+    reminderPolicy.reset();
     _autoPausedStatus = null;
     _recoveryPromptDelivered = false;
   }

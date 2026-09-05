@@ -636,6 +636,13 @@ flutter test --no-pub `
 `vision_lab_out/` 已列入 `.gitignore`。逐幀特徵、人工 Ground Truth、預測事件與 metrics 都是
 本機實驗資料，不要使用 `git add -f` 強制提交；Git 只保存可重現這些結果的程式、測試與文件。
 
+### 保守提醒實機試用
+
+正式 App 的「任務 → 專注保護」提供預設關閉的「保守提醒試用」。啟用後，視覺辨識仍使用原本的
+`CompanionStateEvaluator`，但提醒只採中性三選一詢問，不在離席時提醒，也不會自行暫停番茄鐘。
+觸發門檻、5／10／15 分鐘冷卻、操作步驟與實測紀錄表請見
+[`docs/reminder-policy-pilot.md`](docs/reminder-policy-pilot.md)。
+
 ## 專題特色
 
 - 結合行動端即時視覺辨識與專注學習場景。

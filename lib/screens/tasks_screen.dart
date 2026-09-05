@@ -309,18 +309,29 @@ class _TasksScreenState extends State<TasksScreen> {
           const SizedBox(height: 12),
           Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
           _buildPolicyToggle(
-            title: '嚴重狀況自動暫停',
-            subtitle: '趴下 8 秒；打瞌睡或離席 10 秒。',
-            value: _focusSessionMonitor.severeAutoPauseEnabled,
-            onChanged: _focusSessionMonitor.setSevereAutoPauseEnabled,
+            title: '保守提醒試用',
+            subtitle: '只詢問是否休息，不判定睡著、不在離席時提醒，也不自動暫停。',
+            value: _focusSessionMonitor.experimentalReminderPolicyEnabled,
+            onChanged:
+                _focusSessionMonitor.setExperimentalReminderPolicyEnabled,
           ),
-          Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
-          _buildPolicyToggle(
-            title: '長時間分心自動暫停',
-            subtitle: '關閉時，分心 15 秒只會詢問是否暫停。',
-            value: _focusSessionMonitor.longDistractionAutoPauseEnabled,
-            onChanged: _focusSessionMonitor.setLongDistractionAutoPauseEnabled,
-          ),
+          if (!_focusSessionMonitor.experimentalReminderPolicyEnabled) ...[
+            Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
+            _buildPolicyToggle(
+              title: '嚴重狀況自動暫停',
+              subtitle: '趴下或打瞌睡 8 秒；離席 10 秒。',
+              value: _focusSessionMonitor.severeAutoPauseEnabled,
+              onChanged: _focusSessionMonitor.setSevereAutoPauseEnabled,
+            ),
+            Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
+            _buildPolicyToggle(
+              title: '長時間分心自動暫停',
+              subtitle: '關閉時，分心 15 秒只會詢問是否暫停。',
+              value: _focusSessionMonitor.longDistractionAutoPauseEnabled,
+              onChanged:
+                  _focusSessionMonitor.setLongDistractionAutoPauseEnabled,
+            ),
+          ],
         ],
       ),
     );

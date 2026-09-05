@@ -1,4 +1,5 @@
 import 'package:desk_companion/focus/focus_session_monitor.dart';
+import 'package:desk_companion/focus/reminder_policy.dart';
 import 'package:desk_companion/vision/companion_state_evaluator.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -250,6 +251,99 @@ void main() {
       expect(monitor.effectiveFocusDuration, const Duration(seconds: 2));
       expect(monitor.distractedDuration, const Duration(seconds: 1));
     });
+
+    test('conservative policy asks once and never auto-pauses', () {
+      final monitor = FocusSessionMonitor.detached()
+        ..setExperimentalReminderPolicyEnabled(true);
+      final start = DateTime(2026, 9, 5, 10);
+      monitor.beginSession(now: start);
+
+      final beforeThreshold = <FocusIntervention>[];
+      for (var second = 0; second < 8; second += 1) {
+        beforeThreshold.addAll(
+          _step(
+            monitor,
+            CompanionStatus.sleeping,
+            start,
+            second,
+            cause: CompanionCause.postureDown,
+          ),
+        );
+      }
+      expect(_types(beforeThreshold), [FocusInterventionType.eventRecorded]);
+      final atThreshold = _step(
+        monitor,
+        CompanionStatus.sleeping,
+        start,
+        8,
+        cause: CompanionCause.postureDown,
+      );
+      expect(_types(atThreshold), [FocusInterventionType.checkIn]);
+
+      for (var second = 9; second <= 30; second += 1) {
+        final interventions = _step(
+          monitor,
+          CompanionStatus.sleeping,
+          start,
+          second,
+          cause: CompanionCause.postureDown,
+        );
+        expect(
+          interventions.where(
+            (item) =>
+                item.type == FocusInterventionType.checkIn ||
+                item.type == FocusInterventionType.autoPause,
+          ),
+          isEmpty,
+        );
+      }
+    });
+
+    test('conservative policy records absence without interrupting', () {
+      final monitor = FocusSessionMonitor.detached()
+        ..setExperimentalReminderPolicyEnabled(true);
+      final start = DateTime(2026, 9, 5, 10);
+      monitor.beginSession(now: start);
+
+      final interventions = <FocusIntervention>[];
+      for (var second = 0; second <= 20; second += 1) {
+        interventions.addAll(
+          _step(monitor, CompanionStatus.userMissing, start, second),
+        );
+      }
+
+      expect(interventions.map((item) => item.type), [
+        FocusInterventionType.eventRecorded,
+      ]);
+    });
+
+    test(
+      'conservative remind-later response re-prompts after five minutes',
+      () {
+        final monitor = FocusSessionMonitor.detached()
+          ..setExperimentalReminderPolicyEnabled(true);
+        final start = DateTime(2026, 9, 5, 10);
+        monitor.beginSession(now: start);
+
+        for (var second = 0; second < 15; second += 1) {
+          _step(monitor, CompanionStatus.distracted, start, second);
+        }
+        expect(_types(_step(monitor, CompanionStatus.distracted, start, 15)), [
+          FocusInterventionType.checkIn,
+        ]);
+        monitor.recordReminderResponse(
+          status: CompanionStatus.distracted,
+          cause: CompanionCause.headTurned,
+          response: ReminderPolicyResponse.remindLater,
+          now: start.add(const Duration(seconds: 15)),
+        );
+
+        expect(_step(monitor, CompanionStatus.distracted, start, 314), isEmpty);
+        expect(_types(_step(monitor, CompanionStatus.distracted, start, 315)), [
+          FocusInterventionType.checkIn,
+        ]);
+      },
+    );
   });
 }
 

@@ -26,6 +26,7 @@ import '../focus/focus_session_report.dart';
 import '../focus/focus_round.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
+import '../focus/reminder_policy.dart';
 import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
 import '../vision/companion_state_evaluator.dart';
@@ -785,6 +786,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         case FocusInterventionType.reminder:
           _requestLocalReminder(intervention.status, intervention.cause);
           break;
+        case FocusInterventionType.checkIn:
+          unawaited(
+            _showReminderCheckIn(intervention.status, intervention.cause),
+          );
+          break;
         case FocusInterventionType.eventRecorded:
           _studySessionController.recordFocusEvent(
             intervention.status,
@@ -805,6 +811,140 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           );
           break;
       }
+    }
+  }
+
+  Future<void> _showReminderCheckIn(
+    CompanionStatus status,
+    CompanionCause cause,
+  ) async {
+    if (!mounted || _isFocusPauseDialogVisible) {
+      _focusSessionMonitor.recordReminderResponse(
+        status: status,
+        cause: cause,
+        response: ReminderPolicyResponse.remindLater,
+      );
+      return;
+    }
+
+    _isFocusPauseDialogVisible = true;
+    _isPauseSuggestionDialogVisible = true;
+    ReminderPolicyResponse? response;
+    try {
+      response = await _showReminderCheckInDialog(status: status, cause: cause);
+    } finally {
+      _focusPauseAutoDismissTimer?.cancel();
+      _focusPauseAutoDismissTimer = null;
+      _focusDecisionDialogContext = null;
+      _isPauseSuggestionDialogVisible = false;
+      _isFocusPauseDialogVisible = false;
+    }
+
+    if (!mounted) return;
+    final resolvedResponse = response ?? ReminderPolicyResponse.dismissed;
+    _focusSessionMonitor.recordReminderResponse(
+      status: status,
+      cause: cause,
+      response: resolvedResponse,
+    );
+    debugPrint(
+      'Reminder policy response: status=${status.name} '
+      'cause=${cause.name} response=${resolvedResponse.name}',
+    );
+
+    switch (resolvedResponse) {
+      case ReminderPolicyResponse.continueFocus:
+        _setReminderPolicyMessage('收到，這類狀態十分鐘內不再打擾。');
+        break;
+      case ReminderPolicyResponse.rest:
+        if (_pomodoroController.isRunning) {
+          _pomodoroController.pause(
+            reason: _pauseReasonForState(status, cause),
+          );
+          _studySessionController.recordPomodoroPaused();
+        }
+        _setReminderPolicyMessage('好，先休息一下，準備好再繼續。');
+        break;
+      case ReminderPolicyResponse.remindLater:
+        _setReminderPolicyMessage('好，五分鐘後如果狀態持續，我再提醒一次。');
+        break;
+      case ReminderPolicyResponse.dismissed:
+        break;
+    }
+  }
+
+  void _setReminderPolicyMessage(String message) {
+    _companionMessage = message;
+    _latestDetectedCompanionMessage = message;
+    _lastVoiceResponseMessage = null;
+    _voiceMessagePinnedUntil = DateTime.now().add(_voiceMessageHoldDuration);
+    if (mounted) setState(() {});
+  }
+
+  Future<ReminderPolicyResponse?> _showReminderCheckInDialog({
+    required CompanionStatus status,
+    required CompanionCause cause,
+  }) {
+    return showGeneralDialog<ReminderPolicyResponse>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: const Color(0x7A071725),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, _, _) {
+        _focusDecisionDialogContext = dialogContext;
+        return _ReminderCheckInDialog(
+          eyebrow: _checkInLabelForState(status, cause),
+          message: _checkInMessageForState(status, cause),
+        );
+      },
+      transitionBuilder: (_, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.94, end: 1).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  String _checkInLabelForState(CompanionStatus status, CompanionCause cause) {
+    switch (status) {
+      case CompanionStatus.fatigue:
+        return '眼睛休息提示';
+      case CompanionStatus.distracted:
+        return '專注節奏提示';
+      case CompanionStatus.sleeping:
+        return cause == CompanionCause.postureDown ? '姿勢調整提示' : '休息狀態提示';
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+      case CompanionStatus.userMissing:
+        return '溫和提醒';
+    }
+  }
+
+  String _checkInMessageForState(CompanionStatus status, CompanionCause cause) {
+    switch (status) {
+      case CompanionStatus.fatigue:
+        return '眼睛閉合的狀態持續了一段時間。要繼續專注，還是先休息一下？';
+      case CompanionStatus.distracted:
+        return '視線偏離持續了一段時間。要繼續專注，還是先休息一下？';
+      case CompanionStatus.sleeping:
+        return cause == CompanionCause.postureDown
+            ? '姿勢趴低持續了一段時間。要繼續專注，還是先休息一下？'
+            : '偵測到持續閉眼與低頭的跡象。要繼續專注，還是先休息一下？';
+      case CompanionStatus.normal:
+      case CompanionStatus.attention:
+      case CompanionStatus.userMissing:
+        return '要繼續專注，還是先休息一下？';
     }
   }
 
@@ -5325,6 +5465,176 @@ class _FocusDecisionDialog extends StatelessWidget {
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReminderCheckInDialog extends StatelessWidget {
+  const _ReminderCheckInDialog({required this.eyebrow, required this.message});
+
+  final String eyebrow;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    const accentColor = Color(0xFF9FF3D0);
+    return Dialog(
+      elevation: 0,
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxWidth: 390),
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17334B).withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.26)),
+              boxShadow: [
+                BoxShadow(
+                  color: accentColor.withValues(alpha: 0.22),
+                  blurRadius: 34,
+                  spreadRadius: 1,
+                ),
+                const BoxShadow(
+                  color: Color(0x52000000),
+                  blurRadius: 28,
+                  offset: Offset(0, 14),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: accentColor.withValues(alpha: 0.38),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.self_improvement_rounded,
+                        color: accentColor,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        eyebrow,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: accentColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  '現在的節奏還好嗎？',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    height: 1.25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    fontSize: 14,
+                    height: 1.55,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () =>
+                        Navigator.pop(context, ReminderPolicyResponse.rest),
+                    icon: const Icon(Icons.free_breakfast_rounded, size: 20),
+                    label: const Text('休息一下'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: accentColor,
+                      foregroundColor: const Color(0xFF17334B),
+                      minimumSize: const Size.fromHeight(48),
+                      textStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(
+                          context,
+                          ReminderPolicyResponse.continueFocus,
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(46),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.22),
+                            ),
+                          ),
+                        ),
+                        child: const Text('繼續專注'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(
+                          context,
+                          ReminderPolicyResponse.remindLater,
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(46),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.22),
+                            ),
+                          ),
+                        ),
+                        child: const Text('5 分鐘後提醒'),
                       ),
                     ),
                   ],
