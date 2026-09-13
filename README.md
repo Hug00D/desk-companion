@@ -267,6 +267,29 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
 flutter run --dart-define=API_BASE_URL=http://192.168.1.23:8080/api/v1
 ```
 
+#### 開發展示：以測試影片啟動並顯示視覺 Debug
+
+正式 App 可透過編譯參數暫時以資產影片取代相機，並在啟動後直接展開「開發資訊」面板。
+這適合重現辨識畫面、檢查即時特徵數字或拍攝專題展示截圖；未傳入參數時仍使用相機，且
+Debug 面板預設關閉，不會改變一般使用行為。
+
+```powershell
+flutter run -d <裝置 ID> `
+  --dart-define=OFFLINE_DEMO=true `
+  --dart-define=USE_FALLBACK_VIDEO=true `
+  --dart-define=FALLBACK_VIDEO_ASSET=assets/test9.mp4 `
+  --dart-define=SHOW_VISION_DEBUG=true
+```
+
+- `USE_FALLBACK_VIDEO=true`：以測試影片取代相機來源。
+- `FALLBACK_VIDEO_ASSET`：指定影片資產；檔案必須先登錄在 `pubspec.yaml` 的 `assets:`。
+- `SHOW_VISION_DEBUG=true`：啟動時自動顯示眼睛、頭部角度、姿勢與校準數字。
+- `OFFLINE_DEMO=true`：本機展示時略過登入流程；不需要時可省略。
+
+> **可刪除標記：**這是一組開發／展示用啟動入口。專題開發、測試與文件截圖全部完成，且不再需要
+> 影片重播 Debug 後，可刪除 `FaceDetectionScreen` 內的 `USE_FALLBACK_VIDEO`、
+> `FALLBACK_VIDEO_ASSET`、`SHOW_VISION_DEBUG` 編譯參數及本節說明。
+
 ### 4. 啟動語音服務（AI 動態語音需要）
 
 ```powershell

@@ -148,7 +148,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final List<double> _headOffsetSamples = <double>[];
   bool _hasFace = false;
 
-  bool _showDebugPanel = false;
+  bool _showDebugPanel = _showVisionDebugOnLaunch;
   bool _showVoiceDemoPanel = false;
   bool _showVisionSourcePreview = false;
   bool _isVoiceServiceTestInFlight = false;
@@ -193,8 +193,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   };
   static const Duration _idleChatterInterval = Duration(seconds: 35);
   static const Duration _idleChatterVisibleDuration = Duration(seconds: 7);
-  static const bool _preferFallbackVideoForLocalTest = false;
-  static const String _fallbackVideoAssetPath = 'assets/test.mp4';
+  static const bool _preferFallbackVideoForLocalTest = bool.fromEnvironment(
+    'USE_FALLBACK_VIDEO',
+    defaultValue: false,
+  );
+  static const bool _showVisionDebugOnLaunch = bool.fromEnvironment(
+    'SHOW_VISION_DEBUG',
+    defaultValue: false,
+  );
+  static const String _fallbackVideoAssetPath = String.fromEnvironment(
+    'FALLBACK_VIDEO_ASSET',
+    defaultValue: 'assets/test.mp4',
+  );
   static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
   static const Map<CompanionStatus, List<_ReminderClip>> _reminderClips = {
     CompanionStatus.attention: [
