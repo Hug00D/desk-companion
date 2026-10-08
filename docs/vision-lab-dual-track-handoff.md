@@ -1,5 +1,10 @@
 # 雙軌時序判斷：開發交接與執行清單
 
+最新進度（2026-10-08）請先讀
+[`vision-lab-dual-track-progress.md`](vision-lab-dual-track-progress.md)。目前離線工具與自錄 V1／V2
+補充候選已完成開發，但指定 test6 驗收、test6～test9 比較與獨立驗證仍待補，未接入正式 App。
+下列保留原任務與驗收要求，不代表各任務已全部完成。
+
 這份文件是給接手開發者直接執行的版本。研究理由與完整實驗設計請先讀：
 [`vision-lab-dual-track-research-plan.md`](vision-lab-dual-track-research-plan.md)。
 

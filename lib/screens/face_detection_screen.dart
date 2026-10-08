@@ -29,6 +29,7 @@ import '../focus/pomodoro_controller.dart';
 import '../focus/reminder_policy.dart';
 import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
+import '../preferences/companion_preferences.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../vision/vision_channel.dart';
 import '../vision/vision_event.dart';
@@ -130,6 +131,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
   final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
+  CompanionPreferences _preferences = const CompanionPreferences();
   PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
   final StudySessionController _studySessionController =
@@ -203,7 +205,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   );
   static const String _fallbackVideoAssetPath = String.fromEnvironment(
     'FALLBACK_VIDEO_ASSET',
-    defaultValue: 'assets/test.mp4',
+    defaultValue: 'assets/testVideos/playback/dev_dual_track_01.mp4',
   );
   static const String _fallbackVideoFileName = 'desk_companion_test.mp4';
   static const Map<CompanionStatus, List<_ReminderClip>> _reminderClips = {
@@ -330,6 +332,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _assistantInteractionController = AssistantInteractionController(
       decisionClient: AssistantApi(
         ApiClient(requestTimeout: const Duration(seconds: 130)),
+        chatStyleInstructionProvider: () =>
+            _chatStyleInstructionFor(_preferences.aiResponseTone),
       ),
       timeout: const Duration(seconds: 135),
     );
@@ -465,8 +469,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   Future<void> _initializeCamera() async {
     if (_preferFallbackVideoForLocalTest) {
-      await _initializeFallbackVideo(reason: 'local test video mode');
-      return;
+      final startedFallbackVideo = await _initializeFallbackVideo(
+        reason: 'local test video mode',
+        showErrorOnFailure: false,
+      );
+      if (startedFallbackVideo || !mounted) return;
+      debugPrint(
+        'Fallback video was requested but could not start; using camera.',
+      );
     }
 
     setState(() {
@@ -500,8 +510,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingNativeCamera = false;
       await _nativeVisionSubscription?.cancel();
       _nativeVisionSubscription = null;
-      await _initializeFallbackVideo(reason: e.toString());
-      if (_isUsingFallbackVideo) return;
+      final startedFallbackVideo = await _initializeFallbackVideo(
+        reason: e.toString(),
+      );
+      if (startedFallbackVideo) return;
       _isCameraInitializing = false;
       _cameraErrorMessage = "相機啟動失敗: $e";
       _status = _cameraErrorMessage!;
@@ -510,7 +522,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   // --- 核心偵測函式 ---
-  Future<void> _initializeFallbackVideo({String? reason}) async {
+  Future<bool> _initializeFallbackVideo({
+    String? reason,
+    bool showErrorOnFailure = true,
+  }) async {
     _detectionTimer?.cancel();
     _isUsingNativeCamera = false;
     await _visionChannel.stopCamera();
@@ -518,16 +533,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     try {
       final tempDir = await getTemporaryDirectory();
       final videoFile = io.File('${tempDir.path}/$_fallbackVideoFileName');
-      if (!await videoFile.exists()) {
-        final assetData = await rootBundle.load(_fallbackVideoAssetPath);
-        await videoFile.writeAsBytes(
-          assetData.buffer.asUint8List(
-            assetData.offsetInBytes,
-            assetData.lengthInBytes,
-          ),
-          flush: true,
-        );
-      }
+      final assetData = await rootBundle.load(_fallbackVideoAssetPath);
+      await videoFile.writeAsBytes(
+        assetData.buffer.asUint8List(
+          assetData.offsetInBytes,
+          assetData.lengthInBytes,
+        ),
+        flush: true,
+      );
 
       final controller = VideoPlayerController.file(
         videoFile,
@@ -540,7 +553,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
       if (!mounted) {
         await controller.dispose();
-        return;
+        return false;
       }
 
       _detachFallbackVideoPositionListener();
@@ -561,16 +574,26 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _cameraErrorMessage = null;
       _status = '本地測試模式：使用 test.mp4。';
       await _resetVisionCalibration();
-      if (!mounted) return;
+      if (!mounted) return false;
       _startFallbackVideoDetectionLoop();
       setState(() {});
+      return true;
     } catch (fallbackError) {
+      if (!showErrorOnFailure) {
+        debugPrint(
+          'Fallback video failed; camera fallback is still available: '
+          '$fallbackError',
+        );
+        _isUsingFallbackVideo = false;
+        return false;
+      }
       debugPrint('測試影片模式啟動失敗: $fallbackError');
       _isUsingFallbackVideo = false;
       _isCameraInitializing = false;
       _cameraErrorMessage = '相機啟動失敗，測試影片也無法啟動: ${reason ?? fallbackError}';
       _status = _cameraErrorMessage!;
       if (mounted) setState(() {});
+      return false;
     }
   }
 
@@ -794,9 +817,21 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       );
       switch (intervention.type) {
         case FocusInterventionType.reminder:
+          if (_preferences.quietMode) {
+            _clearPendingVoiceReminder();
+            break;
+          }
           _requestLocalReminder(intervention.status, intervention.cause);
           break;
         case FocusInterventionType.checkIn:
+          if (_preferences.quietMode) {
+            _focusSessionMonitor.recordReminderResponse(
+              status: intervention.status,
+              cause: intervention.cause,
+              response: ReminderPolicyResponse.remindLater,
+            );
+            break;
+          }
           unawaited(
             _showReminderCheckIn(intervention.status, intervention.cause),
           );
@@ -808,14 +843,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           );
           break;
         case FocusInterventionType.offerPause:
+          if (_preferences.quietMode) break;
           unawaited(
             _showFocusPauseSuggestion(intervention.status, intervention.cause),
           );
           break;
         case FocusInterventionType.autoPause:
+          if (_preferences.quietMode) break;
           _autoPausePomodoro(intervention.status, intervention.cause);
           break;
         case FocusInterventionType.recovered:
+          if (_preferences.quietMode) break;
           unawaited(
             _showFocusResumeSuggestion(intervention.status, intervention.cause),
           );
@@ -1231,6 +1269,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _requestLocalReminder(CompanionStatus status, CompanionCause cause) {
     final request = _ReminderRequest(status: status, cause: cause);
+    if (_preferences.quietMode) {
+      _clearPendingVoiceReminder();
+      debugPrint('Local reminder skipped by quiet mode: ${status.name}');
+      return;
+    }
     if (_isInteractiveVoiceSessionActive) {
       _clearPendingVoiceReminder();
       debugPrint(
@@ -2342,7 +2385,28 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         currentDistractedDuration: _focusSessionMonitor.distractedDuration,
         currentFocusEventCount: _focusSessionMonitor.totalEventCount,
       ),
+      'preferences': <String, dynamic>{
+        'quietMode': _preferences.quietMode,
+        'reminderSensitivity': _preferences.reminderSensitivity.name,
+        'aiResponseTone': _preferences.aiResponseTone.name,
+      },
     };
+  }
+
+  String _chatStyleInstructionFor(AiResponseTone tone) {
+    final toneLine = switch (tone) {
+      AiResponseTone.supportive => '語氣溫和、陪伴感明確，不責備使用者。',
+      AiResponseTone.encouraging => '語氣更有精神，像教練一樣鼓勵，但不要浮誇。',
+      AiResponseTone.strict => '語氣直接、簡短、重點明確，可以提醒紀律，但不要羞辱或命令。',
+    };
+    return '''
+
+[AI 回覆語氣設定]
+$toneLine
+請使用繁體中文。回覆盡量短，通常 1 到 2 句即可。
+如果使用者只是聊天，先回應情緒，再給一個可執行的小建議。
+如果使用者要求操作番茄鐘或狀態查詢，優先清楚確認結果。
+''';
   }
 
   Future<void> _applyAssistantInteractionResult(
@@ -3502,6 +3566,38 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                     const SizedBox(height: 14),
                     const Divider(height: 1, color: Color(0x1A20324D)),
                     const SizedBox(height: 14),
+                    _buildAiPreferenceTile(
+                      '安靜模式',
+                      _preferences.quietMode
+                          ? '已開啟：只記錄狀態，不播放或跳出主動提醒。'
+                          : '已關閉：偵測到狀態時會照常提醒。',
+                      icon: _preferences.quietMode
+                          ? Icons.notifications_off_rounded
+                          : Icons.notifications_active_rounded,
+                      isActive: _preferences.quietMode,
+                      trailingText: _preferences.quietMode ? '開' : '關',
+                      onTap: () {
+                        _toggleQuietMode();
+                        Navigator.pop(context);
+                      },
+                    ),
+                    _buildAiPreferenceTile(
+                      'AI 回覆語氣',
+                      _aiResponseToneSubtitle(_preferences.aiResponseTone),
+                      icon: Icons.record_voice_over_rounded,
+                      trailingText: _aiResponseToneLabel(
+                        _preferences.aiResponseTone,
+                      ),
+                      onTap: () {
+                        _cycleAiResponseTone();
+                        Navigator.pop(context);
+                      },
+                    ),
+                    _buildAiPreferenceTile(
+                      '提醒敏感度',
+                      '下一步可接疲勞與分心提醒頻率。',
+                      icon: Icons.tune_rounded,
+                    ),
                     _buildAiPreferenceTile('安靜模式', '只記錄狀態，不主動打擾。'),
                     _buildAiPreferenceTile('回覆語氣', '之後可切換溫和、嚴格或鼓勵。'),
                     _buildAiPreferenceTile('提醒敏感度', '調整疲勞與分心提醒頻率。'),
@@ -3637,47 +3733,144 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     );
   }
 
-  Widget _buildAiPreferenceTile(String title, String subtitle) {
+  Widget _buildAiPreferenceTile(
+    String title,
+    String subtitle, {
+    IconData? icon,
+    bool isActive = false,
+    String? trailingText,
+    VoidCallback? onTap,
+  }) {
+    if (icon == null && onTap == null) return const SizedBox.shrink();
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              color: Color(0xFF79D2F5),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Color(0xFF20324D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: isActive
+                ? const Color(0xFFEAF7FF)
+                : Colors.white.withValues(alpha: onTap == null ? 0 : 0.48),
+            borderRadius: BorderRadius.circular(16),
+            border: onTap == null
+                ? null
+                : Border.all(
+                    color: isActive
+                        ? const Color(0xFFB7E3F7)
+                        : const Color(0x1420324D),
                   ),
+          ),
+          child: Row(
+            children: [
+              if (icon == null)
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF79D2F5),
+                    shape: BoxShape.circle,
+                  ),
+                )
+              else
+                Icon(
+                  icon,
+                  color: isActive
+                      ? const Color(0xFF2F7ED8)
+                      : const Color(0xFF63758C),
+                  size: 22,
                 ),
-                const SizedBox(height: 2),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFF20324D),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF63758C),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailingText != null) ...[
+                const SizedBox(width: 10),
                 Text(
-                  subtitle,
-                  style: const TextStyle(
-                    color: Color(0xFF63758C),
+                  trailingText,
+                  style: TextStyle(
+                    color: isActive
+                        ? const Color(0xFF2F7ED8)
+                        : const Color(0xFF63758C),
                     fontSize: 12,
-                    height: 1.35,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ],
-            ),
+              if (onTap != null) ...[
+                const SizedBox(width: 4),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFF63758C),
+                  size: 20,
+                ),
+              ],
+            ],
           ),
-        ],
+        ),
       ),
     );
+  }
+
+  void _toggleQuietMode() {
+    setState(() {
+      _preferences = _preferences.copyWith(quietMode: !_preferences.quietMode);
+      if (_preferences.quietMode) {
+        _clearPendingVoiceReminder();
+        _focusPauseAutoDismissTimer?.cancel();
+        _focusPauseAutoDismissTimer = null;
+      }
+    });
+  }
+
+  void _cycleAiResponseTone() {
+    final nextTone = switch (_preferences.aiResponseTone) {
+      AiResponseTone.supportive => AiResponseTone.encouraging,
+      AiResponseTone.encouraging => AiResponseTone.strict,
+      AiResponseTone.strict => AiResponseTone.supportive,
+    };
+    setState(() {
+      _preferences = _preferences.copyWith(aiResponseTone: nextTone);
+    });
+  }
+
+  String _aiResponseToneLabel(AiResponseTone tone) {
+    return switch (tone) {
+      AiResponseTone.supportive => '溫和',
+      AiResponseTone.encouraging => '鼓勵',
+      AiResponseTone.strict => '嚴格',
+    };
+  }
+
+  String _aiResponseToneSubtitle(AiResponseTone tone) {
+    return switch (tone) {
+      AiResponseTone.supportive => '回覆會偏柔和、陪伴感，不責備。',
+      AiResponseTone.encouraging => '回覆會更有精神，像教練一樣提醒你往前。',
+      AiResponseTone.strict => '回覆會更直接、短句、重點明確。',
+    };
   }
 
   // ignore: unused_element

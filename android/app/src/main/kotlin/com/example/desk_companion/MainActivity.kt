@@ -22,6 +22,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -105,6 +106,18 @@ class MainActivity : FlutterActivity() {
 
                 "resetVision" -> resetVision(result)
 
+                "copyFlutterAssetToCache" -> {
+                    val assetPath = call.argument<String>("assetPath")
+                    val outputFileName = call.argument<String>("outputFileName")
+                    if (assetPath.isNullOrBlank() || outputFileName.isNullOrBlank() ||
+                        File(outputFileName).name != outputFileName ||
+                        outputFileName == "." || outputFileName == "..") {
+                        result.error("INVALID_ARGUMENT", "Asset path and cache filename are required", null)
+                    } else {
+                        copyFlutterAssetToCache(assetPath, outputFileName, result)
+                    }
+                }
+
                 "extractVideoFeaturesToCsv" -> {
                     val videoPath = call.argument<String>("videoPath")
                     val outputPath = call.argument<String>("outputPath")
@@ -126,6 +139,30 @@ class MainActivity : FlutterActivity() {
                 }
 
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun copyFlutterAssetToCache(
+        assetPath: String,
+        outputFileName: String,
+        result: MethodChannel.Result
+    ) {
+        visionExecutor.execute {
+            val output = File(cacheDir, outputFileName)
+            val staging = File(cacheDir, "$outputFileName.part")
+            try {
+                val assetKey = FlutterInjector.instance().flutterLoader()
+                    .getLookupKeyForAsset(assetPath)
+                // Keep large videos out of Dart memory and publish only complete copies.
+                assets.open(assetKey).use { input ->
+                    staging.outputStream().use { sink -> input.copyTo(sink, 64 * 1024) }
+                }
+                check(staging.renameTo(output)) { "Unable to publish cached video" }
+                mainHandler.post { result.success(output.absolutePath) }
+            } catch (error: Exception) {
+                staging.delete()
+                mainHandler.post { result.error("ASSET_COPY_ERROR", error.message, null) }
             }
         }
     }

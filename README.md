@@ -277,7 +277,7 @@ Debug 面板預設關閉，不會改變一般使用行為。
 flutter run -d <裝置 ID> `
   --dart-define=OFFLINE_DEMO=true `
   --dart-define=USE_FALLBACK_VIDEO=true `
-  --dart-define=FALLBACK_VIDEO_ASSET=assets/test9.mp4 `
+  --dart-define=FALLBACK_VIDEO_ASSET=assets/testVideos/playback/dev_dual_track_01.mp4 `
   --dart-define=SHOW_VISION_DEBUG=true
 ```
 
@@ -354,6 +354,10 @@ Vision Lab 是與正式 app 分離的量測工具，用途是在**已錄好的�
 可讀的歷次實驗結果與後續紀錄模板放在 [`docs/vision-lab-test-log.md`](docs/vision-lab-test-log.md)；
 `vision_lab_out/` 只保存被 Git 忽略的原始 CSV 證據。
 
+雙軌最新進度（2026-10-08）、V1／V2 結果、睡眠解除問題、下一步及 GitHub 提交範圍見
+[`docs/vision-lab-dual-track-progress.md`](docs/vision-lab-dual-track-progress.md)。目前只完成離線開發候選，
+未選定 2 秒／3 秒、未通過獨立驗證，也未接入正式 App；先前測試紀錄不代表本輪重新執行測試。
+
 它有獨立的 entry point，不會影響正式 app 的行為；特徵計算與正式 app 共用同一套
 `MediaPipeVisionManager`，不另外複製一份公式。
 
@@ -365,9 +369,22 @@ presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會�
 
 ### 啟動方式
 
-測試影片放在 `assets/`，預設使用 `assets/test.mp4`。可用
-`VISION_LAB_ASSET` 的 dart define 切換影片，不需要反覆修改程式；目標影片仍須在
-`pubspec.yaml` 的 `assets:` 登錄。
+原始測試影片放在 `assets/testVideos/`，相容版放在 `assets/testVideos/playback/`。
+預設使用 `assets/testVideos/playback/dev_dual_track_01.mp4`。
+只有 `playback/` 在 `pubspec.yaml` 登錄，避免將大型原片一起打包；同層新增相容版影片不需逐一登錄。
+整個 `testVideos/` 資料夾由 Git 忽略，影片需自行放入本機。
+可用 `VISION_LAB_ASSET` 的 dart define 切換影片，不需要反覆修改程式。
+
+iPhone 的 4K HEVC 10-bit HDR 影片可能超出模擬器解碼能力。可用可攜版 FFmpeg 產生
+1080p H.264 8-bit SDR 副本，原片保持不變：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tool\prepare_vision_lab_videos.ps1
+```
+
+預設轉換 `dev_dual_track_01.mp4`、`dev_dual_track_02.mp4`，也可用 `-VideoNames` 指定檔名。
+工具保留並驗證幀數與每幀 PTS，HDR 使用 tone mapping 轉為 SDR，另存來源與副本的雜湊及轉換紀錄。
+它會拒絕覆寫既有副本。正式比較應固定使用同一份相容版 CSV，不能把轉檔前後當成完全相同的視覺特徵。
 
 不需要相機，模擬器即可執行（MediaPipe 有 x86_64 native library，且走 CPU 推論）：
 
@@ -382,10 +399,10 @@ presentation timestamp（PTS）**當時間軸後，同一支影片跑兩次會�
 
 ```powershell
 flutter run -d emulator-5554 -t lib/main_vision_lab.dart `
-  --dart-define=VISION_LAB_ASSET=assets/test1.mp4
+  --dart-define=VISION_LAB_ASSET=assets/testVideos/playback/dev_dual_track_02.mp4
 ```
 
-省略 `--dart-define` 時會使用預設的 `assets/test.mp4`。
+省略 `--dart-define` 時會使用預設的 `assets/testVideos/playback/dev_dual_track_01.mp4`。
 
 Vision Lab v2 會用影片前 4 秒的有效睜眼樣本，左右眼分別取 EAR P90 作為該次 run 的
 個人化睜眼基準。開始錄影後請先面向鏡頭、自然睜眼至少 4 秒；期間正常眨眼沒有關係，
@@ -396,8 +413,9 @@ P90 不會像平均值一樣容易被低值拉動。有效樣本不足 30 幀時
 新檔，不會覆蓋前一次的結果。監看器只會拉取已完成的
 `frame_features_<runId>.csv`，不會把尚在寫入的 `.native` 暫存檔當成結果。
 
-`<runId>` 的格式是 `<影片名>_<microseconds>`，例如 `assets/test.mp4` 會產生
-`frame_features_test_1787902528095107.csv`。影片名取自 `_assetPath`，因此多支影片的
+`<runId>` 的格式是 `<影片名>_<microseconds>`，例如
+`assets/testVideos/playback/dev_dual_track_01.mp4` 會產生
+`frame_features_dev_dual_track_01_1787902528095107.csv`。影片名取自 `_assetPath`，因此多支影片的
 輸出放在同一個目錄也能一眼分辨；`ground_truth_<runId>.csv` 與比較結果都沿用同一個
 `<runId>`，避免把某支影片的預測配到另一支的 Ground Truth。
 
@@ -558,6 +576,42 @@ dart run tool\vision_lab_replay_companion.dart `
 輸出包含每幀正式 status、cause、eye state、pose state 與 posture score，終端會列出二元
 Precision／Recall／F1、誤報／漏失事件與 onset delay。此工具只離線回放共用正式邏輯，
 不改變 live app 行為。
+
+雙軌 CLI 可另外啟用實驗性的消失前軌跡仲裁，預設關閉。GT 使用
+`normal`／`reading`／`sleeping`；分心、離席等詳細行為應另保留標記，不直接丟入睡眠計分器。
+
+```powershell
+dart run tool\vision_lab_dual_track.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_sleeping_<runId>.csv `
+  vision_lab_out\presence_context_new_run `
+  --window-ms=2000 --presence-context
+```
+
+時間窗也可使用 `3000`。加上 `--presence-context` 才會使用消失前的可靠側向離開／
+相對肩膀下降證據；缺資料不直接判睡眠，也不只憑 `pose_detected=true` 認定人在座位。
+新輸出名稱加上 `_presence`，逐幀檔額外保留證據與原因；CLI 拒絕覆寫既有輸出。
+省略旗標時保持原本雙軌行為與 CSV 格式，正式 App 不受影響。
+規則、測試、失敗案例與限制見
+[`vision-lab-presence-context-review.md`](docs/vision-lab-presence-context-review.md)。
+
+分心可再加上 `--head-score-sum`，但必須同時啟用 `--presence-context`：
+
+```powershell
+dart run tool\vision_lab_dual_track.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_sleeping_<runId>.csv `
+  vision_lab_out\head_score_sum_new_run `
+  --window-ms=2000 --presence-context --head-score-sum
+```
+
+此離線候選改用最近五次頭部偏移分數總和，門檻 `275`，至少兩次真實分數達 `55`。
+缺臉只在近期有轉頭證據、Pose 可信且沒有離席／相對下降／強趴下線索時遞補 `50`；
+補分不延長兩秒期限，也不算穩定注視證據。輸出加 `_presence_headsum` 後綴與補分診斷欄位。
+原始 CSV 的缺值不改寫，`fast_status`／`fast_cause` 仍是原本正式 evaluator 的結果。
+省略新旗標時保留既有行為與輸出；正式 App 的 `HeadOffsetDetector` 預設也不變。
+開發比較、剩餘延遲與限制見
+[`vision-lab-head-score-sum-review.md`](docs/vision-lab-head-score-sum-review.md)。
 
 test6 後凍結的 Pose 低頭深度候選可用獨立工具重算；它取前 5 個正臉＋Pose 合格樣本的
 `pose_nose_y / image_height` 中位數作 baseline，使用固定相對下降門檻 `0.13`，不讀正式

@@ -109,6 +109,22 @@ class VisionChannel {
     );
   }
 
+  Future<String> copyFlutterAssetToCache({
+    required String assetPath,
+    required String outputFileName,
+  }) async {
+    final path = await _channel.invokeMethod<String>(
+      'copyFlutterAssetToCache',
+      {'assetPath': assetPath, 'outputFileName': outputFileName},
+    );
+    if (path == null || path.isEmpty) {
+      throw const FormatException(
+        'Native asset copy did not return a file path.',
+      );
+    }
+    return path;
+  }
+
   Future<String?> copyNativeAssetToCache({
     required String assetName,
     required String outputFileName,

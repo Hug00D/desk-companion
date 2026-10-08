@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:desk_companion/vision/companion_state_evaluator.dart';
-import 'package:desk_companion/vision/vision_result.dart';
+import 'package:desk_companion/vision/vision_lab_replay.dart';
 
 Future<void> main(List<String> arguments) async {
   if (arguments.length != 3) {
@@ -13,129 +13,22 @@ Future<void> main(List<String> arguments) async {
     return;
   }
 
-  final featureRows = await _readCsv(arguments[0]);
-  final truthRows = await _readCsv(arguments[1]);
+  final featureRows = await readVisionLabReplayCsv(arguments[0]);
+  final truthRows = await readVisionLabReplayCsv(arguments[1]);
   final output = File(arguments[2]);
-  if (featureRows.length < 2) {
-    throw const FormatException('Feature CSV has no frame rows.');
-  }
-
-  final header = featureRows.first;
-  final indexes = <String, int>{
-    for (var index = 0; index < header.length; index++) header[index]: index,
-  };
-  const requiredColumns = <String>[
-    'frame_idx',
-    'timestamp_ms',
-    'face_detected',
-    'pose_detected',
-    'yaw',
-    'pitch',
-    'head_offset',
-    'eye_open_l',
-    'eye_open_r',
-    'head_offset_calibrating',
-    'image_width',
-    'image_height',
-    'pose_nose_x',
-    'pose_nose_y',
-    'pose_nose_visibility',
-    'pose_left_eye_y',
-    'pose_left_eye_visibility',
-    'pose_right_eye_y',
-    'pose_right_eye_visibility',
-    'pose_left_ear_y',
-    'pose_left_ear_visibility',
-    'pose_right_ear_y',
-    'pose_right_ear_visibility',
-    'pose_left_shoulder_x',
-    'pose_left_shoulder_y',
-    'pose_left_shoulder_visibility',
-    'pose_right_shoulder_x',
-    'pose_right_shoulder_y',
-    'pose_right_shoulder_visibility',
-  ];
-  final missing = requiredColumns.where((name) => !indexes.containsKey(name));
-  if (missing.isNotEmpty) {
-    throw FormatException(
-      'Feature CSV cannot replay CompanionStateEvaluator; missing: '
-      '${missing.join(', ')}',
-    );
-  }
-
-  String value(List<String> row, String name) => row[indexes[name]!];
-  double? number(List<String> row, String name) {
-    final raw = value(row, name);
-    return raw.isEmpty ? null : double.parse(raw);
-  }
-
-  bool boolean(List<String> row, String name) =>
-      value(row, name).toLowerCase() == 'true';
-
   final truth = _readTruth(truthRows);
-  final evaluator = CompanionStateEvaluator();
-  var previousClosedFrames = 0;
-  var previousDistractedFrames = 0;
+  final replay = VisionLabCompanionReplay();
   final frames = <_ReplayFrame>[];
-  final outputLines = <String>[
-    'frame_idx,timestamp_ms,status,cause,is_sleeping,eye_state,pose_state,'
-        'posture_score',
-  ];
-
-  for (var rowIndex = 1; rowIndex < featureRows.length; rowIndex++) {
-    final row = featureRows[rowIndex];
-    if (row.length != header.length) {
-      throw FormatException('Invalid feature row ${rowIndex + 1}.');
-    }
-    final frameIndex = int.parse(value(row, 'frame_idx'));
-    final timestampMs = int.parse(value(row, 'timestamp_ms'));
-    final result = VisionResult.fromNativeMap(<String, Object?>{
-      'hasFace': boolean(row, 'face_detected'),
-      'hasPose': boolean(row, 'pose_detected'),
-      'imageWidth': number(row, 'image_width'),
-      'imageHeight': number(row, 'image_height'),
-      'poseSequence': frameIndex,
-      'lsX': number(row, 'pose_left_shoulder_x'),
-      'lsY': number(row, 'pose_left_shoulder_y'),
-      'lsVisibility': number(row, 'pose_left_shoulder_visibility'),
-      'rsX': number(row, 'pose_right_shoulder_x'),
-      'rsY': number(row, 'pose_right_shoulder_y'),
-      'rsVisibility': number(row, 'pose_right_shoulder_visibility'),
-      'poseNoseX': number(row, 'pose_nose_x'),
-      'poseNoseY': number(row, 'pose_nose_y'),
-      'poseNoseVisibility': number(row, 'pose_nose_visibility'),
-      'poseLeftEyeY': number(row, 'pose_left_eye_y'),
-      'poseLeftEyeVisibility': number(row, 'pose_left_eye_visibility'),
-      'poseRightEyeY': number(row, 'pose_right_eye_y'),
-      'poseRightEyeVisibility': number(row, 'pose_right_eye_visibility'),
-      'poseLeftEarY': number(row, 'pose_left_ear_y'),
-      'poseLeftEarVisibility': number(row, 'pose_left_ear_visibility'),
-      'poseRightEarY': number(row, 'pose_right_ear_y'),
-      'poseRightEarVisibility': number(row, 'pose_right_ear_visibility'),
-      'leftEye': number(row, 'eye_open_l'),
-      'rightEye': number(row, 'eye_open_r'),
-      'headYaw': number(row, 'yaw'),
-      'headPitch': number(row, 'pitch'),
-      'headOffsetScore': number(row, 'head_offset'),
-      'headOffsetCalibrating': boolean(row, 'head_offset_calibrating'),
-    });
-    final analysis = evaluator.evaluate(
-      result: result,
-      previousClosedFrameCount: previousClosedFrames,
-      previousDistractedFrameCount: previousDistractedFrames,
-      isFreshPoseResult: true,
-      observedAt: DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true),
+  final outputLines = <String>[visionLabReplayHeader];
+  for (final frame in parseVisionLabReplayFrames(featureRows)) {
+    final analysis = replay.evaluate(frame);
+    frames.add(
+      _ReplayFrame(
+        timestampMs: frame.timestampMs,
+        isSleeping: analysis.status == CompanionStatus.sleeping,
+      ),
     );
-    previousClosedFrames = analysis.eyeResult.closedFrameCount;
-    previousDistractedFrames = analysis.headOffsetResult.distractedFrameCount;
-    final isSleeping = analysis.status == CompanionStatus.sleeping;
-    frames.add(_ReplayFrame(timestampMs: timestampMs, isSleeping: isSleeping));
-    outputLines.add(
-      '$frameIndex,$timestampMs,${analysis.status.name},${analysis.cause.name},'
-      '$isSleeping,${analysis.eyeResult.state.name},'
-      '${analysis.poseResult.state.name},'
-      '${analysis.postureDownResult.score?.toString() ?? ''}',
-    );
+    outputLines.add(visionLabReplayRow(frame, analysis));
   }
 
   await output.writeAsString('${outputLines.join('\n')}\n');
@@ -156,14 +49,6 @@ Future<void> main(List<String> arguments) async {
     'onset_delays_ms=${metrics.onsetDelaysMs.isEmpty ? 'n/a' : metrics.onsetDelaysMs.join('/')}',
   );
   stdout.writeln('output=${output.path}');
-}
-
-Future<List<List<String>>> _readCsv(String path) async {
-  final lines = await File(path).readAsLines();
-  return lines
-      .where((line) => line.trim().isNotEmpty)
-      .map((line) => line.split(','))
-      .toList(growable: false);
 }
 
 List<_TruthEvent> _readTruth(List<List<String>> rows) {

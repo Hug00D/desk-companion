@@ -7,10 +7,20 @@ class HeadOffsetDetectionResult {
   const HeadOffsetDetectionResult({
     required this.state,
     required this.distractedFrameCount,
+    this.scoreSum,
+    this.scoreUsed,
+    this.scoreImputed = false,
+    this.scoreWindowSamples = 0,
+    this.measuredHighSamples = 0,
   });
 
   final HeadOffsetState state;
   final int distractedFrameCount;
+  final double? scoreSum;
+  final double? scoreUsed;
+  final bool scoreImputed;
+  final int scoreWindowSamples;
+  final int measuredHighSamples;
 }
 
 class HeadOffsetDetector {
@@ -25,6 +35,7 @@ class HeadOffsetDetector {
     this.settledGazeSpread = 14,
     this.settledGazeMinSamples = 4,
     this.settledGazeMaxScore = 75,
+    this.useScoreSum = false,
     OneEuroFilter? scoreFilter,
   }) : scoreFilter = scoreFilter ?? OneEuroFilter(minCutoff: 1.25, beta: 0.08);
 
@@ -34,6 +45,14 @@ class HeadOffsetDetector {
   final int enterVotes;
   final int exitFrames;
   final int missingFaceHoldFrames;
+  final bool useScoreSum;
+
+  static const scoreSumWindowSize = 5;
+  static const scoreSumEnterThreshold = 275.0;
+  static const missingFaceFillScore = 50.0;
+  static const scoreSumMinimumMeasuredHighSamples = 2;
+  static const scoreSumMissingHold = Duration(seconds: 2);
+  static const scoreSumMaximumGap = Duration(milliseconds: 500);
 
   /// Distraction means the gaze keeps moving away, not that the head rests at
   /// an angle. The baseline is captured once at camera start, so reading a
@@ -54,17 +73,30 @@ class HeadOffsetDetector {
   bool _requiresRecenter = false;
   int _exitFrameCount = 0;
   int _missingFaceFrameCount = 0;
+  final List<_ScoreSample> _scoreWindow = [];
+  DateTime? _lastSumObservationAt;
+  DateTime? _lastMeasuredTurnAt;
 
   HeadOffsetDetectionResult evaluate({
     required VisionResult result,
     required int previousDistractedFrameCount,
     DateTime? observedAt,
+    bool allowMissingFaceFill = false,
   }) {
     if (result.isHeadOffsetCalibrating) {
       reset();
       return const HeadOffsetDetectionResult(
         state: HeadOffsetState.unavailable,
         distractedFrameCount: 0,
+      );
+    }
+
+    if (useScoreSum) {
+      return _evaluateScoreSum(
+        result: result,
+        previousDistractedFrameCount: previousDistractedFrameCount,
+        timestamp: observedAt ?? DateTime.now(),
+        allowMissingFaceFill: allowMissingFaceFill,
       );
     }
 
@@ -159,6 +191,134 @@ class HeadOffsetDetector {
     );
   }
 
+  HeadOffsetDetectionResult _evaluateScoreSum({
+    required VisionResult result,
+    required int previousDistractedFrameCount,
+    required DateTime timestamp,
+    required bool allowMissingFaceFill,
+  }) {
+    if (_lastSumObservationAt != null) {
+      final gap = timestamp.difference(_lastSumObservationAt!);
+      if (gap <= Duration.zero) {
+        throw ArgumentError('Score-sum timestamps must increase.');
+      }
+      if (gap > scoreSumMaximumGap) {
+        reset();
+      }
+    }
+    _lastSumObservationAt = timestamp;
+    final rawScore = result.headOffsetScore;
+    final measured = result.hasFace && rawScore != null && rawScore.isFinite;
+    if (!measured) {
+      _gazeSamples.clear();
+      _exitFrameCount = 0;
+      final canFill =
+          !result.hasFace &&
+          allowMissingFaceFill &&
+          result.hasPose &&
+          !_requiresRecenter &&
+          _lastMeasuredTurnAt != null &&
+          timestamp.difference(_lastMeasuredTurnAt!) <= scoreSumMissingHold;
+      if (!canFill) {
+        _releaseDistraction();
+        _scoreWindow.clear();
+        _lastMeasuredTurnAt = null;
+        return _sumResult(HeadOffsetState.unavailable, 0);
+      }
+      _addScore(missingFaceFillScore, measured: false);
+      if (!_isDistracted && _sumCanEnter) {
+        _isDistracted = true;
+      }
+      return _sumResult(
+        _isDistracted
+            ? HeadOffsetState.distracted
+            : HeadOffsetState.unavailable,
+        _isDistracted ? previousDistractedFrameCount + 1 : 0,
+        scoreUsed: missingFaceFillScore,
+        imputed: true,
+      );
+    }
+
+    // The native score is already smoothed. Preserve actual peak magnitudes.
+    final score = rawScore.clamp(0.0, 100.0).toDouble();
+    _addScore(score, measured: true);
+    if (score >= enterThreshold &&
+        _measuredHighSamples >= scoreSumMinimumMeasuredHighSamples) {
+      _lastMeasuredTurnAt = timestamp;
+    }
+    if (_isDistracted) {
+      _exitFrameCount = score <= exitThreshold ? _exitFrameCount + 1 : 0;
+      if (_exitFrameCount >= exitFrames) {
+        _releaseDistraction();
+        _scoreWindow.clear();
+        _lastMeasuredTurnAt = null;
+        return _sumResult(HeadOffsetState.normal, 0, scoreUsed: score);
+      }
+      _recordGazeSample(timestamp, score);
+      if (_hasSettledGaze(timestamp)) {
+        _releaseDistraction();
+        _requiresRecenter = true;
+        _scoreWindow.clear();
+        _lastMeasuredTurnAt = null;
+        return _sumResult(HeadOffsetState.normal, 0, scoreUsed: score);
+      }
+      return _sumResult(
+        HeadOffsetState.distracted,
+        previousDistractedFrameCount + 1,
+        scoreUsed: score,
+      );
+    }
+    if (_requiresRecenter) {
+      if (score > exitThreshold) {
+        return _sumResult(HeadOffsetState.normal, 0, scoreUsed: score);
+      }
+      _requiresRecenter = false;
+      _scoreWindow.clear();
+      _lastMeasuredTurnAt = null;
+      _addScore(score, measured: true);
+    }
+    if (_sumCanEnter) {
+      _isDistracted = true;
+      _exitFrameCount = 0;
+      _gazeSamples.clear();
+      _recordGazeSample(timestamp, score);
+      return _sumResult(HeadOffsetState.distracted, 1, scoreUsed: score);
+    }
+    return _sumResult(HeadOffsetState.normal, 0, scoreUsed: score);
+  }
+
+  double get _scoreSum =>
+      _scoreWindow.fold(0.0, (sum, sample) => sum + sample.score);
+  int get _measuredHighSamples => _scoreWindow
+      .where((sample) => sample.measured && sample.score >= enterThreshold)
+      .length;
+  bool get _sumCanEnter =>
+      _scoreWindow.length == scoreSumWindowSize &&
+      _scoreSum >= scoreSumEnterThreshold &&
+      _measuredHighSamples >= scoreSumMinimumMeasuredHighSamples;
+
+  void _addScore(double score, {required bool measured}) {
+    _scoreWindow.add(_ScoreSample(score, measured));
+    if (_scoreWindow.length > scoreSumWindowSize) {
+      _scoreWindow.removeAt(0);
+    }
+  }
+
+  HeadOffsetDetectionResult _sumResult(
+    HeadOffsetState state,
+    int count, {
+    double? scoreUsed,
+    bool imputed = false,
+  }) => HeadOffsetDetectionResult(
+    state: state,
+    distractedFrameCount: count,
+    scoreSum: _scoreSum,
+    scoreUsed: scoreUsed,
+    scoreImputed: imputed,
+    scoreWindowSamples: _scoreWindow.length,
+    measuredHighSamples: _measuredHighSamples,
+  );
+
   void _addEvidence(bool value) {
     _evidenceWindow.add(value);
     if (_evidenceWindow.length > evidenceWindowSize) {
@@ -207,8 +367,17 @@ class HeadOffsetDetector {
     _requiresRecenter = false;
     _exitFrameCount = 0;
     _missingFaceFrameCount = 0;
+    _scoreWindow.clear();
+    _lastSumObservationAt = null;
+    _lastMeasuredTurnAt = null;
     scoreFilter.reset();
   }
+}
+
+class _ScoreSample {
+  const _ScoreSample(this.score, this.measured);
+  final double score;
+  final bool measured;
 }
 
 class _GazeSample {

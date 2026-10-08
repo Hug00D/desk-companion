@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
@@ -35,7 +34,7 @@ class VisionLabScreen extends StatefulWidget {
 class _VisionLabScreenState extends State<VisionLabScreen> {
   static const String _assetPath = String.fromEnvironment(
     'VISION_LAB_ASSET',
-    defaultValue: 'assets/test.mp4',
+    defaultValue: 'assets/testVideos/playback/dev_dual_track_01.mp4',
   );
   static const String _cachedVideoName = 'vision_lab_test.mp4';
 
@@ -56,13 +55,11 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
 
   Future<void> _prepareVideo() async {
     try {
-      final temporaryDirectory = await getTemporaryDirectory();
-      final videoFile = File('${temporaryDirectory.path}/$_cachedVideoName');
-      final data = await rootBundle.load(_assetPath);
-      await videoFile.writeAsBytes(
-        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-        flush: true,
+      final videoPath = await _visionChannel.copyFlutterAssetToCache(
+        assetPath: _assetPath,
+        outputFileName: _cachedVideoName,
       );
+      final videoFile = File(videoPath);
 
       final controller = VideoPlayerController.file(videoFile);
       await controller.initialize();

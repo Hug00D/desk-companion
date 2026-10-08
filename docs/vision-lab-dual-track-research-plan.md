@@ -2,10 +2,14 @@
 
 ## 1. 計畫定位
 
-- 狀態：規劃中，尚未修改正式 App 判斷邏輯
+- 狀態（2026-10-08）：離線工具與自錄開發候選已實作，停在 Review；未凍結規則、完成獨立驗證或接入正式 App
 - 研究主題：快軌高確定性事件＋慢軌低頭情境觀察
 - 核心目標：降低正常低頭閱讀被誤判為睡眠的提醒，同時保留對明顯分心、趴下與離席的反應
 - 研究原則：MediaPipe 每支影片只跑一次；所有時間窗、投票與事件規則都由逐幀 CSV 後處理
+
+最新實作進度、已有結果與未解問題請先讀
+[`vision-lab-dual-track-progress.md`](vision-lab-dual-track-progress.md)。下列是研究目標與驗收設計，
+不是已驗證的辨識成效；V1／V2 開發比較不替代 test6～test9 或 test10／test11。
 
 實際開發順序、檔案地圖、命令與分段驗收請使用：
 [`vision-lab-dual-track-handoff.md`](vision-lab-dual-track-handoff.md)。

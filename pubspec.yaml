@@ -68,17 +68,8 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
-    - assets/test.mp4
+    - assets/testVideos/playback/
     - assets/test_face.mp4
-    - assets/test1.mp4
-    - assets/test2.mp4
-    - assets/test3.mp4
-    - assets/test4.mp4
-    - assets/test5.mp4
-    - assets/test6.mp4
-    - assets/test7.mp4
-    - assets/test8.mp4
-    - assets/test9.mp4
     - assets/mock/
     - assets/audio/reminders/
     - assets/audio/wake/

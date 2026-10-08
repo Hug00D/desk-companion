@@ -1,0 +1,587 @@
+import 'dart:io';
+
+import 'package:desk_companion/vision/companion_state_evaluator.dart';
+import 'package:desk_companion/vision/dual_track_context_classifier.dart';
+import 'package:desk_companion/vision/dual_track_lab_report.dart';
+import 'package:desk_companion/vision/vision_lab_comparison.dart';
+import 'package:desk_companion/vision/vision_lab_replay.dart';
+import 'package:desk_companion/vision/vision_result.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../../tool/vision_lab_dual_track.dart' as cli;
+import '../../tool/vision_lab_replay_companion.dart' as original_replay;
+
+const _fixture = 'test/fixtures/vision/dual_track_features.csv';
+const _truth = 'test/fixtures/vision/dual_track_truth.csv';
+const _baseline = 'test/fixtures/vision/dual_track_replay_baseline.csv';
+
+DualTrackContextResult sample(
+  DualTrackContextClassifier classifier,
+  int ms, {
+  double pitch = 0,
+  double drop = 0,
+  bool closed = false,
+  bool face = true,
+  bool pose = true,
+  double visibility = 1,
+  bool eyeData = true,
+  double? eyeOpen,
+  CompanionStatus fastStatus = CompanionStatus.normal,
+  CompanionCause fastCause = CompanionCause.none,
+  bool strongPosture = false,
+}) => classifier.classify(
+  timestampMs: ms,
+  result: VisionResult.fromNativeMap({
+    'hasFace': face,
+    'hasPose': pose,
+    'imageWidth': 640.0,
+    'imageHeight': 640.0,
+    'poseNoseX': 320.0,
+    'poseNoseY': 220.0 + drop * 640,
+    'poseNoseVisibility': visibility,
+    'lsX': 220.0,
+    'lsY': 350.0,
+    'lsVisibility': visibility,
+    'rsX': 420.0,
+    'rsY': 350.0,
+    'rsVisibility': visibility,
+    'headPitch': pitch,
+    'headYaw': 0.0,
+    'headOffsetScore': 0.0,
+    if (eyeData) 'leftEye': eyeOpen ?? (closed ? 0.03 : 0.8),
+    if (eyeData) 'rightEye': eyeOpen ?? (closed ? 0.03 : 0.8),
+  }),
+  fastState: CompanionState(status: fastStatus, cause: fastCause),
+  rawEyeClosed: closed,
+  strongPostureEvidence: strongPosture,
+);
+
+void warm(DualTrackContextClassifier classifier) {
+  for (final ms in [0, 100, 250, 500]) {
+    sample(classifier, ms);
+  }
+}
+
+DualTrackContextResult lowUntil(
+  DualTrackContextClassifier classifier,
+  int endMs, {
+  bool closed = false,
+  bool face = true,
+  double visibility = 1,
+}) {
+  for (var ms = 1000; ms < endMs; ms += 250) {
+    sample(
+      classifier,
+      ms,
+      pitch: 30,
+      drop: 0.08,
+      closed: closed,
+      face: face,
+      visibility: visibility,
+    );
+  }
+  return sample(
+    classifier,
+    endMs,
+    pitch: 30,
+    drop: 0.08,
+    closed: closed,
+    face: face,
+    visibility: visibility,
+  );
+}
+
+void main() {
+  test('1999 ms does not complete a 2000 ms window', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    final before = lowUntil(classifier, 2999);
+    expect(before.slowState, SlowContextState.none);
+    expect(before.slowWindowMs, 1999);
+    final at = sample(classifier, 3000, pitch: 30, drop: 0.08);
+    expect(at.slowWindowMs, 2000);
+    expect(at.slowState, SlowContextState.readingLike);
+  });
+
+  test('irregular PTS uses milliseconds, not number of observations', () {
+    final classifier = DualTrackContextClassifier(windowMs: 3000);
+    warm(classifier);
+    for (final ms in [
+      1000,
+      1111,
+      1510,
+      1800,
+      2110,
+      2500,
+      2990,
+      3400,
+      3800,
+      3999,
+    ]) {
+      final result = sample(classifier, ms, pitch: 30, drop: 0.08);
+      expect(result.slowState, SlowContextState.none);
+    }
+    expect(
+      sample(classifier, 4000, pitch: 30, drop: 0.08).slowState,
+      SlowContextState.readingLike,
+    );
+  });
+
+  test('short low head does not create a slow event', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    sample(classifier, 700, pitch: 30, drop: 0.08);
+    sample(classifier, 950, pitch: 30, drop: 0.08);
+    expect(sample(classifier, 1200).slowState, SlowContextState.none);
+  });
+
+  test('face loss alone never establishes low-head sleep', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    for (var ms = 750; ms <= 3500; ms += 250) {
+      final result = sample(classifier, ms, face: false, closed: true);
+      expect(result.slowState, SlowContextState.none);
+      expect(result.evidenceEye, isFalse);
+      expect(result.finalState, 'normal');
+    }
+  });
+
+  test('closure alone leaves upright fast fatigue handling intact', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    for (var ms = 750; ms <= 3500; ms += 250) {
+      final result = sample(
+        classifier,
+        ms,
+        closed: true,
+        fastStatus: CompanionStatus.fatigue,
+        fastCause: CompanionCause.eyeClosed,
+      );
+      expect(result.slowState, SlowContextState.none);
+      expect(result.finalState, 'fatigue');
+    }
+  });
+
+  test('reliable closure followed by descent supplies cross evidence', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    sample(classifier, 600, closed: true);
+    sample(classifier, 750, closed: true);
+    sample(classifier, 900, closed: true);
+    final result = lowUntil(classifier, 3000, closed: true);
+    expect(result.evidenceEye, isTrue);
+    expect(result.evidenceMotion, isTrue);
+    expect(result.evidencePosture, isTrue);
+    expect(result.slowState, SlowContextState.drowsyLike);
+  });
+
+  test('confirmed cross evidence remains until stable upright recovery', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    for (final ms in [600, 750, 900]) {
+      sample(classifier, ms, closed: true);
+    }
+    lowUntil(classifier, 3000, closed: true);
+    for (var ms = 3250; ms <= 6000; ms += 250) {
+      final result = sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        closed: true,
+      );
+      expect(result.slowState, SlowContextState.drowsyLike);
+      expect(result.evidenceMotion, isTrue);
+    }
+    sample(classifier, 6250);
+    sample(classifier, 6500);
+    expect(sample(classifier, 6750).slowState, SlowContextState.none);
+  });
+
+  test('stationary low head plus closure has insufficient cross evidence', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    final result = lowUntil(classifier, 3500, closed: true);
+    expect(result.evidenceEye, isTrue);
+    expect(result.evidenceMotion, isFalse);
+    expect(result.slowState, SlowContextState.unknownLowHead);
+  });
+
+  test(
+    'unreliable pose and missing eyes cannot count as positive evidence',
+    () {
+      for (final visibility in [0.49, double.nan]) {
+        final classifier = DualTrackContextClassifier();
+        warm(classifier);
+        final result = lowUntil(
+          classifier,
+          3000,
+          closed: true,
+          visibility: visibility,
+        );
+        expect(result.evidencePosture, isFalse);
+        expect(result.slowState, SlowContextState.unknownLowHead);
+      }
+      final classifier = DualTrackContextClassifier();
+      warm(classifier);
+      for (var ms = 1000; ms <= 3500; ms += 250) {
+        final result = sample(
+          classifier,
+          ms,
+          pitch: 30,
+          drop: 0.08,
+          closed: true,
+          eyeData: false,
+        );
+        expect(result.evidenceEye, isFalse);
+        expect(result.slowState, isNot(SlowContextState.drowsyLike));
+      }
+    },
+  );
+
+  test(
+    'usable pitch with missing eyes and pose remains an uncertain low head',
+    () {
+      final classifier = DualTrackContextClassifier();
+      warm(classifier);
+      for (var ms = 1000; ms <= 3000; ms += 250) {
+        sample(classifier, ms, pitch: 30, pose: false, eyeData: false);
+      }
+      final result = sample(
+        classifier,
+        3250,
+        pitch: 30,
+        pose: false,
+        eyeData: false,
+      );
+      expect(result.lowHeadCandidate, isTrue);
+      expect(result.evidenceEye, isFalse);
+      expect(result.evidencePosture, isFalse);
+      expect(result.slowState, SlowContextState.unknownLowHead);
+    },
+  );
+
+  test('low openness without raw closure stays uncertain', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    for (var ms = 1000; ms <= 3500; ms += 250) {
+      sample(classifier, ms, pitch: 30, drop: 0.08, eyeOpen: 0.03);
+    }
+    expect(
+      sample(classifier, 3750, pitch: 30, drop: 0.08, eyeOpen: 0.03).slowState,
+      SlowContextState.unknownLowHead,
+    );
+  });
+
+  test('stable upright recovery releases the episode at 500 ms', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    lowUntil(classifier, 3000);
+    expect(sample(classifier, 3250).slowState, SlowContextState.readingLike);
+    expect(sample(classifier, 3500).slowState, SlowContextState.readingLike);
+    expect(sample(classifier, 3749).slowState, SlowContextState.readingLike);
+    expect(sample(classifier, 3750).slowState, SlowContextState.none);
+    expect(sample(classifier, 4000).finalState, 'normal');
+  });
+
+  test('loss of data during a slow episode becomes uncertainty', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    lowUntil(classifier, 3000);
+    final result = sample(
+      classifier,
+      3250,
+      face: false,
+      pose: false,
+      closed: true,
+    );
+    expect(result.slowState, SlowContextState.unknownLowHead);
+    expect(result.finalState, 'unknown_low_head');
+  });
+
+  test(
+    'fast missing, strong posture and distraction override slow context',
+    () {
+      for (final status in [
+        CompanionStatus.userMissing,
+        CompanionStatus.sleeping,
+        CompanionStatus.distracted,
+      ]) {
+        final classifier = DualTrackContextClassifier();
+        warm(classifier);
+        lowUntil(classifier, 3000);
+        final result = sample(
+          classifier,
+          3250,
+          pitch: 30,
+          drop: 0.08,
+          fastStatus: status,
+          strongPosture: status == CompanionStatus.sleeping,
+        );
+        expect(result.finalState, switch (status) {
+          CompanionStatus.userMissing => 'user_missing',
+          CompanionStatus.sleeping => 'posture_down',
+          _ => 'distracted',
+        });
+        expect(result.slowState, SlowContextState.none);
+      }
+      final classifier = DualTrackContextClassifier();
+      warm(classifier);
+      final both = sample(
+        classifier,
+        750,
+        fastStatus: CompanionStatus.userMissing,
+        strongPosture: true,
+      );
+      expect(both.finalState, 'user_missing');
+    },
+  );
+
+  test('weak low-head sleeping output waits for the slow window', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    expect(
+      sample(
+        classifier,
+        750,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.drowsy,
+      ).finalState,
+      'normal',
+    );
+  });
+
+  test(
+    'a timestamp gap restarts observation instead of fabricating duration',
+    () {
+      final classifier = DualTrackContextClassifier();
+      warm(classifier);
+      sample(classifier, 750, pitch: 30, drop: 0.08);
+      final result = sample(classifier, 5000, pitch: 30, drop: 0.08);
+      expect(result.slowState, SlowContextState.none);
+      expect(result.slowWindowMs, 0);
+      expect(result.evidenceMotion, isFalse);
+    },
+  );
+
+  test('reset clears calibration, timestamps and all temporal evidence', () {
+    final classifier = DualTrackContextClassifier();
+    warm(classifier);
+    lowUntil(classifier, 3000, closed: true);
+    classifier.reset();
+    final result = sample(classifier, 0, pitch: 30, drop: 0.08, closed: true);
+    expect(result.dataQuality, 'calibrating');
+    expect(result.slowState, SlowContextState.none);
+    expect(result.evidenceEye, isFalse);
+    expect(result.evidenceMotion, isFalse);
+    expect(result.noseDrop, isNull);
+  });
+
+  test('invalid window or reversed timestamp is rejected', () {
+    expect(
+      () => DualTrackContextClassifier(windowMs: 2500),
+      throwsArgumentError,
+    );
+    final classifier = DualTrackContextClassifier();
+    sample(classifier, 10);
+    expect(() => sample(classifier, 10), throwsArgumentError);
+    expect(() => sample(classifier, -1), throwsArgumentError);
+  });
+
+  test('shared replay matches the baseline frozen before extraction', () async {
+    final frames = parseVisionLabReplayFrames(
+      await readVisionLabReplayCsv(_fixture),
+    );
+    final replay = VisionLabCompanionReplay();
+    final lines = [
+      visionLabReplayHeader,
+      for (final frame in frames)
+        visionLabReplayRow(frame, replay.evaluate(frame)),
+    ];
+    expect('${lines.join('\n')}\n', await File(_baseline).readAsString());
+    replay.reset();
+    expect(
+      visionLabReplayRow(frames.first, replay.evaluate(frames.first)),
+      lines[1],
+    );
+  });
+
+  test(
+    'original replay CLI output is unchanged after helper extraction',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('dual_replay_');
+      addTearDown(() => directory.delete(recursive: true));
+      final output = '${directory.path}/replay.csv';
+      await original_replay.main([_fixture, _truth, output]);
+      expect(
+        await File(output).readAsBytes(),
+        await File(_baseline).readAsBytes(),
+      );
+    },
+  );
+
+  test(
+    'native face loss may omit calibration without inventing eye data',
+    () async {
+      final rows = await readVisionLabReplayCsv(_fixture);
+      final faceIndex = rows.first.indexOf('face_detected');
+      final calibrationIndex = rows.first.indexOf('head_offset_calibrating');
+      final native = rows.map((row) => List<String>.of(row)).toList();
+      for (final row in native.skip(1)) {
+        if (row[faceIndex] == 'false') row[calibrationIndex] = '';
+      }
+      final frames = parseVisionLabReplayFrames(
+        native,
+        requireRawEyeClosed: true,
+      );
+      final replay = VisionLabCompanionReplay();
+      final output = [
+        visionLabReplayHeader,
+        for (final frame in frames)
+          visionLabReplayRow(frame, replay.evaluate(frame)),
+      ];
+      expect('${output.join('\n')}\n', await File(_baseline).readAsString());
+      expect(
+        frames
+            .where((f) => !f.result.hasFace)
+            .every((f) => !f.result.hasEyeData),
+        isTrue,
+      );
+      native[1][calibrationIndex] = '';
+      expect(() => parseVisionLabReplayFrames(native), throwsFormatException);
+    },
+  );
+
+  test(
+    'missing required columns and malformed values fail explicitly',
+    () async {
+      final rows = await readVisionLabReplayCsv(_fixture);
+      expect(
+        () => parseVisionLabReplayFrames([
+          ['frame_idx', 'timestamp_ms'],
+          ['0', '0'],
+        ], requireRawEyeClosed: true),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'missing names',
+            contains('raw_eye_closed'),
+          ),
+        ),
+      );
+      final invalid = rows.map((r) => List<String>.of(r)).toList();
+      invalid[1][rows.first.indexOf('face_detected')] = 'maybe';
+      expect(() => parseVisionLabReplayFrames(invalid), throwsFormatException);
+      invalid[1][rows.first.indexOf('face_detected')] = 'true';
+      invalid[1][rows.first.indexOf('pitch')] = 'NaN';
+      expect(() => parseVisionLabReplayFrames(invalid), throwsFormatException);
+      expect(
+        () => parseVisionLabReplayFrames([rows.first, rows[1], rows[1]]),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'CLI output is deterministic for both windows and preserves fast columns',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('dual_track_');
+      addTearDown(() => directory.delete(recursive: true));
+      final frozen = await readVisionLabReplayCsv(_baseline);
+      final originalBytes = await File(_fixture).readAsBytes();
+      for (final window in [2000, 3000]) {
+        final first = await cli.runDualTrackLab(
+          featurePath: _fixture,
+          truthPath: _truth,
+          outputDirectory: '${directory.path}/a$window',
+          windowMs: window,
+        );
+        final second = await cli.runDualTrackLab(
+          featurePath: _fixture,
+          truthPath: _truth,
+          outputDirectory: '${directory.path}/b$window',
+          windowMs: window,
+        );
+        expect(first.length, 3);
+        for (var i = 0; i < first.length; i++) {
+          expect(
+            await File(first[i]).readAsBytes(),
+            await File(second[i]).readAsBytes(),
+          );
+        }
+        final actual = await readVisionLabReplayCsv(first[0]);
+        expect(actual.length, frozen.length);
+        for (var i = 1; i < actual.length; i++) {
+          expect(actual[i].take(4), frozen[i].take(4));
+        }
+        await expectLater(
+          cli.runDualTrackLab(
+            featurePath: _fixture,
+            truthPath: _truth,
+            outputDirectory: '${directory.path}/a$window',
+            windowMs: window,
+          ),
+          throwsA(isA<FileSystemException>()),
+        );
+      }
+      expect(await File(_fixture).readAsBytes(), originalBytes);
+    },
+  );
+
+  test('metrics retain unknown frames and do not invent reading labels', () {
+    final report = buildDualTrackLabReport(
+      frames: [
+        for (var i = 0; i < 4; i++)
+          VisionLabFrame(
+            frameIndex: i,
+            timestampMs: i * 1000,
+            rawState: 'normal',
+          ),
+      ],
+      states: ['normal', 'drowsy_like', 'unknown_low_head', 'drowsy_like'],
+      truth: const [
+        VisionLabEvent(state: 'normal', startMs: 0, endMs: 2000),
+        VisionLabEvent(state: 'sleeping', startMs: 2000, endMs: 4000),
+      ],
+      windowMs: 2000,
+    );
+    expect(report.metrics['tp_frames'], '1');
+    expect(report.metrics['fp_frames'], '1');
+    expect(report.metrics['fn_frames'], '1');
+    expect(report.metrics['precision'], '0.500000');
+    expect(report.metrics['reading_labels_available'], 'false');
+    expect(report.metrics['reading_fp_frames'], '');
+    expect(report.metrics['unknown_low_head_ratio'], '0.250000');
+    expect(report.metrics['unknown_low_head_longest_ms'], '1000');
+    expect(report.metrics['onset_delays_ms'], '1000');
+  });
+
+  test(
+    'invalid CLI arguments return nonzero without producing output',
+    () async {
+      final previousExitCode = exitCode;
+      try {
+        exitCode = 0;
+        await cli.main(['missing.csv', _truth, 'unused', '--window-ms=2500']);
+        expect(exitCode, 64);
+      } finally {
+        exitCode = previousExitCode;
+      }
+    },
+  );
+
+  test('reading labels enable reading false-positive reporting', () {
+    final report = buildDualTrackLabReport(
+      frames: const [
+        VisionLabFrame(frameIndex: 0, timestampMs: 0, rawState: 'normal'),
+      ],
+      states: ['drowsy_like'],
+      truth: const [VisionLabEvent(state: 'reading', startMs: 0, endMs: 1000)],
+      windowMs: 2000,
+    );
+    expect(report.metrics['reading_fp_frames'], '1');
+    expect(report.metrics['reading_fp_events'], '1');
+  });
+}

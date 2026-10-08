@@ -162,3 +162,6 @@ app.*.map.json
 
 # Vision Lab pilot outputs (measurement data, not source)
 vision_lab_out/
+
+# Local Vision Lab input videos and accompanying files.
+/assets/testVideos/
