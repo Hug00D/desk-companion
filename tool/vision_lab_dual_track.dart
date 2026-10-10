@@ -9,16 +9,20 @@ import 'package:desk_companion/vision/vision_lab_replay.dart';
 const _usage =
     'Usage: dart run tool/vision_lab_dual_track.dart '
     '<frame_features.csv> <sleeping_ground_truth.csv> <output_directory> '
-    '--window-ms=2000|--window-ms=3000 [--presence-context [--head-score-sum]]';
+    '--window-ms=2000|--window-ms=3000 '
+    '[--presence-context [--head-score-sum]] [--long-short-gate]';
 
 Future<void> main(List<String> arguments) async {
   final flags = arguments.skip(4).toSet();
   if (arguments.length < 4 ||
-      arguments.length > 6 ||
+      arguments.length > 7 ||
       flags.length != arguments.length - 4 ||
       flags.any(
-        (flag) =>
-            !const {'--presence-context', '--head-score-sum'}.contains(flag),
+        (flag) => !const {
+          '--presence-context',
+          '--head-score-sum',
+          '--long-short-gate',
+        }.contains(flag),
       ) ||
       (flags.contains('--head-score-sum') &&
           !flags.contains('--presence-context')) ||
@@ -35,6 +39,7 @@ Future<void> main(List<String> arguments) async {
       windowMs: int.parse(arguments[3].split('=').last),
       enablePresenceContext: flags.contains('--presence-context'),
       enableHeadScoreSum: flags.contains('--head-score-sum'),
+      enableLongShortGate: flags.contains('--long-short-gate'),
     );
     for (final path in paths) {
       stdout.writeln('output=$path');
@@ -61,11 +66,13 @@ Future<List<String>> runDualTrackLab({
   required int windowMs,
   bool enablePresenceContext = false,
   bool enableHeadScoreSum = false,
+  bool enableLongShortGate = false,
 }) async {
   final classifier = DualTrackContextClassifier(
     windowMs: windowMs,
     enablePresenceContext: enablePresenceContext,
     enableHeadScoreSum: enableHeadScoreSum,
+    enableLongShortGate: enableLongShortGate,
   );
   final frames = parseVisionLabReplayFrames(
     await readVisionLabReplayCsv(featurePath),
@@ -79,6 +86,7 @@ Future<List<String>> runDualTrackLab({
         'data_quality,final_state,configured_window_ms,eye_coverage,pose_coverage,'
         'closed_duration_ms,nose_drop,pitch_range,nose_range,'
         'motion_evidence_at_ms,eye_descent_at_ms,drowsy_confirmed'
+        '${enableLongShortGate ? ',long_context,short_trigger,sleep_latched,posture_score,static_deep_posture_ms' : ''}'
         '${enablePresenceContext ? ',presence_context,presence_reason,face_missing_ms,loss_history_reliable,side_exit_evidence,relative_descent_evidence,sleep_supported' : ''}'
         '${enableHeadScoreSum ? ',head_score_state,head_score_used,head_score_imputed,head_score_sum,head_score_samples,head_score_measured_high_samples' : ''}',
   ];
@@ -95,6 +103,9 @@ Future<List<String>> runDualTrackLab({
           fast.postureDownResult.state == PostureDownState.down &&
           !fast.postureDownResult.isCalibrating &&
           DualTrackContextClassifier.hasReliablePoseGeometry(frame.result),
+      postureScore: fast.postureDownResult.isCalibrating
+          ? null
+          : fast.postureDownResult.score,
     );
     outputLines.add(
       '${frame.frameIndex},${frame.timestampMs},${fast.status.name},${fast.cause.name},'
@@ -106,6 +117,7 @@ Future<List<String>> runDualTrackLab({
       '${dual.pitchRange ?? ''},${dual.noseRange ?? ''},'
       '${dual.motionEvidenceAtMs ?? ''},${dual.eyeDescentAtMs ?? ''},'
       '${dual.drowsyConfirmed}'
+      '${enableLongShortGate ? ',${dual.longContext.csvValue},${dual.shortTrigger},${dual.sleepLatched},${dual.postureScore ?? ''},${dual.staticDeepPostureMs}' : ''}'
       '${enablePresenceContext ? ',${dual.disappearance!.state.name},${dual.disappearance!.reason},${dual.disappearance!.faceMissingMs},${dual.disappearance!.reliableHistory},${dual.disappearance!.sideExit},${dual.disappearance!.relativeDescent},${dual.disappearance!.sleepSupported}' : ''}'
       '${enableHeadScoreSum ? ',${dual.headScore!.state.name},${dual.headScore!.scoreUsed ?? ''},${dual.headScore!.scoreImputed},${dual.headScore!.scoreSum ?? ''},${dual.headScore!.scoreWindowSamples},${dual.headScore!.measuredHighSamples}' : ''}',
     );
@@ -132,7 +144,8 @@ Future<List<String>> runDualTrackLab({
       .replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
   final runId =
       '$inputRunId${enablePresenceContext ? '_presence' : ''}'
-      '${enableHeadScoreSum ? '_headsum' : ''}';
+      '${enableHeadScoreSum ? '_headsum' : ''}'
+      '${enableLongShortGate ? '_longshort' : ''}';
   final directory = Directory(outputDirectory);
   final files = [
     for (final kind in ['frames', 'events', 'metrics'])

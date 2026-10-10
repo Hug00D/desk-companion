@@ -15,6 +15,8 @@ const _fixture = 'test/fixtures/vision/dual_track_features.csv';
 const _truth = 'test/fixtures/vision/dual_track_truth.csv';
 const _baseline = 'test/fixtures/vision/dual_track_replay_baseline.csv';
 
+String normalizeNewlines(String value) => value.replaceAll('\r\n', '\n');
+
 DualTrackContextResult sample(
   DualTrackContextClassifier classifier,
   int ms, {
@@ -29,6 +31,7 @@ DualTrackContextResult sample(
   CompanionStatus fastStatus = CompanionStatus.normal,
   CompanionCause fastCause = CompanionCause.none,
   bool strongPosture = false,
+  double? postureScore,
 }) => classifier.classify(
   timestampMs: ms,
   result: VisionResult.fromNativeMap({
@@ -54,6 +57,7 @@ DualTrackContextResult sample(
   fastState: CompanionState(status: fastStatus, cause: fastCause),
   rawEyeClosed: closed,
   strongPostureEvidence: strongPosture,
+  postureScore: postureScore,
 );
 
 void warm(DualTrackContextClassifier classifier) {
@@ -337,6 +341,211 @@ void main() {
     },
   );
 
+  test('long-short gate keeps observing while fast output has priority', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    for (var ms = 1000; ms < 3000; ms += 250) {
+      sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: ms == 2000
+            ? CompanionStatus.distracted
+            : CompanionStatus.normal,
+      );
+    }
+    final result = sample(classifier, 3000, pitch: 30, drop: 0.08);
+    expect(result.slowWindowMs, 2000);
+    expect(result.longContext, LongHeadContext.stableLowHead);
+    expect(result.slowState, SlowContextState.readingLike);
+  });
+
+  test(
+    'static deep posture confirms only after 1000 ms and a mature track',
+    () {
+      final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+      warm(classifier);
+      for (var ms = 1000; ms < 2000; ms += 250) {
+        sample(classifier, ms, pitch: 30, drop: 0.08, postureScore: 79.9);
+      }
+      for (var ms = 2000; ms < 3000; ms += 250) {
+        final result = sample(
+          classifier,
+          ms,
+          pitch: 30,
+          drop: 0.08,
+          postureScore: 80,
+        );
+        expect(result.sleepLatched, isFalse);
+      }
+      final before = sample(
+        classifier,
+        2999,
+        pitch: 30,
+        drop: 0.08,
+        postureScore: 80,
+      );
+      expect(before.staticDeepPostureMs, 999);
+      expect(before.sleepLatched, isFalse);
+      final confirmed = sample(
+        classifier,
+        3000,
+        pitch: 30,
+        drop: 0.08,
+        postureScore: 80,
+      );
+      expect(confirmed.staticDeepPostureMs, 1000);
+      expect(confirmed.shortTrigger, 'static_deep_posture');
+      expect(confirmed.longContext, LongHeadContext.possibleDrowsy);
+      expect(confirmed.sleepLatched, isTrue);
+      expect(confirmed.finalState, 'drowsy_like');
+    },
+  );
+
+  test('static deep posture latch releases after the score recovers', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      sample(classifier, ms, pitch: 30, drop: 0.08, postureScore: 90);
+    }
+    expect(
+      sample(
+        classifier,
+        3250,
+        pitch: 30,
+        drop: 0.08,
+        postureScore: 70,
+      ).sleepLatched,
+      isTrue,
+    );
+    expect(
+      sample(
+        classifier,
+        3500,
+        pitch: 30,
+        drop: 0.08,
+        postureScore: 70,
+      ).sleepLatched,
+      isTrue,
+    );
+    final recovered = sample(
+      classifier,
+      3750,
+      pitch: 30,
+      drop: 0.08,
+      postureScore: 70,
+    );
+    expect(recovered.sleepLatched, isFalse);
+    expect(recovered.finalState, 'reading_like');
+  });
+
+  test('strong posture latches sleep through a short tracking loss', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+    );
+    warm(classifier);
+    DualTrackContextResult? trigger;
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      trigger = sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.postureDown,
+        strongPosture: true,
+      );
+    }
+    expect(trigger!.longContext, LongHeadContext.possibleDrowsy);
+    expect(trigger.finalState, 'posture_down');
+    expect(trigger.sleepLatched, isTrue);
+    DualTrackContextResult? missing;
+    for (var ms = 3250; ms <= 4750; ms += 250) {
+      missing = sample(
+        classifier,
+        ms,
+        face: false,
+        pose: false,
+        fastStatus: CompanionStatus.userMissing,
+        fastCause: CompanionCause.userAway,
+      );
+    }
+    expect(missing!.sleepLatched, isTrue);
+    expect(missing.finalState, 'drowsy_like');
+    expect(missing.slowState, SlowContextState.drowsyLike);
+  });
+
+  test('latched sleep releases only after reliable upright recovery', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.postureDown,
+        strongPosture: true,
+      );
+    }
+    expect(sample(classifier, 3250).sleepLatched, isTrue);
+    expect(sample(classifier, 3500).sleepLatched, isTrue);
+    final recovered = sample(classifier, 3750);
+    expect(recovered.sleepLatched, isFalse);
+    expect(recovered.slowState, SlowContextState.none);
+    expect(recovered.finalState, 'normal');
+  });
+
+  test('reliable low-head tracking releases a stale posture latch', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.postureDown,
+        strongPosture: true,
+      );
+    }
+    expect(
+      sample(classifier, 3250, pitch: 30, drop: 0.08).sleepLatched,
+      isTrue,
+    );
+    expect(
+      sample(classifier, 3500, pitch: 30, drop: 0.08).sleepLatched,
+      isTrue,
+    );
+    final recovered = sample(classifier, 3750, pitch: 30, drop: 0.08);
+    expect(recovered.sleepLatched, isFalse);
+    expect(recovered.finalState, 'reading_like');
+  });
+
+  test('reliable low-head eye tracking rejects an ambiguous sleep trigger', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    DualTrackContextResult? result;
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      result = sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        closed: true,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.drowsy,
+      );
+    }
+    expect(result!.eyeCoverage, greaterThanOrEqualTo(0.8));
+    expect(result.longContext, isNot(LongHeadContext.possibleDrowsy));
+    expect(result.sleepLatched, isFalse);
+  });
+
   test('weak low-head sleeping output waits for the slow window', () {
     final classifier = DualTrackContextClassifier();
     warm(classifier);
@@ -400,7 +609,10 @@ void main() {
       for (final frame in frames)
         visionLabReplayRow(frame, replay.evaluate(frame)),
     ];
-    expect('${lines.join('\n')}\n', await File(_baseline).readAsString());
+    expect(
+      '${lines.join('\n')}\n',
+      normalizeNewlines(await File(_baseline).readAsString()),
+    );
     replay.reset();
     expect(
       visionLabReplayRow(frames.first, replay.evaluate(frames.first)),
@@ -416,8 +628,8 @@ void main() {
       final output = '${directory.path}/replay.csv';
       await original_replay.main([_fixture, _truth, output]);
       expect(
-        await File(output).readAsBytes(),
-        await File(_baseline).readAsBytes(),
+        normalizeNewlines(await File(output).readAsString()),
+        normalizeNewlines(await File(_baseline).readAsString()),
       );
     },
   );
@@ -442,7 +654,10 @@ void main() {
         for (final frame in frames)
           visionLabReplayRow(frame, replay.evaluate(frame)),
       ];
-      expect('${output.join('\n')}\n', await File(_baseline).readAsString());
+      expect(
+        '${output.join('\n')}\n',
+        normalizeNewlines(await File(_baseline).readAsString()),
+      );
       expect(
         frames
             .where((f) => !f.result.hasFace)
