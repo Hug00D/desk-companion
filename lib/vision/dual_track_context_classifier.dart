@@ -164,12 +164,15 @@ class DualTrackContextClassifier {
     _lastTimestamp = timestampMs;
 
     final poseReliable = hasReliablePoseGeometry(result);
+    final matureLowHeadBeforeLoss =
+        _lowSince != null && timestampMs - _lowSince! >= windowMs;
     final disappearance = enablePresenceContext
         ? _disappearance.classify(
             timestampMs: timestampMs,
             result: result,
             reliablePose: poseReliable,
             confirmedSleepPosture: strongPostureEvidence,
+            matureLowHeadBeforeLoss: matureLowHeadBeforeLoss,
           )
         : null;
     HeadOffsetDetectionResult? headScore;
@@ -467,14 +470,21 @@ class DualTrackContextClassifier {
         : LongHeadContext.insufficientData;
 
     if (enableLongShortGate) {
+      // A strong posture trigger is already produced from a reliable current
+      // pose by the posture detector. Requiring 80% pose coverage again here
+      // prevents a mature low-head episode from latching when landmarks flicker
+      // during real sleep. Keep the coverage requirement for the weaker fast
+      // sleep signal, which does not carry the same posture confidence.
+      final highConfidenceShortTrigger =
+          currentPostureTrigger || staticDeepPostureConfirmed;
+      final contextSupportedFastSleep =
+          evidencePosture &&
+          currentFastSleepTrigger &&
+          eyeCoverage < minimumCoverage &&
+          !stableReadingEvidence;
       if (!_sleepLatched &&
           mature &&
-          evidencePosture &&
-          (currentPostureTrigger ||
-              staticDeepPostureConfirmed ||
-              currentFastSleepTrigger &&
-                  eyeCoverage < minimumCoverage &&
-                  !stableReadingEvidence)) {
+          (highConfidenceShortTrigger || contextSupportedFastSleep)) {
         _sleepLatched = true;
         _staticDeepPostureLatched =
             !currentPostureTrigger && staticDeepPostureConfirmed;

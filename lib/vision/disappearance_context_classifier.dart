@@ -45,12 +45,14 @@ class DisappearanceContextClassifier {
   bool _relativeDescent = false;
   bool _away = false;
   bool _postureConfirmed = false;
+  bool _lowHeadBeforeLoss = false;
 
   DisappearanceContextResult classify({
     required int timestampMs,
     required VisionResult result,
     required bool reliablePose,
     required bool confirmedSleepPosture,
+    bool matureLowHeadBeforeLoss = false,
   }) {
     if (timestampMs < 0 ||
         (_lastTimestamp != null && timestampMs <= _lastTimestamp!)) {
@@ -97,6 +99,7 @@ class DisappearanceContextClassifier {
     _returnSince = null;
     if (_missingSince == null) {
       _missingSince = timestampMs;
+      _lowHeadBeforeLoss = matureLowHeadBeforeLoss;
       _history.removeWhere((sample) => timestampMs - sample.ms > historyMs);
       if (_history.length >= 2) {
         final last = _history.last;
@@ -146,7 +149,11 @@ class DisappearanceContextClassifier {
     final fullyAbsent =
         _fullyMissingSince != null &&
         timestampMs - _fullyMissingSince! >= confirmationMs;
-    if (_sideExit || (_reliableHistory && !_relativeDescent && fullyAbsent)) {
+    if (_sideExit ||
+        (_reliableHistory &&
+            !_relativeDescent &&
+            fullyAbsent &&
+            !_lowHeadBeforeLoss)) {
       _away = true;
       return _result(
         DisappearanceState.away,
@@ -158,6 +165,13 @@ class DisappearanceContextClassifier {
       return _result(
         DisappearanceState.sleepCandidate,
         'relative_head_descent',
+        timestampMs,
+      );
+    }
+    if (_lowHeadBeforeLoss && fullyAbsent) {
+      return _result(
+        DisappearanceState.unknown,
+        'low_head_tracking_lost',
         timestampMs,
       );
     }
@@ -196,6 +210,7 @@ class DisappearanceContextClassifier {
     _relativeDescent = false;
     _away = false;
     _postureConfirmed = false;
+    _lowHeadBeforeLoss = false;
   }
 
   void reset() {

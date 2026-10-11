@@ -121,6 +121,8 @@ class MainActivity : FlutterActivity() {
                 "extractVideoFeaturesToCsv" -> {
                     val videoPath = call.argument<String>("videoPath")
                     val outputPath = call.argument<String>("outputPath")
+                    val enableLiteRtPersonPresence =
+                        call.argument<Boolean>("enableLiteRtPersonPresence") ?: false
                     if (videoPath.isNullOrBlank() || outputPath.isNullOrBlank()) {
                         result.error(
                             "INVALID_ARGUMENT",
@@ -134,7 +136,12 @@ class MainActivity : FlutterActivity() {
                             null
                         )
                     } else {
-                        extractVideoFeaturesToCsv(videoPath, outputPath, result)
+                        extractVideoFeaturesToCsv(
+                            videoPath,
+                            outputPath,
+                            enableLiteRtPersonPresence,
+                            result
+                        )
                     }
                 }
 
@@ -420,11 +427,15 @@ class MainActivity : FlutterActivity() {
     private fun extractVideoFeaturesToCsv(
         videoPath: String,
         outputPath: String,
+        enableLiteRtPersonPresence: Boolean,
         result: MethodChannel.Result
     ) {
         visionExecutor.execute {
             val outputFile = File(outputPath)
             var labVisionManager: MediaPipeVisionManager? = null
+            var personPresence: VisionLabLiteRtPersonPresence? = null
+            var personPresenceWriter: VisionLabPersonPresenceCsvWriter? = null
+            var personPresenceOutputFile: File? = null
             try {
                 require(File(videoPath).isFile) { "Video does not exist: $videoPath" }
                 require(!outputFile.exists()) { "Output already exists: $outputPath" }
@@ -433,48 +444,100 @@ class MainActivity : FlutterActivity() {
                 }
 
                 labVisionManager = MediaPipeVisionManager(applicationContext)
+                if (enableLiteRtPersonPresence) {
+                    val withoutNative = outputFile.name.removeSuffix(".native")
+                    val withoutCsv = withoutNative.removeSuffix(".csv")
+                    val runId = withoutCsv.removePrefix("frame_features_")
+                    personPresenceOutputFile = File(
+                        outputFile.parentFile,
+                        "person_presence_litert_$runId.csv"
+                    )
+                    require(!requireNotNull(personPresenceOutputFile).exists()) {
+                        "Person-presence output already exists: $personPresenceOutputFile"
+                    }
+                    personPresence = VisionLabLiteRtPersonPresence(applicationContext)
+                    personPresenceWriter = VisionLabPersonPresenceCsvWriter(
+                        requireNotNull(personPresenceOutputFile)
+                    )
+                }
                 val manager = labVisionManager
+                var lastPersonPresenceProbeTimestampMs: Long? = null
                 val summary = VisionFrameCsvWriter(outputFile).use { csvWriter ->
                     OfflineVideoFrameDecoder(MAX_ANALYSIS_DIMENSION).decode(videoPath) {
                         frameIndex,
                         timestampMs,
                         bitmap ->
-                        val features = manager.analyze(
-                            bitmap = bitmap,
-                            runFace = true,
-                            runPose = true,
-                            timestampMs = timestampMs
-                        )
-                        csvWriter.writeFrame(frameIndex, timestampMs, features)
-                        if ((frameIndex + 1) % VISION_LAB_PROGRESS_INTERVAL == 0) {
-                            csvWriter.flush()
-                            Log.d(
-                                VISION_LAB_LOG_TAG,
-                                "extractedFrames=${frameIndex + 1} timestampMs=$timestampMs"
+                        val previousProbeTimestampMs = lastPersonPresenceProbeTimestampMs
+                        val shouldProbePersonPresence = personPresence != null &&
+                            (previousProbeTimestampMs == null ||
+                                timestampMs - previousProbeTimestampMs >=
+                                VisionLabLiteRtPersonPresence.SAMPLE_INTERVAL_MS)
+                        val personPresenceBitmap = if (shouldProbePersonPresence) {
+                            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                        } else {
+                            null
+                        }
+                        try {
+                            val features = manager.analyze(
+                                bitmap = bitmap,
+                                runFace = true,
+                                runPose = true,
+                                timestampMs = timestampMs
                             )
+                            val hasLandmarkPresence = features["hasFace"] == true ||
+                                features["hasPose"] == true
+                            if (shouldProbePersonPresence) {
+                                lastPersonPresenceProbeTimestampMs = timestampMs
+                                if (!hasLandmarkPresence) {
+                                    personPresenceWriter?.write(
+                                        frameIndex,
+                                        timestampMs,
+                                        requireNotNull(personPresence).analyze(
+                                            requireNotNull(personPresenceBitmap)
+                                        )
+                                    )
+                                }
+                            }
+                            csvWriter.writeFrame(frameIndex, timestampMs, features)
+                            if ((frameIndex + 1) % VISION_LAB_PROGRESS_INTERVAL == 0) {
+                                csvWriter.flush()
+                                personPresenceWriter?.flush()
+                                Log.d(
+                                    VISION_LAB_LOG_TAG,
+                                    "extractedFrames=${frameIndex + 1} timestampMs=$timestampMs"
+                                )
+                            }
+                        } finally {
+                            personPresenceBitmap?.recycle()
                         }
                     }
                 }
 
                 mainHandler.post {
-                    result.success(
-                        mapOf(
-                            "outputPath" to outputFile.absolutePath,
-                            "frameCount" to summary.frameCount,
-                            "droppedFrameCount" to summary.droppedTimestampsMs.size,
-                            "sourceFrameCount" to summary.sourceFrameCount,
-                            "metadataFrameCount" to summary.metadataFrameCount,
-                            "firstTimestampMs" to summary.firstTimestampMs,
-                            "lastTimestampMs" to summary.lastTimestampMs
-                        )
-                    )
+                    result.success(mutableMapOf<String, Any?>(
+                        "outputPath" to outputFile.absolutePath,
+                        "frameCount" to summary.frameCount,
+                        "droppedFrameCount" to summary.droppedTimestampsMs.size,
+                        "sourceFrameCount" to summary.sourceFrameCount,
+                        "metadataFrameCount" to summary.metadataFrameCount,
+                        "firstTimestampMs" to summary.firstTimestampMs,
+                        "lastTimestampMs" to summary.lastTimestampMs
+                    ).apply {
+                        personPresenceOutputFile?.let {
+                            put("personPresenceOutputPath", it.absolutePath)
+                            put("personPresenceSampleCount", personPresenceWriter?.sampleCount ?: 0)
+                        }
+                    })
                 }
             } catch (error: Exception) {
                 if (outputFile.exists()) outputFile.delete()
+                personPresenceOutputFile?.delete()
                 mainHandler.post {
                     result.error("VIDEO_EXTRACTION_ERROR", error.message, null)
                 }
             } finally {
+                personPresenceWriter?.close()
+                personPresence?.close()
                 labVisionManager?.close()
             }
         }

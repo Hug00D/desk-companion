@@ -37,6 +37,10 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
     defaultValue: 'assets/testVideos/playback/dev_dual_track_01.mp4',
   );
   static const String _cachedVideoName = 'vision_lab_test.mp4';
+  static const bool _enableLiteRtPersonPresence = bool.fromEnvironment(
+    'VISION_LAB_LITERT_PERSON_PRESENCE',
+    defaultValue: false,
+  );
 
   final VisionChannel _visionChannel = const VisionChannel();
   final FrameFeatureCsvClassifier _csvClassifier =
@@ -116,6 +120,7 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
       final extraction = await _visionChannel.extractVideoFeaturesToCsv(
         videoPath: videoPath,
         outputPath: nativeOutputPath,
+        enableLiteRtPersonPresence: _enableLiteRtPersonPresence,
       );
       final classification = await _csvClassifier.classifyFile(
         inputPath: nativeOutputPath,
@@ -130,11 +135,16 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
         metadataFrameCount: extraction.metadataFrameCount,
         firstTimestampMs: extraction.firstTimestampMs,
         lastTimestampMs: extraction.lastTimestampMs,
+        personPresenceOutputPath: extraction.personPresenceOutputPath,
+        personPresenceSampleCount: extraction.personPresenceSampleCount,
       );
       if (!mounted) return;
       setState(() {
         _completedRuns.add(classifiedExtraction);
         final calibration = classification.eyeCalibration;
+        final personPresenceLabel = extraction.personPresenceOutputPath == null
+            ? ''
+            : 'LiteRT 人體存在 ${extraction.personPresenceSampleCount} 筆。';
         final calibrationLabel = calibration.usedFallback
             ? '固定 EAR fallback'
             : '個人化 EAR P90 '
@@ -143,6 +153,7 @@ class _VisionLabScreenState extends State<VisionLabScreen> {
         _status =
             '完成 ${extraction.frameCount} 幀；raw_state 是零記憶單幀輸出，'
             '$calibrationLabel（${calibration.sampleCount} 幀）。'
+            '$personPresenceLabel'
             '請播放影片確認眨眼幀會短暫跳動。';
       });
     } catch (error) {

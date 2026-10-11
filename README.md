@@ -505,6 +505,52 @@ CSV 分類器先從前 4 秒算出一次左右眼 P90，再將這兩個固定值
 `FrameClassifier`。`FrameClassifier` 本身仍不保存前幀、計數器或狀態；相同 CSV 與相同
 校正設定會得到相同輸出。畫面完成訊息會顯示左右眼基準與校正樣本數。
 
+### 實驗：Face／Pose 都消失時量測人體是否仍在畫面
+
+`raw_user_missing` 只表示 Face Landmarker 與 Pose Landmarker 同時沒有輸出，不能直接證明
+人已離席。低頭睡覺時，臉可能被頭髮遮住、上半身 landmarks 也可能失效，但畫面裡仍有很大一塊
+人體。可用獨立的 Selfie Segmentation 後處理工具量測這個差異；它只產生原始遮罩數值，**不會
+修改正式 App，也不會直接把影像判成睡眠**。
+
+先安裝工具依賴：
+
+```powershell
+python -m pip install -r .\tool\requirements-vision-lab-person-presence.txt
+```
+
+再以既有逐幀 CSV 和同一支影片執行：
+
+```powershell
+python .\tool\vision_lab_person_presence.py `
+  --video .\assets\testVideos\playback\test11.mp4 `
+  --features .\vision_lab_out\frame_features_test11_<runId>.csv `
+  --ground-truth .\vision_lab_out\annotations\ground_truth_behavior_test11_<runId>.csv `
+  --output .\vision_lab_out\person_presence_test11.csv
+```
+
+工具只在 `face_detected=false` 且 `pose_detected=false` 時取樣，預設每 200 ms 一次。影像以
+影片 PTS 對齊既有逐幀 CSV，輸出時間則原樣沿用原生解碼得到的真實 `timestamp_ms`；`frame_idx`
+只保留為原始 CSV 的列識別，避免不同解碼器對掉幀的處理差異造成錯位。工具不使用系統時間或
+UI 時間。輸出包含來源影片 PTS、PTS 誤差、人體信心遮罩平均值、面積比例與遮罩中心，仍放在被 Git
+忽略的 `vision_lab_out/`。預設模型為
+`tool/models/selfie_segmenter.tflite`，來源是 Google MediaPipe 的
+[Selfie Segmenter](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite)。
+
+Android MediaPipe 0.10.33 `ImageSegmenter` 在模擬器第一次推論會發生 native crash，因此不使用
+該 Task Graph。Vision Lab 另有明確 opt-in 的 LiteRT CPU 原型，直接執行同一個
+`selfie_segmenter.tflite`，不改 `frame_features.csv` schema，也不影響正式 App 的預設路徑：
+
+```powershell
+flutter run --no-pub --target lib\main_vision_lab.dart -d <deviceId> `
+  --dart-define=VISION_LAB_ASSET=assets/testVideos/playback/test11.mp4 `
+  --dart-define=VISION_LAB_LITERT_PERSON_PRESENCE=true
+```
+
+按下「產生 frame_features.csv」後，Face 與 Pose 都沒有輸出的候選影格會每 200 ms 另寫
+`person_presence_litert_<runId>.csv`。`tool/watch_vision_lab_output.ps1` 會連同逐幀 CSV 一起拉回
+`vision_lab_out/`。這仍是 Vision Lab 原型；正式 App 尚未消費遮罩結果，下一步需先在 ARM64
+實機驗證效能與生命週期，再把 person presence 當離席護欄接入。
+
 ### 建立 Ground Truth
 
 不需要逐幀人工標記。以影片時間軸粗略切出連續區段，另存成

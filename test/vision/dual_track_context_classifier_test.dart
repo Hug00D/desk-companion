@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:desk_companion/vision/companion_state_evaluator.dart';
+import 'package:desk_companion/vision/disappearance_context_classifier.dart';
 import 'package:desk_companion/vision/dual_track_context_classifier.dart';
 import 'package:desk_companion/vision/dual_track_lab_report.dart';
 import 'package:desk_companion/vision/vision_lab_comparison.dart';
@@ -303,6 +304,42 @@ void main() {
     expect(result.finalState, 'unknown_low_head');
   });
 
+  test('mature low-head tracking loss does not become user missing', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+    );
+    warm(classifier);
+    lowUntil(classifier, 3000);
+    sample(
+      classifier,
+      3250,
+      face: false,
+      pose: false,
+      fastStatus: CompanionStatus.userMissing,
+      fastCause: CompanionCause.userAway,
+    );
+    sample(
+      classifier,
+      3500,
+      face: false,
+      pose: false,
+      fastStatus: CompanionStatus.userMissing,
+      fastCause: CompanionCause.userAway,
+    );
+    final result = sample(
+      classifier,
+      3750,
+      face: false,
+      pose: false,
+      fastStatus: CompanionStatus.userMissing,
+      fastCause: CompanionCause.userAway,
+    );
+    expect(result.disappearance!.state, DisappearanceState.unknown);
+    expect(result.disappearance!.reason, 'low_head_tracking_lost');
+    expect(result.finalState, 'unknown_low_head');
+  });
+
   test(
     'fast missing, strong posture and distraction override slow context',
     () {
@@ -475,6 +512,55 @@ void main() {
     expect(missing!.sleepLatched, isTrue);
     expect(missing.finalState, 'drowsy_like');
     expect(missing.slowState, SlowContextState.drowsyLike);
+  });
+
+  test(
+    'strong posture latches after mature low head despite sparse pose history',
+    () {
+      final classifier = DualTrackContextClassifier(
+        enablePresenceContext: true,
+        enableLongShortGate: true,
+      );
+      warm(classifier);
+      for (var ms = 1000; ms < 3000; ms += 250) {
+        final result = sample(classifier, ms, pitch: 30, pose: false);
+        expect(result.sleepLatched, isFalse);
+      }
+      final trigger = sample(
+        classifier,
+        3000,
+        pitch: 30,
+        drop: 0.08,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.postureDown,
+        strongPosture: true,
+      );
+      expect(trigger.poseCoverage, lessThan(0.8));
+      expect(trigger.evidencePosture, isFalse);
+      expect(trigger.shortTrigger, 'strong_posture');
+      expect(trigger.sleepLatched, isTrue);
+      expect(trigger.finalState, 'posture_down');
+    },
+  );
+
+  test('strong posture still waits for a mature low-head track', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+    );
+    warm(classifier);
+    final early = sample(
+      classifier,
+      1000,
+      pitch: 30,
+      drop: 0.08,
+      fastStatus: CompanionStatus.sleeping,
+      fastCause: CompanionCause.postureDown,
+      strongPosture: true,
+    );
+    expect(early.slowWindowMs, 0);
+    expect(early.sleepLatched, isFalse);
+    expect(early.finalState, 'posture_down');
   });
 
   test('latched sleep releases only after reliable upright recovery', () {

@@ -11,6 +11,8 @@ class VisionVideoExtractionResult {
     required this.metadataFrameCount,
     required this.firstTimestampMs,
     required this.lastTimestampMs,
+    this.personPresenceOutputPath,
+    this.personPresenceSampleCount = 0,
   });
 
   final String outputPath;
@@ -20,6 +22,8 @@ class VisionVideoExtractionResult {
   final int? metadataFrameCount;
   final int? firstTimestampMs;
   final int? lastTimestampMs;
+  final String? personPresenceOutputPath;
+  final int personPresenceSampleCount;
 
   factory VisionVideoExtractionResult.fromNativeMap(
     Map<dynamic, dynamic> data,
@@ -37,6 +41,9 @@ class VisionVideoExtractionResult {
       metadataFrameCount: (data['metadataFrameCount'] as num?)?.toInt(),
       firstTimestampMs: (data['firstTimestampMs'] as num?)?.toInt(),
       lastTimestampMs: (data['lastTimestampMs'] as num?)?.toInt(),
+      personPresenceOutputPath: data['personPresenceOutputPath'] as String?,
+      personPresenceSampleCount:
+          (data['personPresenceSampleCount'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -96,11 +103,14 @@ class VisionChannel {
   Future<VisionVideoExtractionResult> extractVideoFeaturesToCsv({
     required String videoPath,
     required String outputPath,
+    bool enableLiteRtPersonPresence = false,
   }) async {
-    final result = await _channel.invokeMethod<dynamic>(
-      'extractVideoFeaturesToCsv',
-      <String, String>{'videoPath': videoPath, 'outputPath': outputPath},
-    );
+    final result = await _channel
+        .invokeMethod<dynamic>('extractVideoFeaturesToCsv', <String, Object>{
+          'videoPath': videoPath,
+          'outputPath': outputPath,
+          'enableLiteRtPersonPresence': enableLiteRtPersonPresence,
+        });
     if (result is! Map) {
       throw const FormatException('Native extraction result must be a map.');
     }

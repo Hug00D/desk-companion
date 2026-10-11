@@ -50,6 +50,7 @@ DisappearanceContextResult observe(
   double shoulderY = 0.5,
   bool reliable = true,
   bool posture = false,
+  bool matureLowHeadBeforeLoss = false,
 }) => classifier.classify(
   timestampMs: ms,
   result: frame(
@@ -62,6 +63,7 @@ DisappearanceContextResult observe(
   ),
   reliablePose: reliable && pose,
   confirmedSleepPosture: posture,
+  matureLowHeadBeforeLoss: matureLowHeadBeforeLoss,
 );
 
 void warm(DisappearanceContextClassifier classifier) {
@@ -198,6 +200,38 @@ void main() {
     final result = observe(classifier, 1100, face: false, pose: false);
     expect(result.state, DisappearanceState.away);
     expect(result.reason, 'fully_absent_without_descent');
+  });
+
+  test('tracking loss after mature low head is not confirmed as away', () {
+    final classifier = DisappearanceContextClassifier();
+    warm(classifier);
+    observe(
+      classifier,
+      600,
+      face: false,
+      pose: false,
+      matureLowHeadBeforeLoss: true,
+    );
+    observe(classifier, 900, face: false, pose: false);
+    final result = observe(classifier, 1100, face: false, pose: false);
+    expect(result.state, DisappearanceState.unknown);
+    expect(result.reason, 'low_head_tracking_lost');
+  });
+
+  test('side exit still confirms away after a mature low head', () {
+    final classifier = DisappearanceContextClassifier();
+    warm(classifier);
+    observe(classifier, 500, x: 0.1, bodyX: 0.3);
+    observe(
+      classifier,
+      600,
+      face: false,
+      matureLowHeadBeforeLoss: true,
+    );
+    observe(classifier, 900, face: false);
+    final result = observe(classifier, 1100, face: false);
+    expect(result.state, DisappearanceState.away);
+    expect(result.reason, 'head_and_body_side_exit');
   });
 
   test('chair pose cannot replace the observed exit history', () {

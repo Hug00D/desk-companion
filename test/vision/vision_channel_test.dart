@@ -44,9 +44,10 @@ void main() {
 
     messenger.setMockMethodCallHandler(channel, (call) async {
       expect(call.method, 'extractVideoFeaturesToCsv');
-      expect(call.arguments, <String, String>{
+      expect(call.arguments, <String, Object>{
         'videoPath': '/input/test.mp4',
         'outputPath': '/output/frame_features.csv',
+        'enableLiteRtPersonPresence': true,
       });
       return <String, Object>{
         'outputPath': '/output/frame_features.csv',
@@ -63,6 +64,7 @@ void main() {
     final result = await visionChannel.extractVideoFeaturesToCsv(
       videoPath: '/input/test.mp4',
       outputPath: '/output/frame_features.csv',
+      enableLiteRtPersonPresence: true,
     );
 
     expect(result.outputPath, '/output/frame_features.csv');
