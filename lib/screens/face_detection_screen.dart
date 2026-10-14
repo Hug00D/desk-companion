@@ -38,6 +38,7 @@ import '../vision/vision_result.dart';
 import '../voice/voice_command.dart';
 import '../voice/device_speech_recognition_service.dart';
 import '../voice/mock_voice_result_loader.dart';
+import '../voice/passive_reminder_guard.dart';
 import '../voice/voice_interaction_controller.dart';
 import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
@@ -58,10 +59,15 @@ class _ReminderClip {
 }
 
 class _ReminderRequest {
-  const _ReminderRequest({required this.status, required this.cause});
+  const _ReminderRequest({
+    required this.status,
+    required this.cause,
+    required this.revision,
+  });
 
   final CompanionStatus status;
   final CompanionCause cause;
+  final int revision;
 }
 
 enum _VoiceSessionPhase {
@@ -126,6 +132,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     timeout: const Duration(seconds: 200),
   );
   final AudioPlayer _voiceAudioPlayer = AudioPlayer();
+  final PassiveReminderGuard _passiveReminderGuard = PassiveReminderGuard();
   late final Future<void> _voiceAudioReady;
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
@@ -386,6 +393,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _suspendForNavigation() {
     if (_isSuspendedForNavigation) return;
     _isSuspendedForNavigation = true;
+    _resetVoiceReminderCandidate();
 
     // 1) 暫停相機 / 辨識來源。離席、眨眼、專注等狀態紀錄都由辨識結果驅動，
     //    來源一停，紀錄自然一起凍結。
@@ -743,12 +751,24 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _postureDownFrameCount = analysis.postureDownResult.downFrameCount;
     _latestDetectedCompanionStatus = analysis.status;
     _latestDetectedCompanionCause = analysis.cause;
+    _passiveReminderGuard.observe(
+      status: analysis.status,
+      cause: analysis.cause,
+      hasFace: visionResult.hasFace,
+      hasPose: visionResult.hasPose,
+      motionSuspected:
+          (analysis.postureDownResult.shoulderDropScore ?? 0) >= 34 ||
+          (analysis.postureDownResult.shoulderShrinkScore ?? 0) >= 55 ||
+          (analysis.postureDownResult.sideProneScore ?? 0) >= 65,
+      now: DateTime.now(),
+    );
     if (analysis.postureDownResult.downFrameCount > 0 &&
         (_pendingVoiceReminder?.status == CompanionStatus.attention ||
             _pendingVoiceReminder?.status == CompanionStatus.fatigue)) {
       _clearPendingVoiceReminder();
     }
-    if (analysis.status == CompanionStatus.normal) {
+    if (analysis.status == CompanionStatus.normal ||
+        analysis.status == CompanionStatus.userMissing) {
       _clearPendingVoiceReminder();
     }
     _syncPauseSuggestionAutoDismiss(analysis.status);
@@ -792,6 +812,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       sessionAutoPaused: _pomodoroController.isAutoPaused,
     );
     _handleFocusInterventions(focusInterventions);
+    if (!_isReminderPlaybackInFlight) _sendPendingVoiceReminderIfReady();
 
     if (mounted) {
       setState(() {
@@ -1267,8 +1288,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _ => false,
   };
 
-  void _requestLocalReminder(CompanionStatus status, CompanionCause cause) {
-    final request = _ReminderRequest(status: status, cause: cause);
+  void _requestLocalReminder(
+    CompanionStatus status,
+    CompanionCause cause, {
+    _ReminderRequest? pendingRequest,
+  }) {
+    final request =
+        pendingRequest ??
+        _ReminderRequest(
+          status: status,
+          cause: cause,
+          revision: _passiveReminderGuard.revision,
+        );
     if (_preferences.quietMode) {
       _clearPendingVoiceReminder();
       debugPrint('Local reminder skipped by quiet mode: ${status.name}');
@@ -1286,6 +1317,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       debugPrint('Local reminder cooldown: ${status.name}');
       return;
     }
+    if (!_isCurrentLocalReminder(request)) return;
+    if (!_canPlayLocalReminder(request)) {
+      _queuePendingVoiceReminder(request);
+      return;
+    }
     if (_isReminderPlaybackInFlight) {
       _queuePendingVoiceReminder(request);
       return;
@@ -1299,12 +1335,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   Future<void> _playLocalReminder(_ReminderRequest request) async {
     final status = request.status;
     final cause = request.cause;
+    var played = false;
     try {
       final clips = _reminderClipsFor(status, cause);
       if (clips == null || clips.isEmpty) return;
 
-      if (_latestDetectedCompanionStatus != status ||
-          _latestDetectedCompanionCause != cause) {
+      if (!_canPlayLocalReminder(request)) {
         debugPrint(
           'Local reminder skipped after state change: '
           '${status.name}/${cause.name} -> '
@@ -1338,11 +1374,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         assetData.lengthInBytes,
       );
 
-      final played = await _playReminderAudio(
+      played = await _playReminderAudio(
         audioBytes,
         status,
         message,
         null,
+        canStartPlayback: () => _canPlayLocalReminder(request),
       );
       if (played) {
         _lastReminderPlayedAt[status] = DateTime.now();
@@ -1350,14 +1387,43 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     } catch (error) {
       debugPrint('Local reminder playback failed: $error');
     } finally {
-      _isReminderPlaybackInFlight = false;
-      _activeLocalReminder = null;
+      if (identical(_activeLocalReminder, request)) {
+        _isReminderPlaybackInFlight = false;
+        _activeLocalReminder = null;
+      }
+      if (!played &&
+          mounted &&
+          !_preferences.quietMode &&
+          !_isInteractiveVoiceSessionActive &&
+          _isCurrentLocalReminder(request) &&
+          !_canPlayLocalReminder(request)) {
+        _queuePendingVoiceReminder(request);
+      }
       _sendPendingVoiceReminderIfReady();
       if (!_isInteractiveVoiceSessionActive && !_isReminderPlaybackInFlight) {
         unawaited(_resumeWakeWordListenerIfEnabled());
       }
     }
   }
+
+  bool _isCurrentLocalReminder(_ReminderRequest request) =>
+      _passiveReminderGuard.isCurrent(
+        request.status,
+        request.cause,
+        request.revision,
+      );
+
+  bool _canPlayLocalReminder(_ReminderRequest request) =>
+      mounted &&
+      !_isSuspendedForNavigation &&
+      !_preferences.quietMode &&
+      !_isInteractiveVoiceSessionActive &&
+      _passiveReminderGuard.canPlay(
+        request.status,
+        request.cause,
+        request.revision,
+        now: DateTime.now(),
+      );
 
   int _voicePriority(CompanionStatus status) {
     switch (status) {
@@ -1400,9 +1466,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void _sendPendingVoiceReminderIfReady() {
     final pending = _pendingVoiceReminder;
     if (pending == null) return;
+    if (_preferences.quietMode || _isInteractiveVoiceSessionActive) {
+      _clearPendingVoiceReminder();
+      return;
+    }
+    if (!_isCurrentLocalReminder(pending)) {
+      _clearPendingVoiceReminder();
+      return;
+    }
+    if (!_canPlayLocalReminder(pending) || _isReminderPlaybackInFlight) return;
 
     _clearPendingVoiceReminder();
-    _requestLocalReminder(pending.status, pending.cause);
+    _requestLocalReminder(
+      pending.status,
+      pending.cause,
+      pendingRequest: pending,
+    );
   }
 
   void _clearPendingVoiceReminder() {
@@ -1411,6 +1490,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   void _resetVoiceReminderCandidate() {
     _clearPendingVoiceReminder();
+    _passiveReminderGuard.reset();
   }
 
   List<_ReminderClip>? _reminderClipsFor(
@@ -1472,6 +1552,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     bool showMessage = true,
     VoidCallback? onPlaybackStarted,
     String? requestId,
+    bool Function()? canStartPlayback,
   }) async {
     if (audioBytes == null || audioBytes.isEmpty) {
       debugPrint('Voice playback skipped: empty audio bytes');
@@ -1483,6 +1564,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       duration: duration,
       debugText: message,
       requestId: requestId,
+      canStartPlayback: canStartPlayback,
       onPlaybackStarted: () {
         if (reaction != null) {
           _triggerCharacterReaction(reaction);
@@ -1504,23 +1586,35 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     String? requestId,
     VoidCallback? onPlaybackStarted,
     bool finishSpokenMessage = false,
+    bool Function()? canStartPlayback,
   }) async {
     Completer<void>? playbackCompleter;
     StreamSubscription<void>? completionSubscription;
     var playbackStarted = false;
     var playbackCompleted = false;
     try {
-      await _voiceAudioReady;
-      await _voiceAudioPlayer.stop();
-      playbackCompleter = Completer<void>();
-      _voicePlaybackCompleter = playbackCompleter;
-      completionSubscription = _voiceAudioPlayer.onPlayerComplete.listen((_) {
-        playbackCompleted = true;
-        if (playbackCompleter != null && !playbackCompleter.isCompleted) {
-          playbackCompleter.complete();
-        }
-      });
-      await _voiceAudioPlayer.play(source);
+      final started = await startVoicePlaybackIfEligible(
+        ready: _voiceAudioReady,
+        canStart: canStartPlayback,
+        prepare: () async {
+          await _voiceAudioPlayer.stop();
+          playbackCompleter = Completer<void>();
+          _voicePlaybackCompleter = playbackCompleter;
+          completionSubscription = _voiceAudioPlayer.onPlayerComplete.listen((
+            _,
+          ) {
+            playbackCompleted = true;
+            if (playbackCompleter != null && !playbackCompleter!.isCompleted) {
+              playbackCompleter!.complete();
+            }
+          });
+        },
+        start: () => _voiceAudioPlayer.play(source),
+      );
+      if (!started) {
+        debugPrint('Passive reminder cancelled before audio playback');
+        return false;
+      }
       playbackStarted = true;
       onPlaybackStarted?.call();
       debugPrint(
@@ -1531,7 +1625,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       final timeout =
           (duration ?? const Duration(seconds: 8)) + const Duration(seconds: 2);
       try {
-        await playbackCompleter.future.timeout(timeout);
+        await playbackCompleter!.future.timeout(timeout);
       } on TimeoutException {
         debugPrint(
           'Voice playback completion timed out: '
@@ -1569,7 +1663,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Future<void> _interruptPassiveReminderForInteractiveVoice() async {
-    _clearPendingVoiceReminder();
+    _resetVoiceReminderCandidate();
     final hadActiveReminder =
         _isReminderPlaybackInFlight ||
         _activeSpokenReminderMessage != null ||
@@ -2797,6 +2891,7 @@ $toneLine
 
   Future<void> _restartCamera() async {
     _detectionTimer?.cancel();
+    _resetVoiceReminderCandidate();
     _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
     await _visionChannel.stopCamera();
@@ -2812,6 +2907,7 @@ $toneLine
   }
 
   Future<void> _resetVisionCalibration() async {
+    _resetVoiceReminderCandidate();
     _companionController.reset();
     _focusSessionMonitor.resetDetectionState();
     _lastReminderPlayedAt.clear();
@@ -2834,8 +2930,6 @@ $toneLine
     _latestDetectedCompanionCause = CompanionCause.none;
     _fatigueLevel = CompanionStatus.normal.label;
     _companionMessage = '正在校正視覺基準，請自然坐好並看向前方。';
-    _resetVoiceReminderCandidate();
-
     try {
       await _visionChannel.resetVision();
     } catch (e) {
@@ -5249,6 +5343,7 @@ $toneLine
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      _resetVoiceReminderCandidate();
       _detectionTimer?.cancel();
       _breathingController.stop();
       unawaited(_visionChannel.stopCamera());
@@ -5448,6 +5543,7 @@ $toneLine
 
   @override
   void dispose() {
+    _resetVoiceReminderCandidate();
     appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _printHeadOffsetStats();

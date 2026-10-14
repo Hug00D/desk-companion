@@ -5,6 +5,37 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('FocusSessionMonitor hybrid evidence', () {
+    test('departure discards transition evidence before a quick return', () {
+      final monitor = FocusSessionMonitor.detached();
+      final start = DateTime(2026, 10, 14, 10);
+      _step(monitor, CompanionStatus.distracted, start, 0);
+      _step(monitor, CompanionStatus.distracted, start, 1);
+      _step(monitor, CompanionStatus.userMissing, start, 2);
+      expect(_step(monitor, CompanionStatus.distracted, start, 3), isEmpty);
+      expect(_step(monitor, CompanionStatus.distracted, start, 4), isEmpty);
+      expect(_step(monitor, CompanionStatus.distracted, start, 5), isEmpty);
+      expect(_types(_step(monitor, CompanionStatus.distracted, start, 6)), [
+        FocusInterventionType.reminder,
+      ]);
+    });
+
+    test('departure clears sleep evidence but preserves recorded history', () {
+      final monitor = FocusSessionMonitor.detached();
+      final start = DateTime(2026, 10, 14, 10);
+      monitor.beginSession(now: start);
+      for (var second = 0; second <= 5; second++) {
+        _step(monitor, CompanionStatus.sleeping, start, second);
+      }
+      expect(monitor.eventCountFor(CompanionStatus.sleeping), 1);
+      _step(monitor, CompanionStatus.userMissing, start, 6);
+      expect(_step(monitor, CompanionStatus.sleeping, start, 7), isEmpty);
+      expect(_step(monitor, CompanionStatus.sleeping, start, 8), isEmpty);
+      expect(_types(_step(monitor, CompanionStatus.sleeping, start, 9)), [
+        FocusInterventionType.reminder,
+      ]);
+      expect(monitor.eventCountFor(CompanionStatus.sleeping), 1);
+    });
+
     test('long distraction reminds, records once, then offers pause', () {
       final monitor = FocusSessionMonitor.detached();
       final start = DateTime(2026, 7, 6, 10);

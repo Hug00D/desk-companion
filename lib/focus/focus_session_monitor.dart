@@ -175,6 +175,16 @@ class FocusSessionMonitor extends ChangeNotifier {
     );
     _lastObservedStatus = status;
     _lastObservedCause = cause;
+    if (status == CompanionStatus.userMissing) {
+      // An away episode must not carry departure warnings into the return.
+      final previousWarnings = _evidenceByStatus.keys
+          .where((status) => status != CompanionStatus.userMissing)
+          .toList(growable: false);
+      for (final warning in previousWarnings) {
+        final evidence = _evidenceByStatus.remove(warning)!;
+        reminderPolicy.markEpisodeEnded(warning, evidence.cause);
+      }
+    }
 
     if (sessionAutoPaused) {
       final interventions = _handleAutoPausedStatus(status, cause, timestamp);
