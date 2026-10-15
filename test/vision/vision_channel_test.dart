@@ -5,6 +5,47 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test(
+    'formal vision calls enable the person-presence guard by default',
+    () async {
+      const channel = MethodChannel('vision-app-guard-test');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'startCamera') {
+          expect(call.arguments, <String, Object>{
+            'enablePersonPresenceGuard': true,
+          });
+          return null;
+        }
+        expect(call.method, 'analyzeFrame');
+        final arguments = Map<dynamic, dynamic>.from(call.arguments as Map);
+        expect(arguments['imageData'], Uint8List.fromList(<int>[1, 2, 3]));
+        expect(arguments['enablePersonPresenceGuard'], true);
+        return <String, Object>{
+          'hasFace': false,
+          'hasPose': false,
+          'personPresenceSampled': true,
+          'personPresent': true,
+          'personMaskAreaRatio': 0.7,
+          'personMaskMeanConfidence': 0.6,
+          'personPresenceInferenceMs': 7.5,
+        };
+      });
+
+      const vision = VisionChannel(channel: channel);
+      await vision.startCamera();
+      final result = await vision.analyzeFrame(
+        Uint8List.fromList(<int>[1, 2, 3]),
+      );
+      expect(result.personPresenceSampled, isTrue);
+      expect(result.personPresent, isTrue);
+      expect(result.personMaskAreaRatio, 0.7);
+      expect(result.personPresenceInferenceMs, 7.5);
+    },
+  );
+
   test('large asset copy sends paths instead of video bytes', () async {
     const channel = MethodChannel('vision-copy-test');
     final messenger =

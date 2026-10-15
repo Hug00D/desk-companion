@@ -32,6 +32,11 @@ class VisionResult {
     this.headOffsetScore,
     this.isHeadOffsetCalibrating = false,
     this.shoulderWidth,
+    this.personPresenceSampled = false,
+    this.personPresent,
+    this.personMaskAreaRatio,
+    this.personMaskMeanConfidence,
+    this.personPresenceInferenceMs,
   });
 
   final Map<dynamic, dynamic> raw;
@@ -64,6 +69,11 @@ class VisionResult {
   final double? headOffsetScore;
   final bool isHeadOffsetCalibrating;
   final double? shoulderWidth;
+  final bool personPresenceSampled;
+  final bool? personPresent;
+  final double? personMaskAreaRatio;
+  final double? personMaskMeanConfidence;
+  final double? personPresenceInferenceMs;
 
   bool get hasEyeData => leftEyeOpen != null && rightEyeOpen != null;
 
@@ -126,6 +136,13 @@ class VisionResult {
       headOffsetScore: hasFace ? _toDouble(data['headOffsetScore']) : null,
       isHeadOffsetCalibrating: data['headOffsetCalibrating'] == true,
       shoulderWidth: shoulderWidth,
+      personPresenceSampled: data['personPresenceSampled'] == true,
+      personPresent: data['personPresent'] is bool
+          ? data['personPresent'] as bool
+          : null,
+      personMaskAreaRatio: _toDouble(data['personMaskAreaRatio']),
+      personMaskMeanConfidence: _toDouble(data['personMaskMeanConfidence']),
+      personPresenceInferenceMs: _toDouble(data['personPresenceInferenceMs']),
     );
   }
 

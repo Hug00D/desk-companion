@@ -33,6 +33,7 @@ DualTrackContextResult sample(
   CompanionCause fastCause = CompanionCause.none,
   bool strongPosture = false,
   double? postureScore,
+  bool? personPresent,
 }) => classifier.classify(
   timestampMs: ms,
   result: VisionResult.fromNativeMap({
@@ -54,6 +55,13 @@ DualTrackContextResult sample(
     'headOffsetScore': 0.0,
     if (eyeData) 'leftEye': eyeOpen ?? (closed ? 0.03 : 0.8),
     if (eyeData) 'rightEye': eyeOpen ?? (closed ? 0.03 : 0.8),
+    'personPresenceSampled': personPresent != null,
+    'personPresent': personPresent,
+    'personMaskAreaRatio': personPresent == null
+        ? null
+        : personPresent
+        ? 0.7
+        : 0.0,
   }),
   fastState: CompanionState(status: fastStatus, cause: fastCause),
   rawEyeClosed: closed,
@@ -130,6 +138,27 @@ void main() {
       sample(classifier, 4000, pitch: 30, drop: 0.08).slowState,
       SlowContextState.readingLike,
     );
+  });
+
+  test('formal-app sampling keeps long-track and head-sum history', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableHeadScoreSum: true,
+      enableLongShortGate: true,
+      maximumSampleGapMs: 1500,
+    );
+    for (final ms in [0, 600, 1200]) {
+      sample(classifier, ms);
+    }
+
+    DualTrackContextResult? result;
+    for (final ms in [1800, 2400, 3000, 3600, 4200]) {
+      result = sample(classifier, ms, pitch: 30, drop: 0.08);
+    }
+
+    expect(result?.slowWindowMs, 2000);
+    expect(result?.slowState, isNot(SlowContextState.none));
+    expect(result?.headScore?.scoreWindowSamples, 5);
   });
 
   test('short low head does not create a slow event', () {
@@ -338,6 +367,26 @@ void main() {
     expect(result.disappearance!.state, DisappearanceState.unknown);
     expect(result.disappearance!.reason, 'low_head_tracking_lost');
     expect(result.finalState, 'unknown_low_head');
+  });
+
+  test('person mask blocks a fast user-missing override', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+    );
+    warm(classifier);
+
+    final result = sample(
+      classifier,
+      750,
+      face: false,
+      pose: false,
+      fastStatus: CompanionStatus.userMissing,
+      fastCause: CompanionCause.userAway,
+      personPresent: true,
+    );
+
+    expect(result.finalState, isNot('user_missing'));
   });
 
   test(

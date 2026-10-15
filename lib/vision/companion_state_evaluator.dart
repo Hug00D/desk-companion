@@ -357,7 +357,9 @@ class CompanionStateEvaluator {
     required bool isFreshPoseResult,
     required DateTime observedAt,
   }) {
-    if (!result.hasFace && !result.hasPose) {
+    final hasPersonMaskEvidence =
+        result.personPresenceSampled && result.personPresent == true;
+    if (!result.hasFace && !result.hasPose && !hasPersonMaskEvidence) {
       _fullyAbsentFrameCount++;
     } else {
       _fullyAbsentFrameCount = 0;

@@ -36,8 +36,10 @@ class HeadOffsetDetector {
     this.settledGazeMinSamples = 4,
     this.settledGazeMaxScore = 75,
     this.useScoreSum = false,
+    this.scoreSumMaximumGap = defaultScoreSumMaximumGap,
     OneEuroFilter? scoreFilter,
-  }) : scoreFilter = scoreFilter ?? OneEuroFilter(minCutoff: 1.25, beta: 0.08);
+  }) : assert(scoreSumMaximumGap > Duration.zero),
+       scoreFilter = scoreFilter ?? OneEuroFilter(minCutoff: 1.25, beta: 0.08);
 
   final double enterThreshold;
   final double exitThreshold;
@@ -46,13 +48,14 @@ class HeadOffsetDetector {
   final int exitFrames;
   final int missingFaceHoldFrames;
   final bool useScoreSum;
+  final Duration scoreSumMaximumGap;
 
   static const scoreSumWindowSize = 5;
   static const scoreSumEnterThreshold = 275.0;
   static const missingFaceFillScore = 50.0;
   static const scoreSumMinimumMeasuredHighSamples = 2;
   static const scoreSumMissingHold = Duration(seconds: 2);
-  static const scoreSumMaximumGap = Duration(milliseconds: 500);
+  static const defaultScoreSumMaximumGap = Duration(milliseconds: 500);
 
   /// Distraction means the gaze keeps moving away, not that the head rests at
   /// an angle. The baseline is captured once at camera start, so reading a

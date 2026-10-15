@@ -537,8 +537,8 @@ UI 時間。輸出包含來源影片 PTS、PTS 誤差、人體信心遮罩平均
 [Selfie Segmenter](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite)。
 
 Android MediaPipe 0.10.33 `ImageSegmenter` 在模擬器第一次推論會發生 native crash，因此不使用
-該 Task Graph。Vision Lab 另有明確 opt-in 的 LiteRT CPU 原型，直接執行同一個
-`selfie_segmenter.tflite`，不改 `frame_features.csv` schema，也不影響正式 App 的預設路徑：
+該 Task Graph。Vision Lab 另有明確 opt-in 的 LiteRT CPU 路徑，直接執行同一個
+`selfie_segmenter.tflite`，不改 `frame_features.csv` schema：
 
 ```powershell
 flutter run --no-pub --target lib\main_vision_lab.dart -d <deviceId> `
@@ -548,8 +548,30 @@ flutter run --no-pub --target lib\main_vision_lab.dart -d <deviceId> `
 
 按下「產生 frame_features.csv」後，Face 與 Pose 都沒有輸出的候選影格會每 200 ms 另寫
 `person_presence_litert_<runId>.csv`。`tool/watch_vision_lab_output.ps1` 會連同逐幀 CSV 一起拉回
-`vision_lab_out/`。這仍是 Vision Lab 原型；正式 App 尚未消費遮罩結果，下一步需先在 ARM64
-實機驗證效能與生命週期，再把 person presence 當離席護欄接入。
+`vision_lab_out/`。
+
+正式 App 的實機試跑分支也會消費同一個模型，但用途被限制為「離席護欄」：只有 Face 與 Pose
+同時沒有結果時才低頻執行；遮罩面積比例至少 `0.10` 只代表畫面仍有人，可阻止誤判離席，不能
+直接把狀態升級為睡眠。此試跑版預設開啟；若實機出現相容性或效能問題，可用以下命令立刻關閉
+模型並保留原本 Face／Pose 行為：
+
+```powershell
+flutter run --dart-define=APP_PERSON_PRESENCE_GUARD=false
+```
+
+模型初始化或推論若丟出可攔截的例外，App 會停用該護欄並回到既有離席規則，而不是持續重試。
+
+同一個 Pilot 也啟用離線驗證過的 2 秒雙軌候選：分心／趴下／離席走快軌；低頭情境用長軌建立
+上下文，只有長軌成立且短軌出現可信觸發時才輸出睡眠。`reading_like` 與
+`unknown_low_head` 在正式 App 都保守映射為正常，不觸發睡眠提醒。正式相機約每 600～1200 ms
+提供一次觀測，因此 App 版允許 1500 ms sample gap；離線分析仍使用原本 500 ms，不改既有 CSV
+比較。若只想關閉雙軌、保留人體存在護欄：
+
+```powershell
+flutter run --dart-define=APP_DUAL_TRACK_VISION=false
+```
+
+若要完整回退這次視覺 Pilot，兩個旗標都設為 `false`。
 
 ### 建立 Ground Truth
 

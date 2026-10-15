@@ -49,6 +49,11 @@ class MainActivity : FlutterActivity() {
     private var cameraWarmupUntilMs = 0L
     private var lastTaskTimestampMs = 0L
     private var lastVisionErrorAtMs = Long.MIN_VALUE
+    private var enablePersonPresenceGuard = false
+    private var personPresenceInitializationAttempted = false
+    private var personPresenceModel: LiteRtPersonPresence? = null
+    private var lastPersonPresenceAtMs = Long.MIN_VALUE
+    private var lastPersonPresenceSample: PersonPresenceSample? = null
     private val visionManagerDelegate = lazy {
         MediaPipeVisionManager(this)
     }
@@ -89,15 +94,26 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "analyzeFrame" -> {
-                    val imageData = call.arguments as? ByteArray
+                    val arguments = call.arguments
+                    val imageData = when (arguments) {
+                        is ByteArray -> arguments
+                        is Map<*, *> -> arguments["imageData"] as? ByteArray
+                        else -> null
+                    }
+                    val enableGuard = (arguments as? Map<*, *>)
+                        ?.get("enablePersonPresenceGuard") as? Boolean ?: false
                     if (imageData != null) {
-                        processImage(imageData, result)
+                        processImage(imageData, enableGuard, result)
                     } else {
                         result.error("INVALID_ARGUMENT", "Image data is required", null)
                     }
                 }
 
-                "startCamera" -> requestVisionCameraStart(result)
+                "startCamera" -> {
+                    enablePersonPresenceGuard =
+                        call.argument<Boolean>("enablePersonPresenceGuard") ?: false
+                    requestVisionCameraStart(result)
+                }
 
                 "stopCamera" -> {
                     stopVisionCamera()
@@ -174,7 +190,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun processImage(data: ByteArray, result: MethodChannel.Result) {
+    private fun processImage(
+        data: ByteArray,
+        enableGuard: Boolean,
+        result: MethodChannel.Result
+    ) {
         visionExecutor.execute {
             val bitmap = decodeAnalysisBitmap(data)
             try {
@@ -187,6 +207,12 @@ class MainActivity : FlutterActivity() {
                     runFace = true,
                     runPose = true,
                     timestampMs = nextTaskTimestampMs()
+                )
+                addPersonPresenceGuard(
+                    bitmap = bitmap,
+                    resultMap = resultMap,
+                    enabled = enableGuard,
+                    nowMs = SystemClock.elapsedRealtime()
                 )
 
                 mainHandler.post {
@@ -344,6 +370,12 @@ class MainActivity : FlutterActivity() {
                 runPose = runPose,
                 timestampMs = nextTaskTimestampMs()
             )
+            addPersonPresenceGuard(
+                bitmap = analysisBitmap,
+                resultMap = resultMap,
+                enabled = enablePersonPresenceGuard,
+                nowMs = nowMs
+            )
             if (runFace) lastFaceAnalysisAtMs = nowMs
             if (runPose) lastPoseAnalysisAtMs = nowMs
 
@@ -393,6 +425,73 @@ class MainActivity : FlutterActivity() {
         return previousMs == Long.MIN_VALUE || nowMs - previousMs >= intervalMs
     }
 
+    private fun addPersonPresenceGuard(
+        bitmap: Bitmap,
+        resultMap: MutableMap<String, Any>,
+        enabled: Boolean,
+        nowMs: Long
+    ) {
+        if (!enabled) {
+            lastPersonPresenceAtMs = Long.MIN_VALUE
+            lastPersonPresenceSample = null
+            return
+        }
+        if (resultMap["hasFace"] == true || resultMap["hasPose"] == true) {
+            // Never carry a mask result across a landmark-visible interval.
+            lastPersonPresenceAtMs = Long.MIN_VALUE
+            lastPersonPresenceSample = null
+            return
+        }
+
+        val model = getPersonPresenceModel() ?: return
+        val shouldSample = elapsedAtLeast(
+            nowMs,
+            lastPersonPresenceAtMs,
+            LiteRtPersonPresence.SAMPLE_INTERVAL_MS
+        )
+        if (shouldSample) {
+            try {
+                lastPersonPresenceSample = model.analyze(bitmap)
+                lastPersonPresenceAtMs = nowMs
+            } catch (error: Throwable) {
+                Log.e(PERSON_PRESENCE_LOG_TAG, "Disabling person-presence guard", error)
+                try {
+                    personPresenceModel?.close()
+                } catch (closeError: Throwable) {
+                    Log.w(PERSON_PRESENCE_LOG_TAG, "Failed to close presence model", closeError)
+                }
+                personPresenceModel = null
+                personPresenceInitializationAttempted = true
+                lastPersonPresenceSample = null
+                return
+            }
+        }
+
+        val sample = lastPersonPresenceSample ?: return
+        resultMap["personPresenceSampled"] = true
+        resultMap["personPresent"] =
+            sample.areaRatio >= LiteRtPersonPresence.PRESENT_AREA_RATIO_THRESHOLD
+        resultMap["personMaskAreaRatio"] = sample.areaRatio
+        resultMap["personMaskMeanConfidence"] = sample.meanConfidence
+        resultMap["personPresenceInferenceMs"] = sample.inferenceMs
+    }
+
+    private fun getPersonPresenceModel(): LiteRtPersonPresence? {
+        personPresenceModel?.let { return it }
+        if (personPresenceInitializationAttempted) return null
+
+        personPresenceInitializationAttempted = true
+        return try {
+            LiteRtPersonPresence(applicationContext).also {
+                personPresenceModel = it
+                Log.i(PERSON_PRESENCE_LOG_TAG, "LiteRT person-presence guard ready")
+            }
+        } catch (error: Throwable) {
+            Log.e(PERSON_PRESENCE_LOG_TAG, "Person-presence guard unavailable", error)
+            null
+        }
+    }
+
     private fun nextTaskTimestampMs(): Long {
         val nowMs = SystemClock.uptimeMillis()
         lastTaskTimestampMs = max(nowMs, lastTaskTimestampMs + 1L)
@@ -403,6 +502,8 @@ class MainActivity : FlutterActivity() {
         lastFaceAnalysisAtMs = Long.MIN_VALUE
         lastPoseAnalysisAtMs = Long.MIN_VALUE
         cameraWarmupUntilMs = SystemClock.elapsedRealtime() + CAMERA_WARMUP_DURATION_MS
+        lastPersonPresenceAtMs = Long.MIN_VALUE
+        lastPersonPresenceSample = null
     }
 
     private fun emitVisionError(error: Exception) {
@@ -433,7 +534,7 @@ class MainActivity : FlutterActivity() {
         visionExecutor.execute {
             val outputFile = File(outputPath)
             var labVisionManager: MediaPipeVisionManager? = null
-            var personPresence: VisionLabLiteRtPersonPresence? = null
+            var personPresence: LiteRtPersonPresence? = null
             var personPresenceWriter: VisionLabPersonPresenceCsvWriter? = null
             var personPresenceOutputFile: File? = null
             try {
@@ -455,7 +556,7 @@ class MainActivity : FlutterActivity() {
                     require(!requireNotNull(personPresenceOutputFile).exists()) {
                         "Person-presence output already exists: $personPresenceOutputFile"
                     }
-                    personPresence = VisionLabLiteRtPersonPresence(applicationContext)
+                    personPresence = LiteRtPersonPresence(applicationContext)
                     personPresenceWriter = VisionLabPersonPresenceCsvWriter(
                         requireNotNull(personPresenceOutputFile)
                     )
@@ -471,7 +572,7 @@ class MainActivity : FlutterActivity() {
                         val shouldProbePersonPresence = personPresence != null &&
                             (previousProbeTimestampMs == null ||
                                 timestampMs - previousProbeTimestampMs >=
-                                VisionLabLiteRtPersonPresence.SAMPLE_INTERVAL_MS)
+                                LiteRtPersonPresence.SAMPLE_INTERVAL_MS)
                         val personPresenceBitmap = if (shouldProbePersonPresence) {
                             bitmap.copy(Bitmap.Config.ARGB_8888, false)
                         } else {
@@ -574,10 +675,22 @@ class MainActivity : FlutterActivity() {
         pendingCameraStartResult = null
         visionEventSink = null
         stopVisionCamera()
-        if (visionManagerDelegate.isInitialized()) {
-            visionManager.close()
-        }
         if (::visionExecutor.isInitialized) {
+            visionExecutor.execute {
+                if (visionManagerDelegate.isInitialized()) {
+                    try {
+                        visionManager.close()
+                    } catch (error: Throwable) {
+                        Log.w(VISION_LAB_LOG_TAG, "Failed to close vision manager", error)
+                    }
+                }
+                try {
+                    personPresenceModel?.close()
+                } catch (error: Throwable) {
+                    Log.w(PERSON_PRESENCE_LOG_TAG, "Failed to close presence model", error)
+                }
+                personPresenceModel = null
+            }
             visionExecutor.shutdown()
         }
         super.onDestroy()
@@ -600,6 +713,7 @@ class MainActivity : FlutterActivity() {
         private const val ERROR_REPORT_INTERVAL_MS = 5_000L
         private const val VISION_LAB_PROGRESS_INTERVAL = 100
         private const val VISION_LAB_LOG_TAG = "VisionLab"
+        private const val PERSON_PRESENCE_LOG_TAG = "PersonPresenceGuard"
     }
 }
 

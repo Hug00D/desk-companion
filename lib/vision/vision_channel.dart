@@ -2,6 +2,11 @@ import 'package:flutter/services.dart';
 
 import 'vision_result.dart';
 
+const bool kAppPersonPresenceGuardEnabled = bool.fromEnvironment(
+  'APP_PERSON_PRESENCE_GUARD',
+  defaultValue: true,
+);
+
 class VisionVideoExtractionResult {
   const VisionVideoExtractionResult({
     required this.outputPath,
@@ -71,11 +76,15 @@ class VisionChannel {
     });
   }
 
-  Future<VisionResult> analyzeFrame(Uint8List imageBytes) async {
-    final result = await _channel.invokeMethod<dynamic>(
-      'analyzeFrame',
-      imageBytes,
-    );
+  Future<VisionResult> analyzeFrame(
+    Uint8List imageBytes, {
+    bool enablePersonPresenceGuard = kAppPersonPresenceGuardEnabled,
+  }) async {
+    final result = await _channel
+        .invokeMethod<dynamic>('analyzeFrame', <String, Object>{
+          'imageData': imageBytes,
+          'enablePersonPresenceGuard': enablePersonPresenceGuard,
+        });
 
     if (result is! Map) {
       throw const FormatException('Native vision result must be a map.');
@@ -88,8 +97,12 @@ class VisionChannel {
     return _channel.invokeMethod<void>('showToast', {'message': message});
   }
 
-  Future<void> startCamera() {
-    return _channel.invokeMethod<void>('startCamera');
+  Future<void> startCamera({
+    bool enablePersonPresenceGuard = kAppPersonPresenceGuardEnabled,
+  }) {
+    return _channel.invokeMethod<void>('startCamera', <String, Object>{
+      'enablePersonPresenceGuard': enablePersonPresenceGuard,
+    });
   }
 
   Future<void> stopCamera() {

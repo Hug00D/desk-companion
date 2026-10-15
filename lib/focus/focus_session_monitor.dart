@@ -178,7 +178,11 @@ class FocusSessionMonitor extends ChangeNotifier {
     if (status == CompanionStatus.userMissing) {
       // An away episode must not carry departure warnings into the return.
       final previousWarnings = _evidenceByStatus.keys
-          .where((status) => status != CompanionStatus.userMissing)
+          .where(
+            (status) =>
+                status != CompanionStatus.userMissing &&
+                (!sessionAutoPaused || status != _autoPausedStatus),
+          )
           .toList(growable: false);
       for (final warning in previousWarnings) {
         final evidence = _evidenceByStatus.remove(warning)!;

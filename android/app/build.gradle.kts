@@ -57,8 +57,9 @@ dependencies {
     // CameraX 視圖庫（提供 PreviewView 方便顯示畫面）
     implementation("androidx.camera:camera-view:${camerax_version}")
     implementation("com.google.mediapipe:tasks-vision:0.10.33")
-    // Vision Lab-only CPU prototype. It bypasses MediaPipe ImageSegmenter's
-    // native Task Graph and is enabled only by an explicit dart define.
+    // Shared CPU runner for Vision Lab and the formal app's opt-out
+    // person-presence guard. It bypasses MediaPipe ImageSegmenter's native
+    // Task Graph, which is unstable on the x86_64 emulator.
     implementation("com.google.ai.edge.litert:litert:2.1.0")
 
 }

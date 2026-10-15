@@ -24,15 +24,20 @@ class DisappearanceContextResult {
 
 /// Experimental disappearance arbitration; missing data is never a descent.
 class DisappearanceContextClassifier {
+  DisappearanceContextClassifier({this.maximumGapMs = defaultMaximumGapMs})
+    : assert(maximumGapMs > 0);
+
   static const historyMs = 1000;
   static const minimumHistoryMs = 300;
   static const confirmationMs = 500;
   static const recoveryMs = 500;
-  static const maximumGapMs = 500;
+  static const defaultMaximumGapMs = 500;
   static const relativeDescentThreshold = 0.06;
   static const edgeMargin = 0.15;
   static const lateralHeadTravel = 0.20;
   static const lateralBodyTravel = 0.15;
+
+  final int maximumGapMs;
 
   final List<_VisibleSample> _history = [];
   int? _lastTimestamp;

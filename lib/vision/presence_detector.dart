@@ -1,6 +1,6 @@
 import 'vision_result.dart';
 
-enum PresenceState { present, faceOnly, bodyOnly, away }
+enum PresenceState { present, faceOnly, bodyOnly, silhouetteOnly, away }
 
 class PresenceDetector {
   const PresenceDetector();
@@ -9,6 +9,9 @@ class PresenceDetector {
     if (result.hasFace && result.hasPose) return PresenceState.present;
     if (result.hasFace) return PresenceState.faceOnly;
     if (result.hasPose) return PresenceState.bodyOnly;
+    if (result.personPresenceSampled && result.personPresent == true) {
+      return PresenceState.silhouetteOnly;
+    }
     return PresenceState.away;
   }
 }

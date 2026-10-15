@@ -113,7 +113,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   String? _cameraErrorMessage;
   String? _fallbackVideoPath;
   final VisionChannel _visionChannel = const VisionChannel();
-  final CompanionController _companionController = CompanionController();
+  static const bool _enableDualTrackVisionPilot = bool.fromEnvironment(
+    'APP_DUAL_TRACK_VISION',
+    defaultValue: true,
+  );
+  final CompanionController _companionController = CompanionController(
+    enableDualTrackPilot: _enableDualTrackVisionPilot,
+  );
   final CompanionResponseBuilder _responseBuilder =
       const CompanionResponseBuilder();
   final MockVoiceResultLoader _mockVoiceResultLoader =
@@ -714,6 +720,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       'shoulderShrink=${_formatDebugValue(analysis.postureDownResult.shoulderShrinkScore)}, '
       'postureCalibrating=${analysis.postureDownResult.isCalibrating}, '
       'hasPose=${visionResult.hasPose}, '
+      'personPresent=${visionResult.personPresent ?? 'N/A'}, '
+      'personMaskArea=${_formatDebugValue(visionResult.personMaskAreaRatio)}, '
+      'personPresenceMs=${_formatDebugValue(visionResult.personPresenceInferenceMs)}, '
       'poseSeq=${visionResult.poseSequence ?? 'N/A'}, '
       'shoulderWidth=${visionResult.shoulderWidth?.toStringAsFixed(1) ?? 'N/A'}, '
       'poseNose=(${_formatRawValue(visionResult.raw['poseNoseX'])}, ${_formatRawValue(visionResult.raw['poseNoseY'])}), '
@@ -4982,6 +4991,7 @@ $toneLine
     final poseResult = analysis?.poseResult;
     final posture = analysis?.postureDownResult;
     final presenceState = analysis?.presenceState;
+    final dualTrack = _companionController.lastDualTrackResult;
     final pitchBand = _debugPitchBandLabel(_headPitch);
     final averageEyeOpen = _averageEyeOpen();
     final minimumEyeOpen = _minimumEyeOpen();
@@ -5143,6 +5153,21 @@ $toneLine
                     ),
                     Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
                     Text("Presence：${presenceState?.name ?? "--"}"),
+                    Text(
+                      "雙軌：${dualTrack?.finalState ?? "停用"} / "
+                      "${dualTrack?.longContext.name ?? "--"} / "
+                      "${dualTrack?.shortTrigger ?? "--"}",
+                    ),
+                    Text(
+                      "人體遮罩："
+                      "${analysis?.visionResult.personPresent == null
+                          ? "未取樣"
+                          : analysis!.visionResult.personPresent!
+                          ? "有人"
+                          : "無人"} / "
+                      "面積 ${_formatScore(analysis?.visionResult.personMaskAreaRatio)} / "
+                      "${_formatScore(analysis?.visionResult.personPresenceInferenceMs)} ms",
+                    ),
                     Text("目前狀態：$_fatigueLevel"),
                     Text("視覺事件：${_lastVisionEventType.storageValue}"),
                     Text(

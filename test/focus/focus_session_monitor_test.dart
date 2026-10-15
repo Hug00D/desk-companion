@@ -224,6 +224,67 @@ void main() {
       );
     });
 
+    test('auto-pause keeps sleep cause while the user is briefly missing', () {
+      final monitor = FocusSessionMonitor.detached();
+      final start = DateTime(2026, 10, 15, 11);
+      monitor.beginSession(now: start);
+
+      for (var second = 0; second < 8; second++) {
+        _step(
+          monitor,
+          CompanionStatus.sleeping,
+          start,
+          second,
+          cause: CompanionCause.postureDown,
+        );
+      }
+      expect(
+        _types(
+          _step(
+            monitor,
+            CompanionStatus.sleeping,
+            start,
+            8,
+            cause: CompanionCause.postureDown,
+          ),
+        ),
+        [FocusInterventionType.autoPause],
+      );
+
+      expect(
+        _step(
+          monitor,
+          CompanionStatus.userMissing,
+          start,
+          9,
+          sessionRunning: false,
+          sessionAutoPaused: true,
+        ),
+        isEmpty,
+      );
+      _step(
+        monitor,
+        CompanionStatus.normal,
+        start,
+        10,
+        sessionRunning: false,
+        sessionAutoPaused: true,
+      );
+      final recovered = _step(
+        monitor,
+        CompanionStatus.normal,
+        start,
+        13,
+        sessionRunning: false,
+        sessionAutoPaused: true,
+      );
+
+      expect(_types(recovered), [FocusInterventionType.recovered]);
+      expect(recovered.single.status, CompanionStatus.sleeping);
+      expect(recovered.single.cause, CompanionCause.postureDown);
+      expect(recovered.single.episodeDuration, const Duration(seconds: 8));
+    });
+
     test('long distraction can be configured to auto-pause', () {
       final monitor = FocusSessionMonitor.detached()
         ..setLongDistractionAutoPauseEnabled(true);

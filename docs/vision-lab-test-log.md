@@ -1899,3 +1899,27 @@ V2 三段睡眠的 onset delay 三組皆為 `500;729;3621` ms；
 - 判讀：已證明同一模型可在 Android App 行程內穩定完成 test11，先前的 native crash 屬於
   MediaPipe `ImageSegmenter` Task Graph 路徑，不代表模型本身不能部署。尚未證明 ARM64 實機效能、
   長時間記憶體穩定性或跨影片門檻泛化，也尚未把 presence 結果接進正式狀態判斷。
+
+---
+
+## 正式 App 人體存在護欄：實機 Pilot
+
+- 日期：2026-10-15；分支：`codex/vision-person-presence-app-pilot`。
+- 目的：把目前的 2 秒雙軌候選與已驗證可執行的 LiteRT 人體遮罩接到正式 App Pilot。遮罩只
+  處理「Face 與 Pose 同時消失時，人是否仍在畫面」；不把遮罩當睡眠分類器。
+- 行為：遮罩面積比例至少 `0.10` 時輸出 `silhouetteOnly`，阻止 landmark 消失累積成
+  `userMissing`；低於門檻仍沿用既有離席確認。模型最多每 200 ms 取樣，實際正式相機事件頻率
+  受原本 Face／Pose 排程限制。
+- 雙軌：正式 App 啟用 `--presence-context --head-score-sum --long-short-gate` 對應規則；
+  `reading_like`／`unknown_low_head` 都保守映射為正常。App 觀測間隔允許到 1500 ms，離線工具
+  維持原本 500 ms，避免改寫既有研究輸出。可用 `APP_DUAL_TRACK_VISION=false` 單獨關閉。
+- 安全措施：預設開啟；可用 `--dart-define=APP_PERSON_PRESENCE_GUARD=false` 回退。模型初始化或
+  推論的可攔截例外會停用護欄並回到原規則，不會在每幀重試。
+- 本機驗證：Android debug APK 已成功建置；全部 Vision＋Focus 測試共 186 項通過；
+  `flutter analyze` 對本輪檔案沒有新增 error／warning，專案原有 13 筆 `login_screen.dart`
+  deprecated info 不在本輪範圍。全專案回歸為 247 項通過、2 項失敗；兩項都在
+  未由本輪修改的 `test/api/assistant_api_test.dart`（中文提示文字預期、無效音訊 fallback 預期），
+  與視覺／LiteRT 路徑無關，另案處理。
+- 實機驗收重點：低頭至臉與 Pose 都消失時 Debug 面板應顯示 `silhouetteOnly`／遮罩「有人」，
+  不應切成離席；真正走出畫面後應顯示遮罩「無人」並依原本確認時間進入離席；同時觀察長時間
+  執行是否有 crash、卡頓或機身異常發熱。

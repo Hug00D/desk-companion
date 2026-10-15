@@ -71,7 +71,7 @@ class MediaPipeVisionManager(context: Context) {
         runFace: Boolean,
         runPose: Boolean,
         timestampMs: Long
-    ): Map<String, Any> {
+    ): MutableMap<String, Any> {
         val resultMap = mutableMapOf<String, Any>()
 
         if (runFace || runPose) {

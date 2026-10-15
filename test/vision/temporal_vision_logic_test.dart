@@ -4,6 +4,7 @@ import 'package:desk_companion/vision/eye_state_detector.dart';
 import 'package:desk_companion/vision/head_offset_detector.dart';
 import 'package:desk_companion/vision/pose_state_detector.dart';
 import 'package:desk_companion/vision/posture_down_detector.dart';
+import 'package:desk_companion/vision/presence_detector.dart';
 import 'package:desk_companion/vision/vision_event.dart';
 import 'package:desk_companion/vision/vision_event_tracker.dart';
 import 'package:desk_companion/vision/vision_result.dart';
@@ -659,6 +660,73 @@ void main() {
       expect(confirmedMissing, CompanionStatus.userMissing);
     });
 
+    test('person mask prevents landmark loss from becoming userMissing', () {
+      final controller = CompanionController();
+      final start = DateTime(2026, 10, 15, 10);
+      var sequence = 0;
+
+      for (var index = 0; index < 6; index++) {
+        controller.analyze(
+          _visionResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      for (var index = 0; index < 12; index++) {
+        final analysis = controller.analyze(
+          _missingUserResult(poseSequence: ++sequence, personPresent: true),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+        expect(analysis.presenceState, PresenceState.silhouetteOnly);
+        expect(analysis.status, isNot(CompanionStatus.userMissing));
+      }
+    });
+
+    test('negative person mask still confirms userMissing', () {
+      final controller = CompanionController();
+      final start = DateTime(2026, 10, 15, 10, 30);
+      var sequence = 0;
+
+      for (var index = 0; index < 6; index++) {
+        controller.analyze(
+          _visionResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      CompanionAnalysis? last;
+      for (var index = 0; index < 10; index++) {
+        last = controller.analyze(
+          _missingUserResult(poseSequence: ++sequence, personPresent: false),
+          observedAt: start.add(Duration(milliseconds: 800 * sequence)),
+        );
+      }
+
+      expect(last?.presenceState, PresenceState.away);
+      expect(last?.status, CompanionStatus.userMissing);
+    });
+
+    test('formal dual-track pilot consumes the person-presence guard', () {
+      final controller = CompanionController(enableDualTrackPilot: true);
+      final start = DateTime(2026, 10, 15, 10, 45);
+      var sequence = 0;
+
+      for (var index = 0; index < 5; index++) {
+        controller.analyze(
+          _visionResult(poseSequence: ++sequence),
+          observedAt: start.add(Duration(milliseconds: 600 * sequence)),
+        );
+      }
+      final guarded = controller.analyze(
+        _missingUserResult(poseSequence: ++sequence, personPresent: true),
+        observedAt: start.add(Duration(milliseconds: 600 * sequence)),
+      );
+
+      expect(controller.lastDualTrackResult, isNotNull);
+      expect(controller.lastDualTrackResult?.finalState, isNot('user_missing'));
+      expect(guarded.status, CompanionStatus.normal);
+    });
+
     test('side face loss becomes distraction without voting sleep', () {
       final controller = CompanionController();
       final start = DateTime(2026, 7, 12, 13);
@@ -1114,12 +1182,22 @@ VisionResult _garbageHighPoseResult({required int poseSequence}) {
   );
 }
 
-VisionResult _missingUserResult({required int poseSequence}) {
+VisionResult _missingUserResult({
+  required int poseSequence,
+  bool? personPresent,
+}) {
   return VisionResult(
     raw: const <dynamic, dynamic>{},
     hasPose: false,
     hasFace: false,
     poseSequence: poseSequence,
+    personPresenceSampled: personPresent != null,
+    personPresent: personPresent,
+    personMaskAreaRatio: personPresent == null
+        ? null
+        : personPresent
+        ? 0.7
+        : 0,
   );
 }
 

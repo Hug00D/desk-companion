@@ -10,7 +10,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.FileWriter
 
-data class VisionLabPersonPresenceSample(
+data class PersonPresenceSample(
     val meanConfidence: Float,
     val areaRatio: Float,
     val centroidX: Float?,
@@ -19,14 +19,15 @@ data class VisionLabPersonPresenceSample(
 )
 
 /**
- * Vision Lab-only direct LiteRT runner for the MediaPipe selfie segmenter.
+ * Direct LiteRT runner for the MediaPipe selfie segmenter.
  *
  * This deliberately does not use MediaPipe ImageSegmenter: that Task Graph
  * crashes in the x86_64/ARM-translation emulator on its first inference. The
- * formal app never constructs this class; the Vision Lab compile-time flag is
- * the only caller.
+ * The formal app only invokes this guard when both Face and Pose landmarks are
+ * missing. It answers whether a person-sized silhouette is still visible; it
+ * must not be used as a sleep classifier.
  */
-class VisionLabLiteRtPersonPresence(context: Context) : Closeable {
+class LiteRtPersonPresence(context: Context) : Closeable {
     private val model = CompiledModel.create(
         context.assets,
         MODEL_ASSET_PATH,
@@ -45,7 +46,7 @@ class VisionLabLiteRtPersonPresence(context: Context) : Closeable {
         }
     }
 
-    fun analyze(bitmap: Bitmap): VisionLabPersonPresenceSample {
+    fun analyze(bitmap: Bitmap): PersonPresenceSample {
         val scaled = Bitmap.createScaledBitmap(bitmap, INPUT_WIDTH, INPUT_HEIGHT, true)
         try {
             val pixels = IntArray(INPUT_WIDTH * INPUT_HEIGHT)
@@ -92,7 +93,7 @@ class VisionLabLiteRtPersonPresence(context: Context) : Closeable {
                 }
             }
             val pixelCount = OUTPUT_WIDTH.toLong() * OUTPUT_HEIGHT.toLong()
-            return VisionLabPersonPresenceSample(
+            return PersonPresenceSample(
                 meanConfidence = (confidenceSum / pixelCount).toFloat(),
                 areaRatio = personPixels.toFloat() / pixelCount,
                 centroidX = if (personPixels == 0L) {
@@ -127,6 +128,7 @@ class VisionLabLiteRtPersonPresence(context: Context) : Closeable {
         private const val OUTPUT_HEIGHT = 256
         private const val PERSON_PIXEL_THRESHOLD = 0.5f
         const val SAMPLE_INTERVAL_MS = 200L
+        const val PRESENT_AREA_RATIO_THRESHOLD = 0.10f
     }
 }
 
@@ -144,7 +146,7 @@ class VisionLabPersonPresenceCsvWriter(outputFile: File) : Closeable {
         writer.newLine()
     }
 
-    fun write(frameIndex: Int, timestampMs: Long, sample: VisionLabPersonPresenceSample) {
+    fun write(frameIndex: Int, timestampMs: Long, sample: PersonPresenceSample) {
         writer.write(
             listOf(
                 frameIndex.toString(),

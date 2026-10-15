@@ -82,20 +82,35 @@ class DualTrackContextResult {
   final HeadOffsetDetectionResult? headScore;
 }
 
-/// Offline development candidate. Durations use PTS; head sums use five samples.
-/// These initial evidence rules must be reviewed before video comparison.
+/// Dual-track candidate shared by offline replay and the explicitly enabled
+/// formal-app pilot. Durations use source PTS offline and monotonic observation
+/// time in the app; head sums use five samples.
 class DualTrackContextClassifier {
   DualTrackContextClassifier({
     this.windowMs = 2000,
     this.enablePresenceContext = false,
     this.enableHeadScoreSum = false,
     this.enableLongShortGate = false,
-  }) {
+    this.maximumSampleGapMs = defaultMaximumSampleGapMs,
+  }) : _disappearance = DisappearanceContextClassifier(
+         maximumGapMs: maximumSampleGapMs,
+       ),
+       _headScoreDetector = HeadOffsetDetector(
+         useScoreSum: true,
+         scoreSumMaximumGap: Duration(milliseconds: maximumSampleGapMs),
+       ) {
     if (windowMs != 2000 && windowMs != 3000) {
       throw ArgumentError.value(windowMs, 'windowMs', 'Use 2000 or 3000.');
     }
     if (enableHeadScoreSum && !enablePresenceContext) {
       throw ArgumentError('Head score sum requires presence context.');
+    }
+    if (maximumSampleGapMs <= 0) {
+      throw ArgumentError.value(
+        maximumSampleGapMs,
+        'maximumSampleGapMs',
+        'Must be positive.',
+      );
     }
   }
 
@@ -103,12 +118,13 @@ class DualTrackContextClassifier {
   final bool enablePresenceContext;
   final bool enableHeadScoreSum;
   final bool enableLongShortGate;
-  final _disappearance = DisappearanceContextClassifier();
-  final _headScoreDetector = HeadOffsetDetector(useScoreSum: true);
+  final int maximumSampleGapMs;
+  final DisappearanceContextClassifier _disappearance;
+  final HeadOffsetDetector _headScoreDetector;
   int _headDistractedFrames = 0;
   static const baselineDurationMs = 500;
   static const recoveryDurationMs = 500;
-  static const maximumSampleGapMs = 500;
+  static const defaultMaximumSampleGapMs = 500;
   static const closureDurationMs = 300;
   static const closureExpiryMs = 2000;
   static const descentDurationMs = 500;
@@ -206,14 +222,18 @@ class DualTrackContextClassifier {
     final distracted = enableHeadScoreSum
         ? headScore!.state == HeadOffsetState.distracted
         : fastState.status == CompanionStatus.distracted;
-    final presenceOverride = switch (disappearance?.state) {
-      DisappearanceState.away => 'user_missing',
-      DisappearanceState.sleepCandidate =>
-        disappearance!.sleepSupported ? 'sleeping' : 'unknown_low_head',
-      DisappearanceState.pending || DisappearanceState.unknown =>
-        distracted ? 'distracted' : 'unknown_low_head',
-      _ => null,
-    };
+    final personMaskPresent =
+        result.personPresenceSampled && result.personPresent == true;
+    final presenceOverride = personMaskPresent
+        ? null
+        : switch (disappearance?.state) {
+            DisappearanceState.away => 'user_missing',
+            DisappearanceState.sleepCandidate =>
+              disappearance!.sleepSupported ? 'sleeping' : 'unknown_low_head',
+            DisappearanceState.pending || DisappearanceState.unknown =>
+              distracted ? 'distracted' : 'unknown_low_head',
+            _ => null,
+          };
     final nose = poseReliable ? result.poseNoseY! / result.imageHeight! : null;
     final pitch = result.hasFace ? result.headPitch : null;
     final headReliable =
@@ -333,7 +353,8 @@ class DualTrackContextClassifier {
       _history.removeAt(0);
     }
 
-    final fastPriority = fastState.status == CompanionStatus.userMissing
+    final fastPriority =
+        fastState.status == CompanionStatus.userMissing && !personMaskPresent
         ? 'user_missing'
         : strongPostureEvidence
         ? 'posture_down'
@@ -535,7 +556,7 @@ class DualTrackContextClassifier {
     }
 
     if (enableLongShortGate && _sleepLatched) {
-      if (!result.hasFace && !result.hasPose) {
+      if (!result.hasFace && !result.hasPose && !personMaskPresent) {
         _fullyMissingWhileLatchedSince ??= timestampMs;
       } else {
         _fullyMissingWhileLatchedSince = null;
@@ -545,9 +566,11 @@ class DualTrackContextClassifier {
           _fullyMissingWhileLatchedSince != null &&
           timestampMs - _fullyMissingWhileLatchedSince! >= windowMs;
       final confirmedAway =
+          !personMaskPresent &&
           disappearance?.state == DisappearanceState.away &&
           (sideExit || missingExpired);
       final unavailableWithoutPresence =
+          !personMaskPresent &&
           disappearance == null &&
           fastState.status == CompanionStatus.userMissing;
       if (confirmedAway || unavailableWithoutPresence) {
