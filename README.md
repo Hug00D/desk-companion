@@ -690,8 +690,13 @@ dart run tool\vision_lab_dual_track.dart `
   --person-presence=vision_lab_out\person_presence_litert_<runId>.csv
 ```
 
-目前遮罩候選須連續確認人仍在畫面，且成熟低頭後 Face／Pose 追蹤遺失至少 5 秒才觸發。
-它只在離線 sleep-first 模式啟用，尚未接回正式 App；test11 是開發資料，改善不能視為獨立驗證。
+目前遮罩候選須確認人仍在畫面，且成熟低頭後 **Face 與 Pose 同時連續遺失**至少 5 秒才觸發；
+任一 tracker 恢復就重新計時，人體遮罩本身不算睡眠證據。強姿勢最近 2 秒也須至少有 40% 的
+可靠 Pose；若尚未走完慢軌，則須 80% Pose 加閉眼證據才能提早觸發。抬頭但眼睛不可靠時，
+可由連續 1 秒可靠 Pose 解除鎖定。逐幀輸出以 `sleep_latch_source` 與
+`continuous_tracking_loss_ms` 保留觸發原因。遮罩追蹤遺失觸發只在離線 sleep-first 路徑啟用；
+姿勢品質與解除護欄位於共用分類器，但目前只存在研究分支，尚未併入正式 App。test11、test12
+都已是開發資料，仍需新影片獨立驗證。
 
 分心可再加上 `--head-score-sum`，但必須同時啟用 `--presence-context`：
 

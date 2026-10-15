@@ -119,7 +119,7 @@ Future<List<String>> runDualTrackLab({
         'data_quality,final_state,configured_window_ms,eye_coverage,pose_coverage,'
         'closed_duration_ms,nose_drop,pitch_range,nose_range,'
         'motion_evidence_at_ms,eye_descent_at_ms,drowsy_confirmed'
-        '${enableLongShortGate ? ',long_context,short_trigger,sleep_latched,posture_score,static_deep_posture_ms' : ''}'
+        '${enableLongShortGate ? ',long_context,short_trigger,sleep_latched,sleep_latch_source,posture_score,static_deep_posture_ms,continuous_tracking_loss_ms' : ''}'
         '${enablePresenceContext ? ',presence_context,presence_reason,face_missing_ms,loss_history_reliable,side_exit_evidence,relative_descent_evidence,sleep_supported' : ''}'
         '${enableHeadScoreSum ? ',head_score_state,head_score_used,head_score_imputed,head_score_sum,head_score_samples,head_score_measured_high_samples' : ''}'
         '${enableSleepFirst ? ',sleep_first_state' : ''}'
@@ -172,7 +172,7 @@ Future<List<String>> runDualTrackLab({
       '${dual.pitchRange ?? ''},${dual.noseRange ?? ''},'
       '${dual.motionEvidenceAtMs ?? ''},${dual.eyeDescentAtMs ?? ''},'
       '${dual.drowsyConfirmed}'
-      '${enableLongShortGate ? ',${dual.longContext.csvValue},${dual.shortTrigger},${dual.sleepLatched},${dual.postureScore ?? ''},${dual.staticDeepPostureMs}' : ''}'
+      '${enableLongShortGate ? ',${dual.longContext.csvValue},${dual.shortTrigger},${dual.sleepLatched},${dual.sleepLatchSource},${dual.postureScore ?? ''},${dual.staticDeepPostureMs},${dual.continuousTrackingLossMs}' : ''}'
       '${enablePresenceContext ? ',${dual.disappearance!.state.name},${dual.disappearance!.reason},${dual.disappearance!.faceMissingMs},${dual.disappearance!.reliableHistory},${dual.disappearance!.sideExit},${dual.disappearance!.relativeDescent},${dual.disappearance!.sleepSupported}' : ''}'
       '${enableHeadScoreSum ? ',${dual.headScore!.state.name},${dual.headScore!.scoreUsed ?? ''},${dual.headScore!.scoreImputed},${dual.headScore!.scoreSum ?? ''},${dual.headScore!.scoreWindowSamples},${dual.headScore!.measuredHighSamples}' : ''}'
       '${enableSleepFirst ? ',${_sleepFirstState(dual)}' : ''}'
@@ -331,11 +331,8 @@ class _PersonPresenceSample {
 }
 
 String _sleepFirstState(DualTrackContextResult result) {
-  if (const {
-    'drowsy_like',
-    'posture_down',
-    'sleeping',
-  }.contains(result.finalState)) {
+  if (const {'drowsy_like', 'sleeping'}.contains(result.finalState) ||
+      result.finalState == 'posture_down' && result.sleepLatched) {
     return sleepFirstSleepingState;
   }
   if (result.lowHeadCandidate ||

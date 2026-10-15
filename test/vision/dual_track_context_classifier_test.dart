@@ -425,7 +425,72 @@ void main() {
     expect(result.shortTrigger, 'person_present_low_head_loss');
     expect(result.sleepLatched, isTrue);
     expect(result.finalState, 'drowsy_like');
+    expect(result.continuousTrackingLossMs, 5000);
+    expect(result.sleepLatchSource, 'continuous_person_present_tracking_loss');
   });
+
+  test(
+    'sleep-first tracking-loss clock resets when either tracker returns',
+    () {
+      final classifier = DualTrackContextClassifier(
+        enablePresenceContext: true,
+        enableLongShortGate: true,
+        enableSleepFirstTrackingLoss: true,
+      );
+      warm(classifier);
+      lowUntil(classifier, 3000);
+
+      for (var ms = 3250; ms <= 7000; ms += 250) {
+        expect(
+          sample(
+            classifier,
+            ms,
+            face: false,
+            pose: false,
+            fastStatus: CompanionStatus.userMissing,
+            fastCause: CompanionCause.userAway,
+            personPresent: true,
+          ).sleepLatched,
+          isFalse,
+        );
+      }
+      final trackerReturned = sample(
+        classifier,
+        7250,
+        pitch: 30,
+        drop: 0.08,
+        face: false,
+        pose: true,
+      );
+      expect(trackerReturned.continuousTrackingLossMs, 0);
+
+      for (var ms = 7500; ms < 12500; ms += 250) {
+        expect(
+          sample(
+            classifier,
+            ms,
+            face: false,
+            pose: false,
+            fastStatus: CompanionStatus.userMissing,
+            fastCause: CompanionCause.userAway,
+            personPresent: true,
+          ).sleepLatched,
+          isFalse,
+        );
+      }
+      final confirmed = sample(
+        classifier,
+        12500,
+        face: false,
+        pose: false,
+        fastStatus: CompanionStatus.userMissing,
+        fastCause: CompanionCause.userAway,
+        personPresent: true,
+      );
+      expect(confirmed.continuousTrackingLossMs, 5000);
+      expect(confirmed.sleepLatched, isTrue);
+    },
+  );
 
   test('sleep-first never confirms tracking loss without person evidence', () {
     final classifier = DualTrackContextClassifier(
@@ -628,33 +693,57 @@ void main() {
   });
 
   test(
-    'strong posture latches after mature low head despite sparse pose history',
+    'strong posture plus reliable eye evidence can latch before maturity',
     () {
-      final classifier = DualTrackContextClassifier(
-        enablePresenceContext: true,
-        enableLongShortGate: true,
-      );
+      final classifier = DualTrackContextClassifier(enableLongShortGate: true);
       warm(classifier);
-      for (var ms = 1000; ms < 3000; ms += 250) {
-        final result = sample(classifier, ms, pitch: 30, pose: false);
-        expect(result.sleepLatched, isFalse);
+      DualTrackContextResult? result;
+      for (var ms = 1000; ms <= 2000; ms += 250) {
+        result = sample(
+          classifier,
+          ms,
+          pitch: 30,
+          drop: 0.08,
+          closed: true,
+          fastStatus: CompanionStatus.sleeping,
+          fastCause: CompanionCause.postureDown,
+          strongPosture: true,
+        );
       }
-      final trigger = sample(
-        classifier,
-        3000,
-        pitch: 30,
-        drop: 0.08,
-        fastStatus: CompanionStatus.sleeping,
-        fastCause: CompanionCause.postureDown,
-        strongPosture: true,
-      );
-      expect(trigger.poseCoverage, lessThan(0.8));
-      expect(trigger.evidencePosture, isFalse);
-      expect(trigger.shortTrigger, 'strong_posture');
-      expect(trigger.sleepLatched, isTrue);
-      expect(trigger.finalState, 'posture_down');
+      expect(result!.slowWindowMs, lessThan(2000));
+      expect(result.poseCoverage, greaterThanOrEqualTo(0.8));
+      expect(result.evidenceEye, isTrue);
+      expect(result.sleepLatched, isTrue);
+      expect(result.sleepLatchSource, 'corroborated_strong_posture');
     },
   );
+
+  test('strong posture waits when recent pose history is too sparse', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+    );
+    warm(classifier);
+    for (var ms = 1000; ms < 3000; ms += 250) {
+      final result = sample(classifier, ms, pitch: 30, pose: false);
+      expect(result.sleepLatched, isFalse);
+    }
+    final trigger = sample(
+      classifier,
+      3000,
+      pitch: 30,
+      drop: 0.08,
+      fastStatus: CompanionStatus.sleeping,
+      fastCause: CompanionCause.postureDown,
+      strongPosture: true,
+    );
+    expect(trigger.poseCoverage, lessThan(0.8));
+    expect(trigger.evidencePosture, isFalse);
+    expect(trigger.shortTrigger, 'strong_posture');
+    expect(trigger.poseCoverage, lessThan(0.4));
+    expect(trigger.sleepLatched, isFalse);
+    expect(trigger.finalState, 'posture_down');
+  });
 
   test('strong posture still waits for a mature low-head track', () {
     final classifier = DualTrackContextClassifier(
@@ -695,6 +784,30 @@ void main() {
     final recovered = sample(classifier, 3750);
     expect(recovered.sleepLatched, isFalse);
     expect(recovered.slowState, SlowContextState.none);
+    expect(recovered.finalState, 'normal');
+  });
+
+  test('latched sleep releases after sustained pose-only head recovery', () {
+    final classifier = DualTrackContextClassifier(enableLongShortGate: true);
+    warm(classifier);
+    for (var ms = 1000; ms <= 3000; ms += 250) {
+      sample(
+        classifier,
+        ms,
+        pitch: 30,
+        drop: 0.08,
+        eyeData: false,
+        fastStatus: CompanionStatus.sleeping,
+        fastCause: CompanionCause.postureDown,
+        strongPosture: true,
+      );
+    }
+    expect(sample(classifier, 3250, eyeData: false).sleepLatched, isTrue);
+    expect(sample(classifier, 3500, eyeData: false).sleepLatched, isTrue);
+    expect(sample(classifier, 3750, eyeData: false).sleepLatched, isTrue);
+    expect(sample(classifier, 4000, eyeData: false).sleepLatched, isTrue);
+    final recovered = sample(classifier, 4250, eyeData: false);
+    expect(recovered.sleepLatched, isFalse);
     expect(recovered.finalState, 'normal');
   });
 

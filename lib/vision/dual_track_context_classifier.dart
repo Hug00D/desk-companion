@@ -50,8 +50,10 @@ class DualTrackContextResult {
     required this.longContext,
     required this.shortTrigger,
     required this.sleepLatched,
+    required this.sleepLatchSource,
     required this.postureScore,
     required this.staticDeepPostureMs,
+    required this.continuousTrackingLossMs,
     this.disappearance,
     this.headScore,
   });
@@ -76,8 +78,10 @@ class DualTrackContextResult {
   final LongHeadContext longContext;
   final String shortTrigger;
   final bool sleepLatched;
+  final String sleepLatchSource;
   final double? postureScore;
   final int staticDeepPostureMs;
+  final int continuousTrackingLossMs;
   final DisappearanceContextResult? disappearance;
   final HeadOffsetDetectionResult? headScore;
 }
@@ -143,7 +147,9 @@ class DualTrackContextClassifier {
   static const uprightPitch = 15.0;
   static const staticDeepPostureScoreThreshold = 80.0;
   static const staticDeepPostureDurationMs = 1000;
+  static const minimumStrongPosturePoseCoverage = 0.4;
   static const sleepFirstTrackingLossDurationMs = 5000;
+  static const poseOnlyRecoveryDurationMs = 1000;
   static const _eyeDetector = EyeStateDetector();
 
   final List<_Sample> _history = [];
@@ -158,11 +164,14 @@ class DualTrackContextClassifier {
   int? _eyeDescentAt;
   int? _motionAt;
   int? _fullyMissingWhileLatchedSince;
+  int? _continuousTrackingLossSince;
   int? _lowHeadRecoverySince;
+  int? _poseOnlyRecoverySince;
   int? _staticDeepPostureSince;
   bool _confirmedDrowsy = false;
   bool _confirmedEyeEvidence = false;
   bool _sleepLatched = false;
+  String _sleepLatchSource = 'none';
   bool _staticDeepPostureLatched = false;
   SlowContextState _slowState = SlowContextState.none;
 
@@ -186,6 +195,16 @@ class DualTrackContextClassifier {
       _baselineSamples.clear();
     }
     _lastTimestamp = timestampMs;
+
+    final fullyTrackingLost = !result.hasFace && !result.hasPose;
+    if (fullyTrackingLost) {
+      _continuousTrackingLossSince ??= timestampMs;
+    } else {
+      _continuousTrackingLossSince = null;
+    }
+    final continuousTrackingLossMs = _continuousTrackingLossSince == null
+        ? 0
+        : timestampMs - _continuousTrackingLossSince!;
 
     final poseReliable = hasReliablePoseGeometry(result);
     final matureLowHeadBeforeLoss =
@@ -463,7 +482,7 @@ class DualTrackContextClassifier {
         enableSleepFirstTrackingLoss &&
         personMaskPresent &&
         disappearance?.reason == 'low_head_tracking_lost' &&
-        disappearance!.faceMissingMs >= sleepFirstTrackingLossDurationMs;
+        continuousTrackingLossMs >= sleepFirstTrackingLossDurationMs;
     final recentMotion = _motionAt != null && _motionAt! >= cutoff;
     final shortTrigger = currentPostureTrigger
         ? 'strong_posture'
@@ -506,23 +525,34 @@ class DualTrackContextClassifier {
         : LongHeadContext.insufficientData;
 
     if (enableLongShortGate) {
-      // A strong posture trigger is already produced from a reliable current
-      // pose by the posture detector. Requiring 80% pose coverage again here
-      // prevents a mature low-head episode from latching when landmarks flicker
-      // during real sleep. Keep the coverage requirement for the weaker fast
-      // sleep signal, which does not carry the same posture confidence.
       final highConfidenceShortTrigger =
-          currentPostureTrigger || staticDeepPostureConfirmed;
+          (currentPostureTrigger &&
+              poseCoverage >= minimumStrongPosturePoseCoverage) ||
+          staticDeepPostureConfirmed;
+      final corroboratedStrongPostureTrigger =
+          currentPostureTrigger &&
+          poseCoverage >= minimumCoverage &&
+          evidenceEye;
       final contextSupportedFastSleep =
           evidencePosture &&
           currentFastSleepTrigger &&
           eyeCoverage < minimumCoverage &&
           !stableReadingEvidence;
       if (!_sleepLatched &&
-          ((mature &&
+          (corroboratedStrongPostureTrigger ||
+              (mature &&
                   (highConfidenceShortTrigger || contextSupportedFastSleep)) ||
               sleepFirstTrackingLossTrigger)) {
         _sleepLatched = true;
+        _sleepLatchSource = sleepFirstTrackingLossTrigger
+            ? 'continuous_person_present_tracking_loss'
+            : corroboratedStrongPostureTrigger
+            ? 'corroborated_strong_posture'
+            : currentPostureTrigger
+            ? 'strong_posture'
+            : staticDeepPostureConfirmed
+            ? 'static_deep_posture'
+            : 'context_supported_fast_sleep';
         _staticDeepPostureLatched =
             !currentPostureTrigger && staticDeepPostureConfirmed;
         _confirmedDrowsy = true;
@@ -543,6 +573,18 @@ class DualTrackContextClassifier {
         }
       } else {
         _lowHeadRecoverySince = null;
+      }
+      final reliablePoseOnlyRecovery =
+          _sleepLatched && poseReliable && !low && !strongPostureEvidence;
+      if (reliablePoseOnlyRecovery) {
+        _poseOnlyRecoverySince ??= timestampMs;
+        if (timestampMs - _poseOnlyRecoverySince! >=
+            poseOnlyRecoveryDurationMs) {
+          _clearEpisode();
+          longContext = LongHeadContext.upright;
+        }
+      } else {
+        _poseOnlyRecoverySince = null;
       }
       if (_sleepLatched) {
         _slowState = SlowContextState.drowsyLike;
@@ -631,8 +673,10 @@ class DualTrackContextClassifier {
       longContext: longContext,
       shortTrigger: shortTrigger,
       sleepLatched: _sleepLatched,
+      sleepLatchSource: _sleepLatchSource,
       postureScore: usablePostureScore,
       staticDeepPostureMs: staticDeepPostureMs,
+      continuousTrackingLossMs: continuousTrackingLossMs,
       disappearance: disappearance,
       headScore: headScore,
     );
@@ -678,11 +722,14 @@ class DualTrackContextClassifier {
     _eyeDescentAt = null;
     _motionAt = null;
     _fullyMissingWhileLatchedSince = null;
+    _continuousTrackingLossSince = null;
     _lowHeadRecoverySince = null;
+    _poseOnlyRecoverySince = null;
     _staticDeepPostureSince = null;
     _confirmedDrowsy = false;
     _confirmedEyeEvidence = false;
     _sleepLatched = false;
+    _sleepLatchSource = 'none';
     _staticDeepPostureLatched = false;
     _slowState = SlowContextState.none;
   }
