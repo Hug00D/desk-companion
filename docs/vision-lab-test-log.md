@@ -1923,3 +1923,46 @@ V2 三段睡眠的 onset delay 三組皆為 `500;729;3621` ms；
 - 實機驗收重點：低頭至臉與 Pose 都消失時 Debug 面板應顯示 `silhouetteOnly`／遮罩「有人」，
   不應切成離席；真正走出畫面後應顯示遮罩「無人」並依原本確認時間進入離席；同時觀察長時間
   執行是否有 crash、卡頓或機身異常發熱。
+
+---
+
+## Sleep-first 離線評估與 test11 遮罩候選
+
+- 日期：2026-10-15；分支：`codex/vision-lab-sleep-first`。
+- 研究目標改為只抓出「有足夠證據的睡眠」。輸出只分 `sleeping`、
+  `uncertain_low_head`、`other`；不再要求正確命名閱讀行為。GT 的 `normal` 與 `reading`
+  都是睡眠負類，`uncertain_low_head` 不提醒，但在睡眠 GT 內仍計為 FN。
+- 新報告直接列出睡眠事件命中、誤報事件、首次 onset delay，以及同一睡眠真值被切成多段的
+  `sleep_interruptions`。原本雙軌模式和輸出保持不變，須明確加 `--sleep-first` 才啟用。
+
+### 現有規則基準（2 秒、presence＋head sum＋long-short）
+
+| 影片 | Frame Precision | Frame Recall | 睡眠事件命中 | 誤報事件 | 中途切斷 | 首次延遲 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test6 | 95.8% | 59.9% | 1 / 2 | 0 | 0 | 2.101 秒 |
+| test7 | 92.4% | 62.0% | 2 / 2 | 0 | 6 | 2.468／1.171 秒 |
+| test8 | 89.5% | 73.4% | 2 / 2 | 0 | 3 | 2.073／1.841 秒 |
+| test9 | 75.8% | 94.6% | 2 / 2 | 0 | 0 | 0.833／0.735 秒 |
+| test10 | 93.2% | 82.0% | 1 / 1 | 0 | 0 | 4.756 秒 |
+| test11 | 65.7% | 8.9% | 1 / 1 | 3 | 4 | 21.663 秒 |
+
+- test11 的主要失敗不是把閱讀命名錯，而是睡眠 29.7 秒開始後，31.8～53.6 秒 Face 與 Pose
+  幾乎完全消失。規則保守停在 `low_head_tracking_lost`，直到約 51 秒 Pose 暫時恢復才判睡眠。
+- test6～test11 中 `low_head_tracking_lost` 共 538 幀，全部位於睡眠 GT：test9 3 幀、test10
+  5 幀、test11 530 幀；現有資料沒有正常區間案例。這只是開發資料觀察，不足以證明跨影片成立。
+
+### test11：人體遮罩＋追蹤遺失 5 秒候選
+
+- 條件：進入成熟低頭後 Face／Pose 遺失、LiteRT 遮罩持續確認人仍在畫面，且遺失至少 5 秒。
+  不以遮罩單獨判睡眠；遮罩為無人或沒有遮罩資料時不得用這條規則觸發。
+- test11 從 baseline 的 Precision 65.7%、Recall 8.9%、首次延遲 21.663 秒、中途切斷 4 次，
+  改為 Precision 90.0%、Recall 80.1%、首次延遲 5.028 秒、中途切斷 0 次。
+- 睡眠事件仍為 1／1 命中。誤報事件由 3 降至 2，剩餘事件位於 89.740～90.206 秒與
+  103.406～103.473 秒，來源是既有 `posture_down` 路徑，不是新遮罩觸發。
+- 基準輸出：`vision_lab_out/sleep_first_baseline_20261015/`；含完整遮罩診斷欄位的候選輸出：
+  `vision_lab_out/sleep_first_presence_candidate_v2_20261015/`。兩者均受 Git ignore 保護。
+- 判讀：這個候選解決 test11 的已知失敗，但 test11 已成為開發資料，不能宣稱泛化有效；
+  正式 App Pilot 分支不包含這條 5 秒睡眠觸發。下一步必須以含「低頭閱讀到追蹤消失」負例的
+  新影片驗證，再決定是否接回 App。
+- 工程驗證：完整 `test/vision` 共 164 項通過；`flutter analyze --no-pub` 沒有新增問題，僅保留
+  `login_screen.dart` 原有的 13 筆 `withOpacity` deprecated info。

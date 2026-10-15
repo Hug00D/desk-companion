@@ -663,6 +663,36 @@ dart run tool\vision_lab_dual_track.dart `
 規則、測試、失敗案例與限制見
 [`vision-lab-presence-context-review.md`](docs/vision-lab-presence-context-review.md)。
 
+若研究問題只關心「是否有足夠證據判定睡眠」，可加上 `--sleep-first`。輸出狀態會收斂為
+`sleeping`、`uncertain_low_head`、`other`；閱讀只作為非睡眠 Ground Truth，不要求分類器
+辨識出 reading。報告會另外列出睡眠事件命中、誤報、首次偵測延遲與睡眠途中切斷次數：
+
+```powershell
+dart run tool\vision_lab_dual_track.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_sleeping_<runId>.csv `
+  vision_lab_out\sleep_first_<runId> `
+  --window-ms=2000 --presence-context --head-score-sum `
+  --long-short-gate --sleep-first
+```
+
+若同一次抽取另有 `person_presence_litert_<runId>.csv`，可用真實遮罩結果重播「成熟低頭後
+landmark 遺失，但人仍在畫面」的候選。遮罩路徑只能搭配 `--sleep-first` 與
+`--presence-context`，且不會修改原始 CSV：
+
+```powershell
+dart run tool\vision_lab_dual_track.dart `
+  vision_lab_out\frame_features_<runId>.csv `
+  vision_lab_out\ground_truth_sleeping_<runId>.csv `
+  vision_lab_out\sleep_first_mask_<runId> `
+  --window-ms=2000 --presence-context --head-score-sum `
+  --long-short-gate --sleep-first `
+  --person-presence=vision_lab_out\person_presence_litert_<runId>.csv
+```
+
+目前遮罩候選須連續確認人仍在畫面，且成熟低頭後 Face／Pose 追蹤遺失至少 5 秒才觸發。
+它只在離線 sleep-first 模式啟用，尚未接回正式 App；test11 是開發資料，改善不能視為獨立驗證。
+
 分心可再加上 `--head-score-sum`，但必須同時啟用 `--presence-context`：
 
 ```powershell

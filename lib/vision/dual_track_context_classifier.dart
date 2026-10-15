@@ -91,6 +91,7 @@ class DualTrackContextClassifier {
     this.enablePresenceContext = false,
     this.enableHeadScoreSum = false,
     this.enableLongShortGate = false,
+    this.enableSleepFirstTrackingLoss = false,
     this.maximumSampleGapMs = defaultMaximumSampleGapMs,
   }) : _disappearance = DisappearanceContextClassifier(
          maximumGapMs: maximumSampleGapMs,
@@ -105,6 +106,11 @@ class DualTrackContextClassifier {
     if (enableHeadScoreSum && !enablePresenceContext) {
       throw ArgumentError('Head score sum requires presence context.');
     }
+    if (enableSleepFirstTrackingLoss && !enablePresenceContext) {
+      throw ArgumentError(
+        'Sleep-first tracking loss requires presence context.',
+      );
+    }
     if (maximumSampleGapMs <= 0) {
       throw ArgumentError.value(
         maximumSampleGapMs,
@@ -118,6 +124,7 @@ class DualTrackContextClassifier {
   final bool enablePresenceContext;
   final bool enableHeadScoreSum;
   final bool enableLongShortGate;
+  final bool enableSleepFirstTrackingLoss;
   final int maximumSampleGapMs;
   final DisappearanceContextClassifier _disappearance;
   final HeadOffsetDetector _headScoreDetector;
@@ -136,6 +143,7 @@ class DualTrackContextClassifier {
   static const uprightPitch = 15.0;
   static const staticDeepPostureScoreThreshold = 80.0;
   static const staticDeepPostureDurationMs = 1000;
+  static const sleepFirstTrackingLossDurationMs = 5000;
   static const _eyeDetector = EyeStateDetector();
 
   final List<_Sample> _history = [];
@@ -451,6 +459,11 @@ class DualTrackContextClassifier {
         fastState.status == CompanionStatus.sleeping &&
         !strongPostureEvidence &&
         low;
+    final sleepFirstTrackingLossTrigger =
+        enableSleepFirstTrackingLoss &&
+        personMaskPresent &&
+        disappearance?.reason == 'low_head_tracking_lost' &&
+        disappearance!.faceMissingMs >= sleepFirstTrackingLossDurationMs;
     final recentMotion = _motionAt != null && _motionAt! >= cutoff;
     final shortTrigger = currentPostureTrigger
         ? 'strong_posture'
@@ -460,6 +473,8 @@ class DualTrackContextClassifier {
         ? 'eye_descent'
         : currentFastSleepTrigger
         ? 'fast_sleep'
+        : sleepFirstTrackingLossTrigger
+        ? 'person_present_low_head_loss'
         : recentMotion && evidenceEye
         ? 'head_drop_with_eye_evidence'
         : 'none';
@@ -504,8 +519,9 @@ class DualTrackContextClassifier {
           eyeCoverage < minimumCoverage &&
           !stableReadingEvidence;
       if (!_sleepLatched &&
-          mature &&
-          (highConfidenceShortTrigger || contextSupportedFastSleep)) {
+          ((mature &&
+                  (highConfidenceShortTrigger || contextSupportedFastSleep)) ||
+              sleepFirstTrackingLossTrigger)) {
         _sleepLatched = true;
         _staticDeepPostureLatched =
             !currentPostureTrigger && staticDeepPostureConfirmed;

@@ -389,6 +389,70 @@ void main() {
     expect(result.finalState, isNot('user_missing'));
   });
 
+  test('sleep-first confirms prolonged low-head loss while person remains', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+      enableSleepFirstTrackingLoss: true,
+    );
+    warm(classifier);
+    lowUntil(classifier, 3000);
+
+    DualTrackContextResult? result;
+    for (var ms = 3250; ms <= 8000; ms += 250) {
+      result = sample(
+        classifier,
+        ms,
+        face: false,
+        pose: false,
+        fastStatus: CompanionStatus.userMissing,
+        fastCause: CompanionCause.userAway,
+        personPresent: true,
+      );
+      expect(result.sleepLatched, isFalse);
+    }
+    result = sample(
+      classifier,
+      8250,
+      face: false,
+      pose: false,
+      fastStatus: CompanionStatus.userMissing,
+      fastCause: CompanionCause.userAway,
+      personPresent: true,
+    );
+
+    expect(result.disappearance?.reason, 'low_head_tracking_lost');
+    expect(result.shortTrigger, 'person_present_low_head_loss');
+    expect(result.sleepLatched, isTrue);
+    expect(result.finalState, 'drowsy_like');
+  });
+
+  test('sleep-first never confirms tracking loss without person evidence', () {
+    final classifier = DualTrackContextClassifier(
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+      enableSleepFirstTrackingLoss: true,
+    );
+    warm(classifier);
+    lowUntil(classifier, 3000);
+
+    DualTrackContextResult? result;
+    for (var ms = 3250; ms <= 9000; ms += 250) {
+      result = sample(
+        classifier,
+        ms,
+        face: false,
+        pose: false,
+        fastStatus: CompanionStatus.userMissing,
+        fastCause: CompanionCause.userAway,
+        personPresent: false,
+      );
+    }
+
+    expect(result?.sleepLatched, isFalse);
+    expect(result?.finalState, isNot('drowsy_like'));
+  });
+
   test(
     'fast missing, strong posture and distraction override slow context',
     () {
@@ -933,5 +997,70 @@ void main() {
     );
     expect(report.metrics['reading_fp_frames'], '1');
     expect(report.metrics['reading_fp_events'], '1');
+  });
+
+  test('sleep-first CLI emits only sleeping, uncertain, or other', () async {
+    final directory = await Directory.systemTemp.createTemp('sleep_first_');
+    addTearDown(() => directory.delete(recursive: true));
+    final files = await cli.runDualTrackLab(
+      featurePath: _fixture,
+      truthPath: _truth,
+      outputDirectory: directory.path,
+      windowMs: 2000,
+      enableLongShortGate: true,
+      enableSleepFirst: true,
+    );
+
+    expect(files, hasLength(3));
+    expect(files.every((path) => path.contains('sleep_first_')), isTrue);
+    final frames = await readVisionLabReplayCsv(files[0]);
+    final sleepFirstColumn = frames.first.indexOf('sleep_first_state');
+    expect(sleepFirstColumn, isNonNegative);
+    expect(
+      frames.skip(1).map((row) => row[sleepFirstColumn]).toSet(),
+      everyElement(isIn({'sleeping', 'uncertain_low_head', 'other'})),
+    );
+    final events = await readGroundTruthEvents(files[1]);
+    expect(
+      events.map((event) => event.state).toSet(),
+      everyElement(isIn({'sleeping', 'uncertain_low_head', 'other'})),
+    );
+  });
+
+  test('sleep-first CLI replays and carries LiteRT person presence', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'sleep_first_mask_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final presence = File('${directory.path}/presence.csv');
+    await presence.writeAsString(
+      'frame_idx,timestamp_ms,person_mask_mean_confidence,'
+      'person_mask_area_ratio,person_mask_centroid_x,'
+      'person_mask_centroid_y,inference_ms\n'
+      '22,4900,0.8,0.7,0.5,0.5,6.0\n',
+    );
+    final files = await cli.runDualTrackLab(
+      featurePath: _fixture,
+      truthPath: _truth,
+      outputDirectory: '${directory.path}/output',
+      windowMs: 2000,
+      enablePresenceContext: true,
+      enableLongShortGate: true,
+      enableSleepFirst: true,
+      personPresencePath: presence.path,
+    );
+
+    final rows = await readVisionLabReplayCsv(files[0]);
+    final timestampColumn = rows.first.indexOf('timestamp_ms');
+    final sampledColumn = rows.first.indexOf('person_presence_sampled');
+    final presentColumn = rows.first.indexOf('person_present');
+    final areaColumn = rows.first.indexOf('person_mask_area_ratio');
+    final sampled = rows.firstWhere((row) => row[timestampColumn] == '4900');
+    final carried = rows.firstWhere((row) => row[timestampColumn] == '5200');
+    expect(sampled[sampledColumn], 'true');
+    expect(sampled[presentColumn], 'true');
+    expect(sampled[areaColumn], '0.7');
+    expect(carried[sampledColumn], 'true');
+    expect(carried[presentColumn], 'true');
   });
 }
