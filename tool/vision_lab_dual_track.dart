@@ -101,8 +101,6 @@ Future<List<String>> runDualTrackLab({
     enablePresenceContext: enablePresenceContext,
     enableHeadScoreSum: enableHeadScoreSum,
     enableLongShortGate: enableLongShortGate,
-    enableSleepFirstTrackingLoss:
-        enableSleepFirst && personPresencePath != null,
   );
   final frames = parseVisionLabReplayFrames(
     await readVisionLabReplayCsv(featurePath),

@@ -389,11 +389,10 @@ void main() {
     expect(result.finalState, isNot('user_missing'));
   });
 
-  test('sleep-first confirms prolonged low-head loss while person remains', () {
+  test('prolonged low-head loss while person remains stays uncertain', () {
     final classifier = DualTrackContextClassifier(
       enablePresenceContext: true,
       enableLongShortGate: true,
-      enableSleepFirstTrackingLoss: true,
     );
     warm(classifier);
     lowUntil(classifier, 3000);
@@ -422,11 +421,11 @@ void main() {
     );
 
     expect(result.disappearance?.reason, 'low_head_tracking_lost');
-    expect(result.shortTrigger, 'person_present_low_head_loss');
-    expect(result.sleepLatched, isTrue);
-    expect(result.finalState, 'drowsy_like');
+    expect(result.shortTrigger, 'none');
+    expect(result.sleepLatched, isFalse);
+    expect(result.finalState, 'unknown_low_head');
     expect(result.continuousTrackingLossMs, 5000);
-    expect(result.sleepLatchSource, 'continuous_person_present_tracking_loss');
+    expect(result.sleepLatchSource, 'none');
   });
 
   test(
@@ -435,7 +434,6 @@ void main() {
       final classifier = DualTrackContextClassifier(
         enablePresenceContext: true,
         enableLongShortGate: true,
-        enableSleepFirstTrackingLoss: true,
       );
       warm(classifier);
       lowUntil(classifier, 3000);
@@ -488,15 +486,15 @@ void main() {
         personPresent: true,
       );
       expect(confirmed.continuousTrackingLossMs, 5000);
-      expect(confirmed.sleepLatched, isTrue);
+      expect(confirmed.sleepLatched, isFalse);
+      expect(confirmed.finalState, 'unknown_low_head');
     },
   );
 
-  test('sleep-first never confirms tracking loss without person evidence', () {
+  test('tracking loss without person evidence never confirms sleep', () {
     final classifier = DualTrackContextClassifier(
       enablePresenceContext: true,
       enableLongShortGate: true,
-      enableSleepFirstTrackingLoss: true,
     );
     warm(classifier);
     lowUntil(classifier, 3000);
