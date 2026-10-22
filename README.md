@@ -573,6 +573,13 @@ flutter run --dart-define=APP_DUAL_TRACK_VISION=false
 
 若要完整回退這次視覺 Pilot，兩個旗標都設為 `false`。
 
+2026-10-20 的手機 Pilot 另加入趴下過渡保護：快軌趴下需至少 1.2 秒有效新 Pose 證據；
+缺失／不可靠 Pose 可暫停最多 1.5 秒，保留進度但不計缺失時間，超時或明確恢復才重置。
+已確認離席後回座，可靠髖部仍可見時不累積趴下；須頭肩回到坐姿區域且穩定至少 1.5 秒，
+才清除坐下軌跡並恢復判斷，不是人出現後固定倒數。這些只在 App 雙軌 Pilot 啟用，
+不另跑模型，離線預設不變。實機待測項目與限制見
+[`docs/vision-lab-test-log.md`](docs/vision-lab-test-log.md) 的「手機 Pilot 修訂：缺資料寬限與髖部回座護欄」。
+
 ### 建立 Ground Truth
 
 不需要逐幀人工標記。以影片時間軸粗略切出連續區段，另存成

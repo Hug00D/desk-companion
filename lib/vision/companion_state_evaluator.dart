@@ -798,4 +798,20 @@ class CompanionStateEvaluator {
     _lastStablePresenceState = PresenceState.present;
     _lastResolvedCause = CompanionCause.none;
   }
+
+  /// A return-to-seat descent must not inherit a previous prone episode.
+  void resetPostureTracking() {
+    postureDownDetector.resetTracking();
+    _clearRecentPoseEvidence();
+    _isPostureDownLatched = false;
+    _postureDownRecoveryFrames = 0;
+    _lastFaceVisibleContext = CompanionStatus.normal;
+    _lastFaceMissingContext = null;
+    _faceMissingStartedAt = null;
+    _faceUprightFrames = 0;
+    if (_lastResolvedCause == CompanionCause.postureDown ||
+        _lastResolvedCause == CompanionCause.drowsy) {
+      _lastResolvedCause = CompanionCause.none;
+    }
+  }
 }

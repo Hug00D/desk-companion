@@ -1,14 +1,27 @@
 import '../vision/companion_state_evaluator.dart';
 import '../vision/dual_track_context_classifier.dart';
 import '../vision/eye_state_detector.dart';
+import '../vision/posture_down_detector.dart';
 import '../vision/vision_result.dart';
+import 'return_to_seat_guard.dart';
 
 class CompanionController {
   CompanionController({
     CompanionStateEvaluator? evaluator,
     this.enableDualTrackPilot = false,
     DualTrackContextClassifier? dualTrackClassifier,
-  }) : evaluator = evaluator ?? CompanionStateEvaluator(),
+  }) : evaluator =
+           evaluator ??
+           CompanionStateEvaluator(
+             postureDownDetector: enableDualTrackPilot
+                 ? PostureDownDetector(
+                     minimumEvidenceDuration: appPostureConfirmationDuration,
+                     maximumEvidenceGap: appMaximumSampleGap,
+                     missingEvidenceGraceDuration:
+                         appMissingEvidenceGraceDuration,
+                   )
+                 : null,
+           ),
        dualTrackClassifier =
            dualTrackClassifier ??
            DualTrackContextClassifier(
@@ -22,6 +35,14 @@ class CompanionController {
   final CompanionStateEvaluator evaluator;
   final bool enableDualTrackPilot;
   final DualTrackContextClassifier dualTrackClassifier;
+  final ReturnToSeatGuard returnToSeatGuard = ReturnToSeatGuard(
+    settlingDuration: appReturnSettlingDuration,
+    maximumSampleGap: appMaximumSampleGap,
+  );
+  static const appPostureConfirmationDuration = Duration(milliseconds: 1200);
+  static const appMissingEvidenceGraceDuration = Duration(milliseconds: 1500);
+  static const appReturnSettlingDuration = Duration(milliseconds: 1500);
+  static const appMaximumSampleGap = Duration(milliseconds: 1500);
 
   int _closedEyeFrameCount = 0;
   int _distractedFrameCount = 0;
@@ -30,6 +51,7 @@ class CompanionController {
   CompanionAnalysis? _lastAnalysis;
   DualTrackContextResult? _lastDualTrackResult;
   int? _lastDualTrackTimestampMs;
+  bool _returnContextCleared = false;
 
   int get closedEyeFrameCount => _closedEyeFrameCount;
   int get distractedFrameCount => _distractedFrameCount;
@@ -40,21 +62,39 @@ class CompanionController {
   CompanionCause get cause => _lastAnalysis?.cause ?? CompanionCause.none;
 
   CompanionAnalysis analyze(VisionResult result, {DateTime? observedAt}) {
+    final timestamp = observedAt ?? DateTime.now();
     final poseSequence = result.poseSequence;
     final isFreshPoseResult =
         poseSequence != null && poseSequence != _lastPoseSequence;
+    final wasAwaitingReturn = returnToSeatGuard.isAwaitingReturn;
+    final settlingAfterReturn =
+        enableDualTrackPilot &&
+        returnToSeatGuard.suppressPosture(
+          result,
+          freshPose: isFreshPoseResult,
+          now: timestamp,
+        );
+    if (enableDualTrackPilot && wasAwaitingReturn) {
+      evaluator.resetPostureTracking();
+      if ((!_returnContextCleared && returnToSeatGuard.hasReturnEvidence) ||
+          !returnToSeatGuard.isAwaitingReturn) {
+        dualTrackClassifier.reset();
+        _lastDualTrackTimestampMs = null;
+        _returnContextCleared = returnToSeatGuard.isAwaitingReturn;
+      }
+    }
     final fastAnalysis = evaluator.evaluate(
       result: result,
       previousClosedFrameCount: _closedEyeFrameCount,
       previousDistractedFrameCount: _distractedFrameCount,
-      isFreshPoseResult: isFreshPoseResult,
-      observedAt: observedAt,
+      isFreshPoseResult: isFreshPoseResult && !settlingAfterReturn,
+      observedAt: timestamp,
     );
     final analysis = enableDualTrackPilot
         ? _applyDualTrack(
             result: result,
             fastAnalysis: fastAnalysis,
-            observedAt: observedAt,
+            observedAt: timestamp,
           )
         : fastAnalysis;
     _closedEyeFrameCount = fastAnalysis.eyeResult.closedFrameCount;
@@ -64,6 +104,19 @@ class CompanionController {
       _lastPoseSequence = poseSequence;
     }
     _lastAnalysis = analysis;
+    if (enableDualTrackPilot &&
+        analysis.status == CompanionStatus.userMissing) {
+      if (!returnToSeatGuard.isAwaitingReturn) {
+        evaluator.resetPostureTracking();
+        _returnContextCleared = false;
+      }
+      returnToSeatGuard.beginReturn();
+    } else if (enableDualTrackPilot) {
+      returnToSeatGuard.recordSeatedBaseline(
+        analysis,
+        freshPose: isFreshPoseResult,
+      );
+    }
     return analysis;
   }
 
@@ -161,6 +214,8 @@ class CompanionController {
     _lastAnalysis = null;
     _lastDualTrackResult = null;
     _lastDualTrackTimestampMs = null;
+    _returnContextCleared = false;
+    returnToSeatGuard.reset();
     evaluator.reset();
     dualTrackClassifier.reset();
   }

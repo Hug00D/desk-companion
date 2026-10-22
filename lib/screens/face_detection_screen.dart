@@ -5154,6 +5154,19 @@ $toneLine
                     Text("是否偵測到人臉：${_hasFace ? "是" : "否"}"),
                     Text("Presence：${presenceState?.name ?? "--"}"),
                     Text(
+                      "回座護欄：${_companionController.returnToSeatGuard.phase.name}",
+                    ),
+                    Text(
+                      "髖部可見度 L/R："
+                      "${_formatScore(analysis?.visionResult.leftHipVisibility)} / "
+                      "${_formatScore(analysis?.visionResult.rightHipVisibility)}",
+                    ),
+                    Text(
+                      "趴下有效證據："
+                      "${_companionController.evaluator.postureDownDetector.pendingEvidenceDuration.inMilliseconds} ms"
+                      "${_companionController.evaluator.postureDownDetector.isPendingEvidencePaused ? '（暫停）' : ''}",
+                    ),
+                    Text(
                       "雙軌：${dualTrack?.finalState ?? "停用"} / "
                       "${dualTrack?.longContext.name ?? "--"} / "
                       "${dualTrack?.shortTrigger ?? "--"}",

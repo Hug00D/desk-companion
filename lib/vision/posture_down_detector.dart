@@ -42,6 +42,9 @@ class PostureDownDetector {
     this.downScoreThreshold = 35,
     this.evidenceWindowSize = 3,
     this.confirmationVotes = 2,
+    this.minimumEvidenceDuration = Duration.zero,
+    this.maximumEvidenceGap = const Duration(milliseconds: 1500),
+    this.missingEvidenceGraceDuration = Duration.zero,
     this.recoveryFrames = 2,
     this.baselineFrames = 5,
     this.missingPoseHoldFrames = 8,
@@ -71,6 +74,9 @@ class PostureDownDetector {
   final double downScoreThreshold;
   final int evidenceWindowSize;
   final int confirmationVotes;
+  final Duration minimumEvidenceDuration;
+  final Duration maximumEvidenceGap;
+  final Duration missingEvidenceGraceDuration;
   final int recoveryFrames;
   final int baselineFrames;
   final int missingPoseHoldFrames;
@@ -110,12 +116,24 @@ class PostureDownDetector {
   int _upwardVetoFramesLeft = 0;
   int _consecutiveDownFrames = 0;
   int _unreliableMotionFrames = 0;
+  Duration _pendingEvidenceDuration = Duration.zero;
+  DateTime? _lastPositiveEvidenceAt;
+  DateTime? _missingEvidenceSince;
+  DateTime? _lastEvidenceAt;
+
+  Duration get pendingEvidenceDuration => _pendingEvidenceDuration;
+  bool get isPendingEvidencePaused => _missingEvidenceSince != null;
 
   PostureDownDetectionResult evaluate({
     required VisionResult result,
     required bool shouldUpdate,
     DateTime? observedAt,
   }) {
+    final timestamp = observedAt ?? DateTime.now();
+    if (minimumEvidenceDuration > Duration.zero) {
+      _expirePendingEvidence(timestamp);
+      if (shouldUpdate) _lastEvidenceAt = timestamp;
+    }
     if (!shouldUpdate) {
       final score = _lastScore;
       if (score == null) {
@@ -132,9 +150,10 @@ class PostureDownDetector {
     final score = _calculateScore(
       result,
       shouldUpdate: shouldUpdate,
-      observedAt: observedAt,
+      observedAt: timestamp,
     );
     if (score == null) {
+      _pausePendingEvidence(timestamp);
       _missingPoseFrameCount++;
       final lastScore = _lastScore;
 
@@ -160,7 +179,7 @@ class PostureDownDetector {
     }
     _missingPoseFrameCount = 0;
 
-    return _evaluateScore(score: score);
+    return _evaluateScore(score: score, observedAt: timestamp);
   }
 
   PostureDownDetectionResult _holdScore({required _PostureScore score}) {
@@ -175,10 +194,14 @@ class PostureDownDetector {
     );
   }
 
-  PostureDownDetectionResult _evaluateScore({required _PostureScore score}) {
+  PostureDownDetectionResult _evaluateScore({
+    required _PostureScore score,
+    required DateTime observedAt,
+  }) {
     _lastScore = score;
     _updateVerticalMotion(score);
     if (score.isCalibrating) {
+      _clearPendingEvidence();
       _downEvidenceWindow.clear();
       _recoveryFrameCount = 0;
       return _buildResultFromScore(
@@ -194,6 +217,20 @@ class PostureDownDetector {
     final isDownEvidence =
         _downwardMotionFrames > 0 && _isPostureDownEvidence(score);
     _addDownEvidence(isDownEvidence);
+    if (isDownEvidence && score.isMotionReliable) {
+      if (_lastPositiveEvidenceAt != null && _missingEvidenceSince == null) {
+        _pendingEvidenceDuration += observedAt.difference(
+          _lastPositiveEvidenceAt!,
+        );
+      }
+      _lastPositiveEvidenceAt = observedAt;
+      _missingEvidenceSince = null;
+    } else {
+      _clearPendingEvidence();
+    }
+    final durationConfirmed =
+        minimumEvidenceDuration == Duration.zero ||
+        _pendingEvidenceDuration >= minimumEvidenceDuration;
 
     if (_isDownConfirmed) {
       if (_isClearlyRecovered(score)) {
@@ -220,7 +257,7 @@ class PostureDownDetector {
       );
     }
 
-    if (_positiveEvidenceVotes >= confirmationVotes) {
+    if (_positiveEvidenceVotes >= confirmationVotes && durationConfirmed) {
       _isDownConfirmed = true;
       _lastDownScore = score;
       _recoveryFrameCount = 0;
@@ -239,6 +276,44 @@ class PostureDownDetector {
       downFrameCount: _positiveEvidenceVotes,
       state: PostureDownState.normal,
     );
+  }
+
+  void _pausePendingEvidence(DateTime timestamp) {
+    if (minimumEvidenceDuration == Duration.zero ||
+        _lastPositiveEvidenceAt == null) {
+      return;
+    }
+    if (missingEvidenceGraceDuration == Duration.zero) {
+      _clearPendingEvidence();
+      return;
+    }
+    _missingEvidenceSince ??= timestamp;
+  }
+
+  void _expirePendingEvidence(DateTime timestamp) {
+    final gap = _lastEvidenceAt == null
+        ? null
+        : timestamp.difference(_lastEvidenceAt!);
+    final expired =
+        _missingEvidenceSince != null &&
+        timestamp.difference(_missingEvidenceSince!) >
+            missingEvidenceGraceDuration;
+    if ((gap != null && (gap < Duration.zero || gap > maximumEvidenceGap)) ||
+        expired) {
+      _clearPendingEvidence();
+      if (!_isDownConfirmed) {
+        _downEvidenceWindow.clear();
+        _noseYHistory.clear();
+        _shoulderYHistory.clear();
+        _downwardMotionFrames = 0;
+      }
+    }
+  }
+
+  void _clearPendingEvidence() {
+    _pendingEvidenceDuration = Duration.zero;
+    _lastPositiveEvidenceAt = null;
+    _missingEvidenceSince = null;
   }
 
   void _updateVerticalMotion(_PostureScore score) {
@@ -360,6 +435,19 @@ class PostureDownDetector {
       return null;
     }
 
+    final motionShoulderVisibility = _average([
+      result.leftShoulderVisibility,
+      result.rightShoulderVisibility,
+    ]);
+    final isMotionReliable =
+        result.hasFace ||
+        (motionShoulderVisibility != null &&
+            motionShoulderVisibility >= motionReliableShoulderVisibility);
+    // Unknown geometry must not alter filters or contribute pending evidence.
+    if (minimumEvidenceDuration > Duration.zero && !isMotionReliable) {
+      return null;
+    }
+
     final timestamp = observedAt ?? DateTime.now();
     final timestampSeconds =
         timestamp.microsecondsSinceEpoch / Duration.microsecondsPerSecond;
@@ -379,15 +467,6 @@ class PostureDownDetector {
       noseY / imageHeight,
       timestampSeconds: timestampSeconds,
     );
-
-    final motionShoulderVisibility = _average([
-      result.leftShoulderVisibility,
-      result.rightShoulderVisibility,
-    ]);
-    final isMotionReliable =
-        result.hasFace ||
-        (motionShoulderVisibility != null &&
-            motionShoulderVisibility >= motionReliableShoulderVisibility);
 
     if (_baselineHeadShoulderRatio == null) {
       if (shouldUpdate && _canUseForBaseline(result)) {
@@ -549,6 +628,11 @@ class PostureDownDetector {
     _baselineShoulderWidthRatio = null;
     _baselineShoulderCenterYRatio = null;
     _baselineNoseYRatio = null;
+    resetTracking();
+  }
+
+  /// Keep the seated baseline, but discard motion and prone episode history.
+  void resetTracking() {
     _lastScore = null;
     _lastDownScore = null;
     _downEvidenceWindow.clear();
@@ -561,6 +645,8 @@ class PostureDownDetector {
     _upwardVetoFramesLeft = 0;
     _consecutiveDownFrames = 0;
     _unreliableMotionFrames = 0;
+    _clearPendingEvidence();
+    _lastEvidenceAt = null;
     headShoulderFilter.reset();
     shoulderCenterFilter.reset();
     noseYFilter.reset();
@@ -568,6 +654,7 @@ class PostureDownDetector {
   }
 
   void _clearConfirmedState() {
+    _clearPendingEvidence();
     _downEvidenceWindow.clear();
     _isDownConfirmed = false;
     _lastDownScore = null;

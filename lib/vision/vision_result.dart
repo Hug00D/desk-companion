@@ -14,6 +14,12 @@ class VisionResult {
     this.rightShoulderY,
     this.leftShoulderVisibility,
     this.rightShoulderVisibility,
+    this.leftHipX,
+    this.leftHipY,
+    this.leftHipVisibility,
+    this.rightHipX,
+    this.rightHipY,
+    this.rightHipVisibility,
     this.poseNoseX,
     this.poseNoseY,
     this.poseNoseVisibility,
@@ -51,6 +57,12 @@ class VisionResult {
   final double? rightShoulderY;
   final double? leftShoulderVisibility;
   final double? rightShoulderVisibility;
+  final double? leftHipX;
+  final double? leftHipY;
+  final double? leftHipVisibility;
+  final double? rightHipX;
+  final double? rightHipY;
+  final double? rightHipVisibility;
   final double? poseNoseX;
   final double? poseNoseY;
   final double? poseNoseVisibility;
@@ -118,6 +130,12 @@ class VisionResult {
       rightShoulderY: rightShoulderY,
       leftShoulderVisibility: _toDouble(data['lsVisibility']),
       rightShoulderVisibility: _toDouble(data['rsVisibility']),
+      leftHipX: _toDouble(data['poseLeftHipX']),
+      leftHipY: _toDouble(data['poseLeftHipY']),
+      leftHipVisibility: _toDouble(data['poseLeftHipVisibility']),
+      rightHipX: _toDouble(data['poseRightHipX']),
+      rightHipY: _toDouble(data['poseRightHipY']),
+      rightHipVisibility: _toDouble(data['poseRightHipVisibility']),
       poseNoseX: _toDouble(data['poseNoseX']),
       poseNoseY: _toDouble(data['poseNoseY']),
       poseNoseVisibility: _toDouble(data['poseNoseVisibility']),
