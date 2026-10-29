@@ -142,6 +142,7 @@ class DualTrackContextClassifier {
   static const staticDeepPostureDurationMs = 1000;
   static const minimumStrongPosturePoseCoverage = 0.4;
   static const poseOnlyRecoveryDurationMs = 1000;
+  static const presenceConfirmedProneDurationMs = 5000;
   static const _eyeDetector = EyeStateDetector();
 
   final List<_Sample> _history = [];
@@ -243,6 +244,14 @@ class DualTrackContextClassifier {
         : fastState.status == CompanionStatus.distracted;
     final personMaskPresent =
         result.personPresenceSampled && result.personPresent == true;
+    final presenceConfirmedProne =
+        enableLongShortGate &&
+        personMaskPresent &&
+        disappearance?.state == DisappearanceState.sleepCandidate &&
+        disappearance!.reliableHistory &&
+        disappearance.relativeDescent &&
+        !disappearance.sideExit &&
+        continuousTrackingLossMs >= presenceConfirmedProneDurationMs;
     final presenceOverride = personMaskPresent
         ? null
         : switch (disappearance?.state) {
@@ -473,6 +482,8 @@ class DualTrackContextClassifier {
     final recentMotion = _motionAt != null && _motionAt! >= cutoff;
     final shortTrigger = currentPostureTrigger
         ? 'strong_posture'
+        : presenceConfirmedProne
+        ? 'presence_confirmed_prone'
         : staticDeepPostureConfirmed
         ? 'static_deep_posture'
         : paired
@@ -618,7 +629,17 @@ class DualTrackContextClassifier {
       }
     }
 
-    final finalState = enableLongShortGate && strongPostureEvidence
+    final confirmedFastAway =
+        fastPriority == 'user_missing' &&
+        result.personPresenceSampled &&
+        result.personPresent == false;
+    final confirmedAwayPriority =
+        presenceOverride == 'user_missing' || confirmedFastAway;
+    final finalState = confirmedAwayPriority
+        ? 'user_missing'
+        : presenceConfirmedProne
+        ? 'posture_down'
+        : enableLongShortGate && strongPostureEvidence
         ? 'posture_down'
         : enableLongShortGate && _sleepLatched
         ? 'drowsy_like'

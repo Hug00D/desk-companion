@@ -159,6 +159,12 @@ class CompanionStateEvaluator {
     );
     final rawPresenceState = presenceDetector.evaluate(result);
     final presenceState = _debouncePresenceState(rawPresenceState);
+    final confirmedPersonAbsent =
+        presenceState == PresenceState.away &&
+        result.personPresenceSampled &&
+        result.personPresent == false &&
+        !result.hasFace &&
+        !result.hasPose;
     _updateRecentPoseContext(
       result: result,
       postureDownResult: postureDownResult,
@@ -170,6 +176,7 @@ class CompanionStateEvaluator {
       headOffsetState: headOffsetResult.state,
       poseState: poseResult.state,
       presenceState: presenceState,
+      confirmedPersonAbsent: confirmedPersonAbsent,
       suppressEyeWarning: _shouldSuppressEyeWarning(
         result: result,
         postureDownResult: postureDownResult,
@@ -234,8 +241,17 @@ class CompanionStateEvaluator {
     required HeadOffsetState headOffsetState,
     required PoseState poseState,
     required PresenceState presenceState,
+    required bool confirmedPersonAbsent,
     required bool suppressEyeWarning,
   }) {
+    // A debounced negative person-mask sample is stronger evidence than stale
+    // pose geometry held from the departure transition.
+    if (presenceState == PresenceState.away && confirmedPersonAbsent) {
+      return const CompanionState(
+        status: CompanionStatus.userMissing,
+        cause: CompanionCause.userAway,
+      );
+    }
     if (poseState == PoseState.postureDown) {
       return const CompanionState(
         status: CompanionStatus.sleeping,
@@ -373,6 +389,19 @@ class CompanionStateEvaluator {
     final hasStrongPostureDownEvidence = _hasStrongPostureDownEvidence(
       postureDownResult,
     );
+    if (baseStatus == CompanionStatus.userMissing &&
+        result.personPresenceSampled &&
+        result.personPresent == false) {
+      _isPostureDownLatched = false;
+      _postureDownRecoveryFrames = 0;
+      _lastFaceMissingContext = null;
+      _lastFaceVisibleContext = CompanionStatus.normal;
+      _clearRecentPoseEvidence();
+      // Keep the seated calibration so a real prone movement remains
+      // detectable after the return-to-seat guard finishes settling.
+      postureDownDetector.resetTracking();
+      return CompanionStatus.userMissing;
+    }
     final shouldLatchPostureDown =
         postureDownResult.state == PostureDownState.down;
     if (_isPostureDownLatched &&

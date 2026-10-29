@@ -395,22 +395,16 @@ class PostureDownDetector {
   }
 
   bool _isPostureDownEvidence(_PostureScore score) {
-    // Leaning forward to read drops the shoulders in frame but keeps them just
-    // as wide, while collapsing onto the desk also compresses the shoulder line
-    // or hides the face. Shoulder drop alone is therefore not body-collapse
-    // evidence as long as the face is still tracked.
+    // Perspective, turning and walking away can all make the 2D shoulder line
+    // narrower. Treat that shrink only as support for a measured vertical body
+    // drop; it must never be sufficient posture-down evidence by itself.
     final shoulderDropCounts =
         !score.hasFace ||
         score.shoulderShrink >= faceVisibleShoulderShrinkFloor;
-    final bodyCollapsed =
-        (score.shoulderDrop >= 24 && shoulderDropCounts) ||
-        score.shoulderShrink >= 45;
+    final bodyCollapsed = score.shoulderDrop >= 24 && shoulderDropCounts;
     final headCollapsed =
         score.headLow >= 55 || (score.noseDrop >= 35 && score.headLow >= 35);
-    final proneContext = !score.hasFace || score.sideProne >= 65;
-    return score.total >= downScoreThreshold &&
-        bodyCollapsed &&
-        (headCollapsed || proneContext);
+    return score.total >= downScoreThreshold && bodyCollapsed && headCollapsed;
   }
 
   _PostureScore? _calculateScore(
@@ -520,7 +514,9 @@ class PostureDownDetector {
 
     final headDropScore = math.max(headLowScore, noseDropScore);
     final hasBodyCollapseEvidence =
-        shoulderShrinkScore >= 45 ||
+        (shoulderDropScore >= 24 &&
+            (!result.hasFace ||
+                shoulderShrinkScore >= faceVisibleShoulderShrinkFloor)) ||
         sideProneScore >= 55 ||
         !result.hasFace && shoulderDropScore >= 20;
     final gatedHeadDropScore = hasBodyCollapseEvidence ? headDropScore : 0.0;
@@ -529,20 +525,27 @@ class PostureDownDetector {
         result.hasFace && shoulderShrinkScore < 45 && sideProneScore < 55
         ? math.min(shoulderDropScore, downScoreThreshold - 1)
         : shoulderDropScore;
-    final hasBodyCollapseEvidenceForProne =
-        shoulderShrinkScore >= 45 || shoulderDropScore >= 24;
+    final hasBodyCollapseEvidenceForProne = shoulderDropScore >= 24;
     final gatedSideProneScore = hasBodyCollapseEvidenceForProne
         ? sideProneScore
         : 0.0;
 
+    final corroboratedShoulderShrinkScore =
+        shoulderDropScore >= 24 && headDropScore >= 35
+        ? shoulderShrinkScore
+        : 0.0;
+
     final rawTotal = [
       gatedShoulderDropScore,
-      shoulderShrinkScore,
+      corroboratedShoulderShrinkScore,
       gatedHeadDropScore,
       visibilityScore,
       gatedSideProneScore,
     ].reduce(math.max);
-    final bodyCollapseScore = math.max(shoulderDropScore, shoulderShrinkScore);
+    final bodyCollapseScore = math.max(
+      shoulderDropScore,
+      corroboratedShoulderShrinkScore,
+    );
     final faceVisibleWithoutBodyCollapse =
         result.hasFace && bodyCollapseScore < 45;
     final total = faceVisibleWithoutBodyCollapse
@@ -711,6 +714,11 @@ class PostureDownDetector {
     ]);
 
     final headDropEvidence = math.max(headLowScore, noseDropScore);
+    if (headLowScore < 25 && noseDropScore < 28) {
+      return 0;
+    }
+    if (headDropEvidence < 35) return 0;
+
     final faceMissingShoulderDropScore = _faceMissingShoulderDropScore(
       hasFace: result.hasFace,
       shoulderDropScore: shoulderDropScore,
@@ -720,11 +728,6 @@ class PostureDownDetector {
     if (faceMissingShoulderDropScore > 0) {
       return faceMissingShoulderDropScore;
     }
-
-    if (headLowScore < 25 && noseDropScore < 28) {
-      return 0;
-    }
-    if (headDropEvidence < 35) return 0;
     if (result.hasFace &&
         (headLowScore < 45 ||
             (shoulderShrinkScore < 35 && shoulderDropScore < 50))) {
@@ -746,7 +749,9 @@ class PostureDownDetector {
     if (visibleShoulderCount <= 1 && !result.hasFace) {
       score = math.max(score, 58 + headDropEvidence * 0.35);
     }
-    if (shoulderShrinkScore >= 45 && !result.hasFace) {
+    if (shoulderShrinkScore >= 45 &&
+        shoulderDropScore >= 24 &&
+        !result.hasFace) {
       score = math.max(score, 62 + shoulderShrinkScore * 0.35);
     }
 

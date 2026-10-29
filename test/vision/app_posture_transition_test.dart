@@ -89,6 +89,52 @@ void main() {
   });
 
   group('app posture duration', () {
+    test('front departure shoulder shrink is not prone evidence', () {
+      final d = detector();
+      calibrate(d);
+
+      PostureDownDetectionResult? last;
+      for (var i = 0; i < 5; i++) {
+        last = d.evaluate(
+          result: departureFrame(
+            sequence: 7 + i,
+            shoulderHalfWidth: 180 - i * 25,
+            shoulderCenterX: 500,
+            shoulderY: 500 + i * 8,
+            noseY: 250 + i * 8,
+          ),
+          shouldUpdate: true,
+          observedAt: start.add(Duration(milliseconds: 3600 + 600 * i)),
+        );
+        expect(last.state, isNot(PostureDownState.down));
+      }
+      expect(last!.shoulderShrinkScore, greaterThan(45));
+      expect(last.downFrameCount, 0);
+    });
+
+    test('side departure shoulder shrink is not prone evidence', () {
+      final d = detector();
+      calibrate(d);
+
+      PostureDownDetectionResult? last;
+      for (var i = 0; i < 5; i++) {
+        last = d.evaluate(
+          result: departureFrame(
+            sequence: 7 + i,
+            shoulderHalfWidth: 180 - i * 25,
+            shoulderCenterX: 500 + i * 45,
+            shoulderY: 500 + i * 8,
+            noseY: 250 + i * 8,
+          ),
+          shouldUpdate: true,
+          observedAt: start.add(Duration(milliseconds: 3600 + 600 * i)),
+        );
+        expect(last.state, isNot(PostureDownState.down));
+      }
+      expect(last!.shoulderShrinkScore, greaterThan(45));
+      expect(last.downFrameCount, 0);
+    });
+
     test('candidate grace does not erase already confirmed prone hold', () {
       final d = detector();
       calibrate(d);
@@ -502,6 +548,49 @@ void main() {
       },
     );
 
+    test(
+      'person mask plus visible descent preserves prone through landmark loss',
+      () {
+        step(gap: 300);
+        step(
+          nativeOverrides: const {'poseNoseY': 550.0, 'headPitch': 30.0},
+          gap: 300,
+        );
+        CompanionAnalysis? result;
+        for (var i = 0; i < 10; i++) {
+          result = step(
+            absent: true,
+            nativeOverrides: const {
+              'personPresenceSampled': true,
+              'personPresent': true,
+              'personMaskAreaRatio': 0.7,
+            },
+          );
+        }
+
+        expect(result!.status, CompanionStatus.sleeping);
+        expect(result.cause, CompanionCause.postureDown);
+        expect(
+          controller.lastDualTrackResult?.shortTrigger,
+          'presence_confirmed_prone',
+        );
+      },
+    );
+
+    test('confirmed absence overrides a stale posture-down hold', () {
+      step(prone: true);
+      step(prone: true);
+      expect(step(prone: true).cause, CompanionCause.postureDown);
+
+      CompanionAnalysis? result;
+      for (var i = 0; i < 3; i++) {
+        result = step(absent: true);
+      }
+
+      expect(result!.status, CompanionStatus.userMissing);
+      expect(result.cause, CompanionCause.userAway);
+    });
+
     test('sitting down after confirmed absence does not become prone', () {
       leave();
       final returning = [
@@ -833,5 +922,29 @@ VisionResult frame({
       'poseRightHipY': showHips ? 800.0 : 1200.0,
       'poseRightHipVisibility': showHips ? 0.9 : 0.1,
     },
+  });
+}
+
+VisionResult departureFrame({
+  required int sequence,
+  required double shoulderHalfWidth,
+  required double shoulderCenterX,
+  required double shoulderY,
+  required double noseY,
+}) {
+  return VisionResult.fromNativeMap({
+    ...frame(sequence: sequence).raw,
+    'hasFace': false,
+    'lsX': shoulderCenterX - shoulderHalfWidth,
+    'lsY': shoulderY,
+    'rsX': shoulderCenterX + shoulderHalfWidth,
+    'rsY': shoulderY,
+    'poseNoseX': shoulderCenterX,
+    'poseNoseY': noseY,
+    'poseNoseVisibility': 0.75,
+    'poseLeftEyeVisibility': 0.45,
+    'poseRightEyeVisibility': 0.45,
+    'poseLeftEarVisibility': 0.5,
+    'poseRightEarVisibility': 0.5,
   });
 }

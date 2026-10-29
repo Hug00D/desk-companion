@@ -429,6 +429,49 @@ void main() {
   });
 
   test(
+    'visible descent plus five-second tracked loss confirms prone, not away',
+    () {
+      final classifier = DualTrackContextClassifier(
+        enablePresenceContext: true,
+        enableLongShortGate: true,
+      );
+      warm(classifier);
+      sample(classifier, 750);
+      sample(classifier, 1000, pitch: 30, drop: 0.08);
+
+      DualTrackContextResult? result;
+      for (var ms = 1250; ms < 6250; ms += 250) {
+        result = sample(
+          classifier,
+          ms,
+          face: false,
+          pose: false,
+          fastStatus: CompanionStatus.userMissing,
+          fastCause: CompanionCause.userAway,
+          personPresent: true,
+        );
+        expect(result.finalState, isNot('posture_down'));
+      }
+      result = sample(
+        classifier,
+        6250,
+        face: false,
+        pose: false,
+        fastStatus: CompanionStatus.userMissing,
+        fastCause: CompanionCause.userAway,
+        personPresent: true,
+      );
+
+      expect(result.disappearance?.state, DisappearanceState.sleepCandidate);
+      expect(result.disappearance?.relativeDescent, isTrue);
+      expect(result.disappearance?.sideExit, isFalse);
+      expect(result.continuousTrackingLossMs, 5000);
+      expect(result.shortTrigger, 'presence_confirmed_prone');
+      expect(result.finalState, 'posture_down');
+    },
+  );
+
+  test(
     'sleep-first tracking-loss clock resets when either tracker returns',
     () {
       final classifier = DualTrackContextClassifier(
