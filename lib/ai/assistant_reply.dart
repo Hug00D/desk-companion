@@ -17,6 +17,10 @@ class AssistantAudio {
   final Duration? duration;
 
   factory AssistantAudio.fromJson(Map<String, dynamic> json) {
+    final encodedAudio = json['base64']?.toString().trim() ?? '';
+    if (!_isStandardBase64(encodedAudio)) {
+      throw const FormatException('Invalid assistant audio Base64');
+    }
     final durationValue = json['durationMs'];
     final durationMs = durationValue is num
         ? durationValue.round()
@@ -24,9 +28,14 @@ class AssistantAudio {
     return AssistantAudio(
       requestId: json['requestId']?.toString() ?? 'assistant-backend',
       contentType: json['contentType']?.toString() ?? 'audio/wav',
-      bytes: base64Decode(json['base64']?.toString() ?? ''),
+      bytes: base64Decode(encodedAudio),
       duration: durationMs == null ? null : Duration(milliseconds: durationMs),
     );
+  }
+
+  static bool _isStandardBase64(String value) {
+    if (value.isEmpty || value.length % 4 != 0) return false;
+    return RegExp(r'^[A-Za-z0-9+/]*={0,2}$').hasMatch(value);
   }
 }
 
