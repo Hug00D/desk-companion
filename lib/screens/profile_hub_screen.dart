@@ -3,6 +3,8 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../auth/auth_session.dart';
+import '../preferences/companion_preferences.dart';
+import '../preferences/companion_preferences_controller.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import 'profile_detail_screen.dart';
 import 'statistics_screen.dart';
@@ -57,32 +59,41 @@ class ProfileHubScreen extends StatelessWidget {
                           email: email,
                         ),
                         const SizedBox(height: 14),
-                        _SettingsSection(
-                          title: '提醒與陪伴',
-                          children: [
-                            _SettingsTile(
-                              icon: Icons.notifications_active_rounded,
-                              title: '提醒敏感度',
-                              subtitle: '調整分心、疲勞與趴下提醒門檻。',
-                              color: const Color(0xFFFFD36B),
-                              onTap: () => _showComingSoon(context, '提醒敏感度'),
-                            ),
-                            _SettingsTile(
-                              icon: Icons.smart_toy_rounded,
-                              title: 'AI 回覆語氣',
-                              subtitle: '之後可切換溫和、嚴格或鼓勵。',
-                              color: const Color(0xFF79D2F5),
-                              onTap: () => _showComingSoon(context, 'AI 回覆語氣'),
-                            ),
-                            _SettingsTile(
-                              icon: Icons.bedtime_rounded,
-                              title: '安靜模式',
-                              subtitle: '只記錄狀態，不主動跳出提醒。',
-                              color: const Color(0xFF9FF3D0),
-                              trailing: const _DemoSwitch(value: false),
-                              onTap: () => _showComingSoon(context, '安靜模式'),
-                            ),
-                          ],
+                        ValueListenableBuilder<CompanionPreferences>(
+                          valueListenable:
+                              CompanionPreferencesController.instance,
+                          builder: (context, preferences, _) {
+                            final controller =
+                                CompanionPreferencesController.instance;
+                            return _SettingsSection(
+                              title: '提醒與陪伴',
+                              children: [
+                                _SettingsTile(
+                                  icon: Icons.smart_toy_rounded,
+                                  title: 'AI 回覆語氣',
+                                  subtitle:
+                                      '目前：${preferences.aiResponseTone.label}，點擊切換語氣。',
+                                  color: const Color(0xFF79D2F5),
+                                  onTap: controller.cycleResponseTone,
+                                ),
+                                _SettingsTile(
+                                  icon: Icons.bedtime_rounded,
+                                  title: '安靜模式',
+                                  subtitle: preferences.quietMode
+                                      ? '已開啟：只記錄狀態，不主動打擾。'
+                                      : '已關閉：偵測到狀態時會照常提醒。',
+                                  color: const Color(0xFF9FF3D0),
+                                  trailing: Switch.adaptive(
+                                    value: preferences.quietMode,
+                                    onChanged: controller.setQuietMode,
+                                  ),
+                                  onTap: () => controller.setQuietMode(
+                                    !preferences.quietMode,
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
                         const SizedBox(height: 14),
                         _SettingsSection(
@@ -152,7 +163,7 @@ class ProfileHubScreen extends StatelessWidget {
         ),
         SizedBox(height: 4),
         Text(
-          '先整理成 Demo 入口，後續再接實際功能。',
+          '調整提醒與陪伴方式。',
           style: TextStyle(
             color: Color(0xCCFFFFFF),
             fontSize: 13,
@@ -438,37 +449,6 @@ class _SettingsTile extends StatelessWidget {
                   ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DemoSwitch extends StatelessWidget {
-  const _DemoSwitch({required this.value});
-
-  final bool value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 46,
-      height: 28,
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: value
-            ? const Color(0xFF9FF3D0)
-            : Colors.white.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-      ),
-      alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        width: 22,
-        height: 22,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
         ),
       ),
     );

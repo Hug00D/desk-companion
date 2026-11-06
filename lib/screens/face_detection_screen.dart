@@ -30,6 +30,7 @@ import '../focus/reminder_policy.dart';
 import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
 import '../preferences/companion_preferences.dart';
+import '../preferences/companion_preferences_controller.dart';
 import '../vision/companion_state_evaluator.dart';
 import '../vision/vision_channel.dart';
 import '../vision/vision_event.dart';
@@ -44,8 +45,10 @@ import '../voice/voice_result.dart';
 import '../voice/voice_service_client.dart';
 import '../voice/wake_word_service.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
+import '../widgets/pomodoro_dock_panel.dart';
 import '../widgets/focus_session_report_dialog.dart';
 import '../widgets/live2d_character_background.dart';
+import '../widgets/vision_source_status.dart';
 import 'profile_detail_screen.dart';
 import 'profile_hub_screen.dart';
 import 'statistics_screen.dart';
@@ -144,7 +147,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
   final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
-  CompanionPreferences _preferences = const CompanionPreferences();
+  final _preferencesController = CompanionPreferencesController.instance;
+  CompanionPreferences get _preferences => _preferencesController.value;
   PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
   final VisionEventTracker _visionEventTracker = VisionEventTracker();
   final StudySessionController _studySessionController =
@@ -322,6 +326,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   @override
   void initState() {
     super.initState();
+    _preferencesController.addListener(_handlePreferencesChanged);
     WidgetsBinding.instance.addObserver(this);
     _lastObservedPomodoroStatus = _pomodoroController.status;
     _pomodoroController.addListener(_handlePomodoroControllerChanged);
@@ -457,6 +462,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _idleBubbleTimer = Timer.periodic(_idleChatterInterval, (_) {
       if (!mounted) return;
       if (_companionStatus != CompanionStatus.normal ||
+          _preferences.quietMode ||
           _isVoiceMessagePinned ||
           _showDebugPanel ||
           _showVoiceDemoPanel ||
@@ -481,8 +487,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     });
   }
 
-  Future<void> _initializeCamera() async {
-    if (_preferFallbackVideoForLocalTest) {
+  Future<void> _initializeCamera({bool forceLiveCamera = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _isCameraInitializing = true;
+      _cameraErrorMessage = null;
+      _status = '正在啟動偵測來源…';
+    });
+    if (_preferFallbackVideoForLocalTest && !forceLiveCamera) {
       final startedFallbackVideo = await _initializeFallbackVideo(
         reason: 'local test video mode',
         showErrorOnFailure: false,
@@ -505,6 +517,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         _handleVisionResult,
         onError: (Object error, StackTrace stackTrace) {
           debugPrint('Native vision stream error: $error');
+          if (!mounted || _isCameraInitializing || !_isUsingNativeCamera) {
+            return;
+          }
+          setState(() {
+            _isUsingNativeCamera = false;
+            _isCameraInitializing = false;
+            _cameraErrorMessage = '相機偵測中斷，請重試相機。';
+            _status = _cameraErrorMessage!;
+          });
+          unawaited(_visionChannel.stopCamera());
         },
       );
       await _resetVisionCalibration();
@@ -527,7 +549,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       final startedFallbackVideo = await _initializeFallbackVideo(
         reason: e.toString(),
       );
-      if (startedFallbackVideo) return;
+      if (startedFallbackVideo || !mounted) return;
       _isCameraInitializing = false;
       _cameraErrorMessage = "相機啟動失敗: $e";
       _status = _cameraErrorMessage!;
@@ -542,9 +564,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }) async {
     _detectionTimer?.cancel();
     _isUsingNativeCamera = false;
-    await _visionChannel.stopCamera();
 
     try {
+      await _visionChannel.stopCamera();
       final tempDir = await getTemporaryDirectory();
       final videoFile = io.File('${tempDir.path}/$_fallbackVideoFileName');
       final assetData = await rootBundle.load(_fallbackVideoAssetPath);
@@ -586,7 +608,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isUsingFallbackVideo = true;
       _isCameraInitializing = false;
       _cameraErrorMessage = null;
-      _status = '本地測試模式：使用 test.mp4。';
+      _status = '測試影片模式：使用預錄影片進行偵測。';
       await _resetVisionCalibration();
       if (!mounted) return false;
       _startFallbackVideoDetectionLoop();
@@ -2898,21 +2920,41 @@ $toneLine
     return pinnedUntil != null && DateTime.now().isBefore(pinnedUntil);
   }
 
-  Future<void> _restartCamera() async {
-    _detectionTimer?.cancel();
-    _resetVoiceReminderCandidate();
-    _focusSessionMonitor.resetDetectionState();
-    _lastReminderPlayedAt.clear();
-    await _visionChannel.stopCamera();
-    _detachFallbackVideoPositionListener();
-    await _fallbackVideoController?.dispose();
-    _fallbackVideoController = null;
-    _fallbackVideoPath = null;
-    _isUsingNativeCamera = false;
-    _isUsingFallbackVideo = false;
-    _companionController.reset();
-    _visionEventTracker.reset();
-    await _initializeCamera();
+  Future<void> _restartCamera({bool forceLiveCamera = false}) async {
+    if (_isCameraInitializing || !mounted) return;
+    setState(() {
+      _isCameraInitializing = true;
+      _cameraErrorMessage = null;
+      _status = '正在重新啟動相機…';
+    });
+    try {
+      _detectionTimer?.cancel();
+      _resetVoiceReminderCandidate();
+      _focusSessionMonitor.resetDetectionState();
+      _lastReminderPlayedAt.clear();
+      await _nativeVisionSubscription?.cancel();
+      _nativeVisionSubscription = null;
+      await _visionChannel.stopCamera();
+      _detachFallbackVideoPositionListener();
+      await _fallbackVideoController?.dispose();
+      _fallbackVideoController = null;
+      _fallbackVideoPath = null;
+      _isUsingNativeCamera = false;
+      _isUsingFallbackVideo = false;
+      _companionController.reset();
+      _visionEventTracker.reset();
+      await _initializeCamera(forceLiveCamera: forceLiveCamera);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isUsingNativeCamera = false;
+        _isUsingFallbackVideo = false;
+        _isCameraInitializing = false;
+        _cameraErrorMessage = '相機重新啟動失敗，請確認權限後重試。';
+        _status = _cameraErrorMessage!;
+      });
+      debugPrint('Camera restart failed: $error');
+    }
   }
 
   Future<void> _resetVisionCalibration() async {
@@ -3639,8 +3681,8 @@ $toneLine
                     ),
                     _buildToolSheetAction(
                       icon: Icons.videocam_rounded,
-                      title: 'Preview',
-                      subtitle: '切換顯示測試影片或相機畫面。',
+                      title: '來源預覽',
+                      subtitle: '顯示目前使用的相機或測試影片畫面。',
                       isActive: _showVisionSourcePreview,
                       onTap: () {
                         Navigator.pop(context);
@@ -3696,14 +3738,6 @@ $toneLine
                         Navigator.pop(context);
                       },
                     ),
-                    _buildAiPreferenceTile(
-                      '提醒敏感度',
-                      '下一步可接疲勞與分心提醒頻率。',
-                      icon: Icons.tune_rounded,
-                    ),
-                    _buildAiPreferenceTile('安靜模式', '只記錄狀態，不主動打擾。'),
-                    _buildAiPreferenceTile('回覆語氣', '之後可切換溫和、嚴格或鼓勵。'),
-                    _buildAiPreferenceTile('提醒敏感度', '調整疲勞與分心提醒頻率。'),
                   ],
                 ),
               ),
@@ -3782,57 +3816,6 @@ $toneLine
           ),
         ),
       ),
-    );
-  }
-
-  // ignore: unused_element
-  void _showAiPreferenceSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return SafeArea(
-          child: Container(
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x22000000),
-                  blurRadius: 22,
-                  offset: Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: const [
-                    Icon(Icons.smart_toy_rounded, color: Color(0xFF2F7ED8)),
-                    SizedBox(width: 10),
-                    Text(
-                      'AI 偏好設定',
-                      style: TextStyle(
-                        color: Color(0xFF20324D),
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                _buildAiPreferenceTile('安靜模式', '只記錄狀態，不主動打擾。'),
-                _buildAiPreferenceTile('回覆語氣', '之後可切換溫和、嚴格或鼓勵。'),
-                _buildAiPreferenceTile('提醒敏感度', '調整疲勞與分心提醒頻率。'),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -3939,33 +3922,28 @@ $toneLine
   }
 
   void _toggleQuietMode() {
-    setState(() {
-      _preferences = _preferences.copyWith(quietMode: !_preferences.quietMode);
-      if (_preferences.quietMode) {
-        _clearPendingVoiceReminder();
-        _focusPauseAutoDismissTimer?.cancel();
-        _focusPauseAutoDismissTimer = null;
-      }
-    });
+    _preferencesController.setQuietMode(!_preferences.quietMode);
   }
 
-  void _cycleAiResponseTone() {
-    final nextTone = switch (_preferences.aiResponseTone) {
-      AiResponseTone.supportive => AiResponseTone.encouraging,
-      AiResponseTone.encouraging => AiResponseTone.strict,
-      AiResponseTone.strict => AiResponseTone.supportive,
-    };
-    setState(() {
-      _preferences = _preferences.copyWith(aiResponseTone: nextTone);
-    });
+  void _cycleAiResponseTone() => _preferencesController.cycleResponseTone();
+
+  void _handlePreferencesChanged() {
+    if (!mounted) return;
+    if (_preferences.quietMode) {
+      _resetVoiceReminderCandidate();
+      if (_activeLocalReminder != null) {
+        unawaited(_interruptPassiveReminderForInteractiveVoice());
+      }
+      _focusPauseAutoDismissTimer?.cancel();
+      _focusPauseAutoDismissTimer = null;
+      _idleBubbleVisibleUntil = null;
+      _idleBubbleHideTimer?.cancel();
+    }
+    setState(() {});
   }
 
   String _aiResponseToneLabel(AiResponseTone tone) {
-    return switch (tone) {
-      AiResponseTone.supportive => '溫和',
-      AiResponseTone.encouraging => '鼓勵',
-      AiResponseTone.strict => '嚴格',
-    };
+    return tone.label;
   }
 
   String _aiResponseToneSubtitle(AiResponseTone tone) {
@@ -4258,6 +4236,15 @@ $toneLine
   Widget _buildGlassBottomNavigationBar() {
     return GlassBottomNavBar(
       activeTab: AppNavTab.home,
+      raisedPanel: PomodoroDockPanel(
+        controller: _pomodoroController,
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const TasksScreen()),
+          );
+        },
+      ),
       animation: _breathingController,
       glowColor: _getStatusGlowColor(),
       glowPulseBuilder: () {
@@ -4305,7 +4292,7 @@ $toneLine
     return Positioned(
       left: 16,
       right: 16,
-      bottom: GlassBottomNavBar.contentBottomPadding,
+      bottom: GlassBottomNavBar.raisedContentBottomPadding,
       child: SafeArea(
         top: false,
         child: ConstrainedBox(
@@ -4851,9 +4838,9 @@ $toneLine
       right: 18,
       bottom: _showVoiceDemoPanel || _showDebugPanel
           ? MediaQuery.sizeOf(context).height * 0.42 +
-                GlassBottomNavBar.contentBottomPadding +
+                GlassBottomNavBar.raisedContentBottomPadding +
                 12
-          : GlassBottomNavBar.contentBottomPadding + 52,
+          : GlassBottomNavBar.raisedContentBottomPadding + 52,
       child: SafeArea(
         top: false,
         child: ConstrainedBox(
@@ -5005,7 +4992,7 @@ $toneLine
     return Positioned(
       left: 16,
       right: 16,
-      bottom: GlassBottomNavBar.contentBottomPadding,
+      bottom: GlassBottomNavBar.raisedContentBottomPadding,
       child: SafeArea(
         top: false,
         child: ConstrainedBox(
@@ -5454,7 +5441,7 @@ $toneLine
 
     return Positioned(
       right: 16,
-      bottom: GlassBottomNavBar.contentBottomPadding,
+      bottom: GlassBottomNavBar.raisedContentBottomPadding,
       width: 168,
       child: SafeArea(
         top: false,
@@ -5483,9 +5470,9 @@ $toneLine
                     size: 17,
                   ),
                   const SizedBox(width: 6),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      '相機預覽',
+                      _isUsingFallbackVideo ? '測試影片預覽' : '相機預覽',
                       style: TextStyle(
                         color: Color(0xFF20324D),
                         fontSize: 12,
@@ -5610,6 +5597,7 @@ $toneLine
     unawaited(_deviceSpeechRecognitionService.cancel());
     _assistantTextController.dispose();
     _pomodoroController.removeListener(_handlePomodoroControllerChanged);
+    _preferencesController.removeListener(_handlePreferencesChanged);
     super.dispose();
   }
 
@@ -5640,6 +5628,28 @@ $toneLine
 
           _buildCompanionSpeechBubble(),
           _buildTopHud(),
+          Positioned(
+            left: 18,
+            right: 18,
+            bottom: GlassBottomNavBar.raisedContentBottomPadding,
+            child: SafeArea(
+              top: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: VisionSourceIndicator(
+                  status: _isCameraInitializing
+                      ? VisionSourceStatus.initializing
+                      : _isUsingFallbackVideo
+                      ? VisionSourceStatus.video
+                      : _isUsingNativeCamera
+                      ? VisionSourceStatus.camera
+                      : VisionSourceStatus.unavailable,
+                  isCalibrating: _isHeadOffsetCalibrating,
+                  onRetryCamera: () => _restartCamera(forceLiveCamera: true),
+                ),
+              ),
+            ),
+          ),
           _buildVisionSourcePreviewPanel(),
           _buildGlassBottomNavigationBar(),
           _buildVoiceDialogPanel(),
