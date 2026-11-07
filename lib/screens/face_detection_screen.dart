@@ -26,6 +26,7 @@ import '../focus/focus_session_report.dart';
 import '../focus/focus_round.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
+import '../focus/quick_experience_launcher.dart';
 import '../focus/reminder_policy.dart';
 import '../focus/focus_sync_controller.dart';
 import '../focus/study_session_controller.dart';
@@ -47,6 +48,7 @@ import '../voice/voice_service_client.dart';
 import '../voice/wake_word_service.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import '../widgets/pomodoro_dock_panel.dart';
+import '../widgets/quick_experience_button.dart';
 import '../widgets/focus_session_report_dialog.dart';
 import '../widgets/live2d_character_background.dart';
 import '../widgets/vision_source_status.dart';
@@ -147,6 +149,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
   final PomodoroController _pomodoroController = PomodoroController();
+  final QuickExperienceLauncher _quickExperienceLauncher =
+      const QuickExperienceLauncher();
   final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
   final _preferencesController = CompanionPreferencesController.instance;
   CompanionPreferences get _preferences => _preferencesController.value;
@@ -3028,6 +3032,41 @@ $toneLine
     await _resetVisionCalibration(announceCompletion: true);
   }
 
+  void _startQuickExperience() {
+    final result = _quickExperienceLauncher.start(
+      pomodoroController: _pomodoroController,
+      isCameraInitializing: _isCameraInitializing,
+      isUsingNativeCamera: _isUsingNativeCamera,
+      isCalibrating:
+          _isHeadOffsetCalibrating || _awaitingManualCalibrationCompletion,
+    );
+
+    final message = switch (result) {
+      QuickExperienceStartResult.started => '1 分鐘快速體驗開始，保持自然坐姿就可以了。',
+      QuickExperienceStartResult.sessionAlreadyActive =>
+        '目前已有專注場次，可使用下方番茄鐘暫停或繼續。',
+      QuickExperienceStartResult.cameraInitializing => '相機仍在啟動，請稍候再開始快速體驗。',
+      QuickExperienceStartResult.cameraUnavailable => '快速體驗需要即時相機，請先使用「重試相機」。',
+      QuickExperienceStartResult.calibrationInProgress => '請先自然坐好並等待相機校正完成。',
+    };
+
+    if (result == QuickExperienceStartResult.started) {
+      setState(() {
+        _companionMessage = message;
+        _lastVoiceResponseMessage = null;
+        _voiceMessagePinnedUntil = null;
+      });
+    }
+    _showQuickExperienceSnackBar(message);
+  }
+
+  void _showQuickExperienceSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _resetVisionCalibration({
     bool announceCompletion = false,
   }) async {
@@ -5755,17 +5794,29 @@ $toneLine
               top: false,
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: VisionSourceIndicator(
-                  status: _isCameraInitializing
-                      ? VisionSourceStatus.initializing
-                      : _isUsingFallbackVideo
-                      ? VisionSourceStatus.video
-                      : _isUsingNativeCamera
-                      ? VisionSourceStatus.camera
-                      : VisionSourceStatus.unavailable,
-                  isCalibrating: _isHeadOffsetCalibrating,
-                  onRetryCamera: () => _restartCamera(forceLiveCamera: true),
-                  onRecalibrate: _confirmVisionCalibration,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    QuickExperienceButton(
+                      controller: _pomodoroController,
+                      onPressed: _startQuickExperience,
+                    ),
+                    const SizedBox(height: 8),
+                    VisionSourceIndicator(
+                      status: _isCameraInitializing
+                          ? VisionSourceStatus.initializing
+                          : _isUsingFallbackVideo
+                          ? VisionSourceStatus.video
+                          : _isUsingNativeCamera
+                          ? VisionSourceStatus.camera
+                          : VisionSourceStatus.unavailable,
+                      isCalibrating: _isHeadOffsetCalibrating,
+                      onRetryCamera: () =>
+                          _restartCamera(forceLiveCamera: true),
+                      onRecalibrate: _confirmVisionCalibration,
+                    ),
+                  ],
                 ),
               ),
             ),

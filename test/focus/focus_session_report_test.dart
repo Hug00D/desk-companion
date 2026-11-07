@@ -44,6 +44,21 @@ void main() {
       expect(report.score, isNull);
       expect(report.grade, '--');
     });
+
+    test('one-minute quick experience requires 12 observed seconds', () {
+      FocusSessionReport buildReport(Duration observedDuration) {
+        return FocusSessionReport(
+          completedAt: DateTime(2026, 11, 7),
+          plannedDuration: const Duration(minutes: 1),
+          effectiveFocusDuration: observedDuration,
+          distractedDuration: Duration.zero,
+          eventCounts: const <CompanionStatus, int>{},
+        );
+      }
+
+      expect(buildReport(const Duration(seconds: 11)).hasEnoughData, isFalse);
+      expect(buildReport(const Duration(seconds: 12)).hasEnoughData, isTrue);
+    });
   });
 
   test('FocusSessionMonitor keeps a snapshot after completion', () {
