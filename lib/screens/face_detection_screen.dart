@@ -36,6 +36,7 @@ import '../vision/vision_channel.dart';
 import '../vision/vision_event.dart';
 import '../vision/vision_event_tracker.dart';
 import '../vision/vision_result.dart';
+import '../vision/vision_calibration_request_controller.dart';
 import '../voice/voice_command.dart';
 import '../voice/device_speech_recognition_service.dart';
 import '../voice/mock_voice_result_loader.dart';
@@ -164,6 +165,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   double? _postureDownScore;
   double? _poseNoseY;
   bool _isHeadOffsetCalibrating = true;
+  bool _awaitingManualCalibrationCompletion = false;
+  bool _observedManualCalibrationInProgress = false;
+  bool _hasPendingExternalCalibrationRequest = false;
+  Timer? _manualCalibrationTimeoutTimer;
+  final _calibrationRequestController =
+      VisionCalibrationRequestController.instance;
   final List<double> _headOffsetSamples = <double>[];
   bool _hasFace = false;
 
@@ -326,6 +333,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   @override
   void initState() {
     super.initState();
+    _calibrationRequestController.addListener(
+      _handleExternalCalibrationRequest,
+    );
     _preferencesController.addListener(_handlePreferencesChanged);
     WidgetsBinding.instance.addObserver(this);
     _lastObservedPomodoroStatus = _pomodoroController.status;
@@ -455,6 +465,27 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
 
     if (mounted) setState(() {}); // 讓 Live2D 收到 paused=false 恢復算圖
+    _schedulePendingExternalCalibrationRequest();
+  }
+
+  void _handleExternalCalibrationRequest() {
+    _hasPendingExternalCalibrationRequest = true;
+    if (!_isSuspendedForNavigation) {
+      _schedulePendingExternalCalibrationRequest();
+    }
+  }
+
+  void _schedulePendingExternalCalibrationRequest() {
+    if (!_hasPendingExternalCalibrationRequest) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _isSuspendedForNavigation ||
+          !_hasPendingExternalCalibrationRequest) {
+        return;
+      }
+      _hasPendingExternalCalibrationRequest = false;
+      unawaited(_confirmVisionCalibration());
+    });
   }
 
   void _startIdleBubbleTimer() {
@@ -775,6 +806,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _postureDownScore = analysis.postureDownResult.score;
     _poseNoseY = visionResult.poseNoseY;
     _isHeadOffsetCalibrating = visionResult.isHeadOffsetCalibrating;
+    _updateManualCalibrationFeedback(visionResult);
     _recordHeadOffsetSample(visionResult);
     _hasFace = visionResult.hasFace;
     _closedEyeFrameCount = analysis.eyeResult.closedFrameCount;
@@ -2957,7 +2989,51 @@ $toneLine
     }
   }
 
-  Future<void> _resetVisionCalibration() async {
+  Future<void> _confirmVisionCalibration() async {
+    if (_isCameraInitializing) {
+      _showCalibrationSnackBar('相機仍在啟動，請稍候再重新校正。');
+      return;
+    }
+    if (!_isUsingNativeCamera) {
+      _showCalibrationSnackBar('目前不是即時相機，請先使用「重試相機」。');
+      return;
+    }
+    if (_awaitingManualCalibrationCompletion || _isHeadOffsetCalibrating) {
+      _showCalibrationSnackBar('目前正在校正，請自然坐好並看向前方。');
+      return;
+    }
+
+    final shouldStart = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('重新校正視覺基準'),
+        content: const Text(
+          '請先把手機放穩，保持平常使用距離，自然坐好並看向前方。'
+          '開始後請暫時不要低頭、閉眼或離開畫面。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.center_focus_strong_rounded),
+            label: const Text('開始校正'),
+          ),
+        ],
+      ),
+    );
+    if (shouldStart != true || !mounted) return;
+    await _resetVisionCalibration(announceCompletion: true);
+  }
+
+  Future<void> _resetVisionCalibration({
+    bool announceCompletion = false,
+  }) async {
+    _manualCalibrationTimeoutTimer?.cancel();
+    _awaitingManualCalibrationCompletion = announceCompletion;
+    _observedManualCalibrationInProgress = false;
     _resetVoiceReminderCandidate();
     _companionController.reset();
     _focusSessionMonitor.resetDetectionState();
@@ -2985,9 +3061,48 @@ $toneLine
       await _visionChannel.resetVision();
     } catch (e) {
       debugPrint("重設視覺校正失敗: $e");
+      if (announceCompletion) {
+        _awaitingManualCalibrationCompletion = false;
+        _isHeadOffsetCalibrating = false;
+        _companionMessage = '重新校正失敗，請確認相機權限與來源後再試一次。';
+        _showCalibrationSnackBar('重新校正失敗，請確認相機後再試一次。');
+      }
     }
 
     if (mounted) setState(() {});
+    if (announceCompletion && _awaitingManualCalibrationCompletion) {
+      _manualCalibrationTimeoutTimer = Timer(const Duration(seconds: 15), () {
+        if (!mounted || !_awaitingManualCalibrationCompletion) return;
+        _companionMessage = '尚未完成校正，請確認臉部完整入鏡並保持自然坐姿。';
+        _showCalibrationSnackBar('尚未完成校正，請確認臉部完整入鏡。');
+        setState(() {});
+      });
+    }
+  }
+
+  void _updateManualCalibrationFeedback(VisionResult visionResult) {
+    if (!_awaitingManualCalibrationCompletion) return;
+    if (visionResult.isHeadOffsetCalibrating) {
+      _observedManualCalibrationInProgress = true;
+      return;
+    }
+    if (!_observedManualCalibrationInProgress) return;
+
+    _awaitingManualCalibrationCompletion = false;
+    _manualCalibrationTimeoutTimer?.cancel();
+    _manualCalibrationTimeoutTimer = null;
+    _companionMessage = '視覺基準校正完成，可以開始正常使用。';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showCalibrationSnackBar('校正完成，已套用新的視覺基準。');
+    });
+  }
+
+  void _showCalibrationSnackBar(String message) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Color _getStatusColor() {
@@ -5219,7 +5334,7 @@ $toneLine
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
-                        onPressed: _resetVisionCalibration,
+                        onPressed: _confirmVisionCalibration,
                         icon: const Icon(Icons.center_focus_strong_rounded),
                         label: const Text("重設視覺校正"),
                         style: OutlinedButton.styleFrom(
@@ -5583,6 +5698,10 @@ $toneLine
     _idleBubbleTimer?.cancel();
     _idleBubbleHideTimer?.cancel();
     _focusPauseAutoDismissTimer?.cancel();
+    _manualCalibrationTimeoutTimer?.cancel();
+    _calibrationRequestController.removeListener(
+      _handleExternalCalibrationRequest,
+    );
     _breathingController.dispose();
     unawaited(_visionChannel.stopCamera());
     unawaited(_nativeVisionSubscription?.cancel() ?? Future<void>.value());
@@ -5646,6 +5765,7 @@ $toneLine
                       : VisionSourceStatus.unavailable,
                   isCalibrating: _isHeadOffsetCalibrating,
                   onRetryCamera: () => _restartCamera(forceLiveCamera: true),
+                  onRecalibrate: _confirmVisionCalibration,
                 ),
               ),
             ),

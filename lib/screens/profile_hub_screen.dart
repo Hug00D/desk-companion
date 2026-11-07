@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../auth/auth_session.dart';
 import '../preferences/companion_preferences.dart';
 import '../preferences/companion_preferences_controller.dart';
+import '../vision/vision_calibration_request_controller.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import 'profile_detail_screen.dart';
 import 'statistics_screen.dart';
@@ -102,9 +103,16 @@ class ProfileHubScreen extends StatelessWidget {
                             _SettingsTile(
                               icon: Icons.center_focus_strong_rounded,
                               title: '重新校正基準',
-                              subtitle: '換成看書、看電腦或換角度時使用。',
+                              subtitle: '回到主畫面，依提示坐好後重新建立視覺基準。',
                               color: const Color(0xFF9AC7FF),
-                              onTap: () => _showComingSoon(context, '重新校正基準'),
+                              onTap: () {
+                                VisionCalibrationRequestController.instance
+                                    .requestRecalibration();
+                                Navigator.popUntil(
+                                  context,
+                                  (route) => route.isFirst,
+                                );
+                              },
                             ),
                             _SettingsTile(
                               icon: Icons.videocam_rounded,

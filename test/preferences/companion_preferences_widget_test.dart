@@ -1,6 +1,7 @@
 import 'package:desk_companion/preferences/companion_preferences.dart';
 import 'package:desk_companion/preferences/companion_preferences_controller.dart';
 import 'package:desk_companion/screens/profile_hub_screen.dart';
+import 'package:desk_companion/vision/vision_calibration_request_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -57,5 +58,40 @@ void main() {
     await tester.pump();
     expect(controller.value.quietMode, isFalse);
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+  });
+
+  testWidgets('calibration setting returns a request to the home screen', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(430, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = VisionCalibrationRequestController.instance;
+    final initialSerial = controller.requestSerial;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => FilledButton(
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProfileHubScreen(),
+                ),
+              );
+            },
+            child: const Text('開啟設定'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('開啟設定'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重新校正基準'));
+    await tester.pumpAndSettle();
+
+    expect(controller.requestSerial, initialSerial + 1);
+    expect(find.text('開啟設定'), findsOneWidget);
   });
 }

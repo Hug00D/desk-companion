@@ -9,11 +9,13 @@ class VisionSourceIndicator extends StatelessWidget {
     required this.status,
     required this.onRetryCamera,
     this.isCalibrating = false,
+    this.onRecalibrate,
   });
 
   final VisionSourceStatus status;
   final bool isCalibrating;
   final VoidCallback onRetryCamera;
+  final VoidCallback? onRecalibrate;
 
   @override
   Widget build(BuildContext context) {
@@ -46,6 +48,10 @@ class VisionSourceIndicator extends StatelessWidget {
     final canRetry =
         status == VisionSourceStatus.video ||
         status == VisionSourceStatus.unavailable;
+    final canRecalibrate =
+        status == VisionSourceStatus.camera &&
+        !isCalibrating &&
+        onRecalibrate != null;
 
     return Tooltip(
       message: detail,
@@ -75,6 +81,14 @@ class VisionSourceIndicator extends StatelessWidget {
                 onPressed: onRetryCamera,
                 icon: const Icon(Icons.refresh_rounded, size: 18),
                 label: const Text('重試相機'),
+                style: TextButton.styleFrom(foregroundColor: color),
+              ),
+            ] else if (canRecalibrate) ...[
+              const SizedBox(width: 4),
+              TextButton.icon(
+                onPressed: onRecalibrate,
+                icon: const Icon(Icons.center_focus_strong_rounded, size: 18),
+                label: const Text('重新校正'),
                 style: TextButton.styleFrom(foregroundColor: color),
               ),
             ],

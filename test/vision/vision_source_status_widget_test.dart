@@ -65,4 +65,41 @@ void main() {
     await tester.tap(find.text('重試相機'));
     expect(retried, isTrue);
   });
+
+  testWidgets(
+    'live source exposes recalibration only when calibration is idle',
+    (tester) async {
+      var calibrating = true;
+      var recalibrations = 0;
+      late StateSetter update;
+      await tester.binding.setSurfaceSize(const Size(430, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                update = setState;
+                return VisionSourceIndicator(
+                  status: VisionSourceStatus.camera,
+                  isCalibrating: calibrating,
+                  onRetryCamera: () {},
+                  onRecalibrate: () => recalibrations++,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('即時相機・校正中'), findsOneWidget);
+      expect(find.text('重新校正'), findsNothing);
+
+      update(() => calibrating = false);
+      await tester.pump();
+      expect(find.text('即時相機'), findsOneWidget);
+      await tester.tap(find.text('重新校正'));
+      expect(recalibrations, 1);
+    },
+  );
 }
