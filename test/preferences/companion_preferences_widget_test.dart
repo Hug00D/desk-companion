@@ -31,6 +31,9 @@ void main() {
       expect(controller.value.aiResponseTone, AiResponseTone.encouraging);
       expect(find.text('目前：鼓勵，點擊切換語氣。'), findsOneWidget);
       expect(find.text('提醒敏感度'), findsNothing);
+      expect(find.text('鏡頭與測試來源'), findsNothing);
+      expect(find.text('資料與隱私'), findsNothing);
+      expect(find.text('登出'), findsNothing);
       expect(find.byType(SnackBar), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());

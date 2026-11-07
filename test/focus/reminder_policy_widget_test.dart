@@ -27,4 +27,18 @@ void main() {
     expect(find.text('嚴重狀況自動暫停'), findsNothing);
     expect(find.byType(Switch), findsOneWidget);
   });
+
+  testWidgets('tasks screen shows only the available Pomodoro mode', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(430, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: TasksScreen()));
+
+    expect(find.text('目前使用中的專注模式'), findsOneWidget);
+    expect(find.text('自由專注'), findsNothing);
+    expect(find.text('閱讀模式'), findsNothing);
+    expect(find.text('護眼休息'), findsNothing);
+    expect(find.textContaining('準備中'), findsNothing);
+  });
 }

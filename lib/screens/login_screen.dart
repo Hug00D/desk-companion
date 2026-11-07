@@ -101,7 +101,7 @@ class _LoginScreenState extends State<LoginScreen> {
           Positioned.fill(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-              child: Container(color: Colors.black.withOpacity(0.4)),
+              child: Container(color: Colors.black.withValues(alpha: 0.4)),
             ),
           ),
 
@@ -128,53 +128,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     isObscure: true,
                   ),
 
-                  // 忘記密碼 (只有登入模式顯示)
-                  if (!_isSignUp)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () {}, // 忘記密碼邏輯預留
-                        child: Text(
-                          "Forgot Password?",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.5),
-                          ),
-                        ),
-                      ),
-                    ),
-
                   const SizedBox(height: 25),
 
                   // 主按鈕 (登入/註冊)
                   _buildMainButton(),
-
-                  const SizedBox(height: 30),
-
-                  // --- 分隔線 ---
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Divider(color: Colors.white.withOpacity(0.2)),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Text(
-                          "OR",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.3),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Divider(color: Colors.white.withOpacity(0.2)),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 30),
-
-                  // Google 登入按鈕
-                  _buildGoogleButton(),
 
                   const SizedBox(height: 40),
 
@@ -186,7 +143,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         text: _isSignUp
                             ? "Already have an account? "
                             : "New here? ",
-                        style: TextStyle(color: Colors.white.withOpacity(0.6)),
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                        ),
                         children: [
                           TextSpan(
                             text: _isSignUp ? "Sign In" : "Create Account",
@@ -245,9 +204,9 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.1),
+            color: Colors.white.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withOpacity(0.15)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
           ),
           child: TextField(
             controller: controller,
@@ -256,7 +215,7 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: InputDecoration(
               icon: Icon(icon, color: const Color(0xFF79D2F5), size: 20),
               hintText: hint,
-              hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
               border: InputBorder.none,
             ),
           ),
@@ -279,7 +238,7 @@ class _LoginScreenState extends State<LoginScreen> {
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF57BEEB).withOpacity(0.3),
+              color: const Color(0xFF57BEEB).withValues(alpha: 0.3),
               blurRadius: 12,
               offset: const Offset(0, 6),
             ),
@@ -304,33 +263,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildGoogleButton() {
-    return OutlinedButton(
-      onPressed: () {}, // Google 登入邏輯
-      style: OutlinedButton.styleFrom(
-        fixedSize: const Size(double.infinity, 55),
-        side: BorderSide(color: Colors.white.withOpacity(0.2)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        backgroundColor: Colors.white.withOpacity(0.05),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // 這邊暫用 Icon 代替 Google Logo
-          const Icon(Icons.g_mobiledata_rounded, color: Colors.white, size: 30),
-          const SizedBox(width: 10),
-          Text(
-            "Continue with Google",
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.8),
-              fontSize: 15,
-            ),
-          ),
-        ],
       ),
     );
   }

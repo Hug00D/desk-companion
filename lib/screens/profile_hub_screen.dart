@@ -114,34 +114,6 @@ class ProfileHubScreen extends StatelessWidget {
                                 );
                               },
                             ),
-                            _SettingsTile(
-                              icon: Icons.videocam_rounded,
-                              title: '鏡頭與測試來源',
-                              subtitle: '之後接相機、測試影片與權限設定。',
-                              color: const Color(0xFF8A8EF2),
-                              onTap: () => _showComingSoon(context, '鏡頭與測試來源'),
-                            ),
-                            _SettingsTile(
-                              icon: Icons.privacy_tip_rounded,
-                              title: '資料與隱私',
-                              subtitle: '管理本機紀錄、同步與資料保存方式。',
-                              color: const Color(0xFF4FB998),
-                              onTap: () => _showComingSoon(context, '資料與隱私'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        _SettingsSection(
-                          title: '帳號',
-                          children: [
-                            _SettingsTile(
-                              icon: Icons.logout_rounded,
-                              title: '登出',
-                              subtitle: '離開目前帳號，回到登入畫面。',
-                              color: const Color(0xFFFF7A3D),
-                              isDestructive: true,
-                              onTap: () => _showComingSoon(context, '登出'),
-                            ),
                           ],
                         ),
                       ],
@@ -333,17 +305,6 @@ class ProfileHubScreen extends StatelessWidget {
       ],
     );
   }
-
-  void _showComingSoon(BuildContext context, String title) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$title 之後會接上正式功能。'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
 }
 
 class _SettingsSection extends StatelessWidget {
@@ -386,7 +347,6 @@ class _SettingsTile extends StatelessWidget {
     required this.color,
     required this.onTap,
     this.trailing,
-    this.isDestructive = false,
   });
 
   final IconData icon;
@@ -395,7 +355,6 @@ class _SettingsTile extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
   final Widget? trailing;
-  final bool isDestructive;
 
   @override
   Widget build(BuildContext context) {
@@ -426,10 +385,8 @@ class _SettingsTile extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isDestructive
-                            ? const Color(0xFFFFB19A)
-                            : Colors.white,
+                      style: const TextStyle(
+                        color: Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
                       ),

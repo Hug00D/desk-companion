@@ -455,41 +455,16 @@ class _TasksScreenState extends State<TasksScreen> {
 
   Widget _buildModeGrid() {
     return GridView.count(
-      crossAxisCount: 2,
+      crossAxisCount: 1,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      childAspectRatio: 1.34,
+      childAspectRatio: 3.2,
       children: [
         _ModeTile(
           icon: Icons.timer_rounded,
           title: '番茄鐘',
-          subtitle: '固定節奏',
+          subtitle: '目前使用中的專注模式',
           color: const Color(0xFFFFD36B),
-          isAvailable: true,
-          onTap: () {},
-        ),
-        _ModeTile(
-          icon: Icons.all_inclusive_rounded,
-          title: '自由專注',
-          subtitle: '開放計時',
-          color: const Color(0xFF79D2F5),
-          onTap: () => _showComingSoon('自由專注'),
-        ),
-        _ModeTile(
-          icon: Icons.menu_book_rounded,
-          title: '閱讀模式',
-          subtitle: '閱讀姿勢',
-          color: const Color(0xFF9FF3D0),
-          onTap: () => _showComingSoon('閱讀模式'),
-        ),
-        _ModeTile(
-          icon: Icons.visibility_rounded,
-          title: '護眼休息',
-          subtitle: '短暫放鬆',
-          color: const Color(0xFFB8A7FF),
-          onTap: () => _showComingSoon('護眼休息'),
         ),
       ],
     );
@@ -503,17 +478,6 @@ class _TasksScreenState extends State<TasksScreen> {
     if (selected != null && mounted) {
       setState(() => _selectedMinutes = selected);
     }
-  }
-
-  void _showComingSoon(String feature) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$feature正在準備中。'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   Widget _buildBottomNavBar() {
@@ -864,16 +828,12 @@ class _ModeTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.color,
-    required this.onTap,
-    this.isAvailable = false,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final Color color;
-  final VoidCallback onTap;
-  final bool isAvailable;
 
   @override
   Widget build(BuildContext context) {
@@ -882,61 +842,46 @@ class _ModeTile extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
         child: Material(
-          color: Colors.white.withValues(alpha: isAvailable ? 0.18 : 0.11),
-          child: InkWell(
-            onTap: onTap,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: isAvailable
-                      ? color.withValues(alpha: 0.55)
-                      : Colors.white.withValues(alpha: 0.18),
+          color: Colors.white.withValues(alpha: 0.18),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: color.withValues(alpha: 0.55)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, color: color, size: 24),
+                    const Spacer(),
+                    Icon(Icons.check_circle_rounded, color: color, size: 17),
+                  ],
                 ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(icon, color: color, size: 24),
-                      const Spacer(),
-                      Icon(
-                        isAvailable
-                            ? Icons.check_circle_rounded
-                            : Icons.lock_clock_rounded,
-                        color: isAvailable
-                            ? color
-                            : Colors.white.withValues(alpha: 0.46),
-                        size: 17,
-                      ),
-                    ],
+                const Spacer(),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
                   ),
-                  const Spacer(),
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                    ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xBFFFFFFF),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xBFFFFFFF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
