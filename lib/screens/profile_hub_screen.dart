@@ -81,15 +81,34 @@ class ProfileHubScreen extends StatelessWidget {
                                   icon: Icons.bedtime_rounded,
                                   title: '安靜模式',
                                   subtitle: preferences.quietMode
-                                      ? '已開啟：只記錄狀態，不主動打擾。'
+                                      ? '已開啟：不主動說話或詢問；偵測、紀錄與已啟用的自動暫停照常。'
                                       : '已關閉：偵測到狀態時會照常提醒。',
                                   color: const Color(0xFF9FF3D0),
                                   trailing: Switch.adaptive(
+                                    key: const ValueKey('quiet-mode-switch'),
                                     value: preferences.quietMode,
                                     onChanged: controller.setQuietMode,
                                   ),
                                   onTap: () => controller.setQuietMode(
                                     !preferences.quietMode,
+                                  ),
+                                ),
+                                _SettingsTile(
+                                  icon: preferences.voiceReplyEnabled
+                                      ? Icons.volume_up_rounded
+                                      : Icons.volume_off_rounded,
+                                  title: '語音回覆',
+                                  subtitle: preferences.voiceReplyEnabled
+                                      ? '已開啟：AI 文字答案會播放語音；不影響喚醒確認音與主動提醒。'
+                                      : '已關閉：保留辨識、指令與文字答案；其他提示音由各自功能控制。',
+                                  color: const Color(0xFFB7A7FF),
+                                  trailing: Switch.adaptive(
+                                    key: const ValueKey('voice-reply-switch'),
+                                    value: preferences.voiceReplyEnabled,
+                                    onChanged: controller.setVoiceReplyEnabled,
+                                  ),
+                                  onTap: () => controller.setVoiceReplyEnabled(
+                                    !preferences.voiceReplyEnabled,
                                   ),
                                 ),
                               ],

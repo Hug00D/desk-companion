@@ -332,6 +332,29 @@ class _TasksScreenState extends State<TasksScreen> {
                   _focusSessionMonitor.setLongDistractionAutoPauseEnabled,
             ),
           ],
+          const SizedBox(height: 8),
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                size: 17,
+                color: Color(0xFF79D2F5),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '安靜模式只會停止主動語音與提醒詢問，不會改變本頁的提醒政策或自動暫停開關。',
+                  style: TextStyle(
+                    color: Color(0xB3FFFFFF),
+                    fontSize: 11.5,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

@@ -5,6 +5,7 @@ enum AiResponseTone { supportive, encouraging, strict }
 class CompanionPreferences {
   const CompanionPreferences({
     this.quietMode = false,
+    this.voiceReplyEnabled = true,
     this.reminderSensitivity = ReminderSensitivity.normal,
     this.aiResponseTone = AiResponseTone.supportive,
     this.timezone = 'Asia/Taipei',
@@ -15,6 +16,7 @@ class CompanionPreferences {
   });
 
   final bool quietMode;
+  final bool voiceReplyEnabled;
   final ReminderSensitivity reminderSensitivity;
   final AiResponseTone aiResponseTone;
   final String timezone;
@@ -26,6 +28,7 @@ class CompanionPreferences {
   factory CompanionPreferences.fromJson(Map<String, dynamic> json) {
     return CompanionPreferences(
       quietMode: json['quietMode'] == true,
+      voiceReplyEnabled: json['voiceReplyEnabled'] != false,
       reminderSensitivity: ReminderSensitivity.values.firstWhere(
         (value) => value.name == json['reminderSensitivity'],
         orElse: () => ReminderSensitivity.normal,
@@ -45,6 +48,7 @@ class CompanionPreferences {
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'quietMode': quietMode,
+      'voiceReplyEnabled': voiceReplyEnabled,
       'reminderSensitivity': reminderSensitivity.name,
       'aiResponseTone': aiResponseTone.name,
       'timezone': timezone,
@@ -57,6 +61,7 @@ class CompanionPreferences {
 
   CompanionPreferences copyWith({
     bool? quietMode,
+    bool? voiceReplyEnabled,
     ReminderSensitivity? reminderSensitivity,
     AiResponseTone? aiResponseTone,
     String? timezone,
@@ -66,6 +71,7 @@ class CompanionPreferences {
   }) {
     return CompanionPreferences(
       quietMode: quietMode ?? this.quietMode,
+      voiceReplyEnabled: voiceReplyEnabled ?? this.voiceReplyEnabled,
       reminderSensitivity: reminderSensitivity ?? this.reminderSensitivity,
       aiResponseTone: aiResponseTone ?? this.aiResponseTone,
       timezone: timezone ?? this.timezone,

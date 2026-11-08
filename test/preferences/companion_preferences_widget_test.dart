@@ -21,10 +21,22 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(const MaterialApp(home: ProfileHubScreen()));
 
-      await tester.tap(find.byType(Switch));
+      await tester.tap(find.byKey(const ValueKey('quiet-mode-switch')));
       await tester.pump();
       expect(controller.value.quietMode, isTrue);
-      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+      expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('quiet-mode-switch')))
+            .value,
+        isTrue,
+      );
+      expect(find.textContaining('偵測、紀錄與已啟用的自動暫停照常'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('voice-reply-switch')));
+      await tester.pump();
+      expect(controller.value.voiceReplyEnabled, isFalse);
+      expect(controller.value.quietMode, isTrue);
+      expect(find.textContaining('保留辨識、指令與文字答案'), findsOneWidget);
 
       await tester.tap(find.text('AI 回覆語氣'));
       await tester.pump();
@@ -38,7 +50,18 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpWidget(const MaterialApp(home: ProfileHubScreen()));
-      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+      expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('quiet-mode-switch')))
+            .value,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('voice-reply-switch')))
+            .value,
+        isFalse,
+      );
       expect(find.text('目前：鼓勵，點擊切換語氣。'), findsOneWidget);
     },
   );
@@ -54,13 +77,23 @@ void main() {
     controller.cycleResponseTone();
     controller.cycleResponseTone();
     await tester.pump();
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('quiet-mode-switch')))
+          .value,
+      isTrue,
+    );
     expect(find.text('目前：嚴格，點擊切換語氣。'), findsOneWidget);
 
     await tester.tap(find.text('安靜模式'));
     await tester.pump();
     expect(controller.value.quietMode, isFalse);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('quiet-mode-switch')))
+          .value,
+      isFalse,
+    );
   });
 
   testWidgets('calibration setting returns a request to the home screen', (

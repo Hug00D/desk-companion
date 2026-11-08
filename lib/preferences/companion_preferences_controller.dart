@@ -14,6 +14,11 @@ class CompanionPreferencesController
     value = value.copyWith(quietMode: enabled);
   }
 
+  void setVoiceReplyEnabled(bool enabled) {
+    if (value.voiceReplyEnabled == enabled) return;
+    value = value.copyWith(voiceReplyEnabled: enabled);
+  }
+
   void cycleResponseTone() {
     final next = switch (value.aiResponseTone) {
       AiResponseTone.supportive => AiResponseTone.encouraging,

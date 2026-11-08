@@ -23,6 +23,7 @@ import '../companion/character_reaction.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/focus_session_monitor.dart';
 import '../focus/focus_session_report.dart';
+import '../focus/focus_intervention_delivery_policy.dart';
 import '../focus/focus_round.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
 import '../focus/pomodoro_controller.dart';
@@ -39,6 +40,7 @@ import '../vision/vision_event_tracker.dart';
 import '../vision/vision_result.dart';
 import '../vision/vision_calibration_request_controller.dart';
 import '../voice/voice_command.dart';
+import '../voice/assistant_voice_reply_policy.dart';
 import '../voice/device_speech_recognition_service.dart';
 import '../voice/mock_voice_result_loader.dart';
 import '../voice/passive_reminder_guard.dart';
@@ -145,6 +147,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   );
   final AudioPlayer _voiceAudioPlayer = AudioPlayer();
   final PassiveReminderGuard _passiveReminderGuard = PassiveReminderGuard();
+  final AssistantVoiceReplyPolicy _assistantVoiceReplyPolicy =
+      const AssistantVoiceReplyPolicy();
   late final Future<void> _voiceAudioReady;
   final PomodoroActionDispatcher _pomodoroActionDispatcher =
       const PomodoroActionDispatcher();
@@ -152,6 +156,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   final QuickExperienceLauncher _quickExperienceLauncher =
       const QuickExperienceLauncher();
   final FocusSessionMonitor _focusSessionMonitor = FocusSessionMonitor();
+  final FocusInterventionDeliveryPolicy _focusInterventionDeliveryPolicy =
+      const FocusInterventionDeliveryPolicy();
   final _preferencesController = CompanionPreferencesController.instance;
   CompanionPreferences get _preferences => _preferencesController.value;
   PomodoroStatus _lastObservedPomodoroStatus = PomodoroStatus.idle;
@@ -903,23 +909,24 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         'cause=${intervention.cause.name} '
         'duration=${intervention.episodeDuration.inSeconds}s',
       );
+      if (!_focusInterventionDeliveryPolicy.shouldDeliver(
+        intervention.type,
+        quietMode: _preferences.quietMode,
+      )) {
+        if (intervention.type == FocusInterventionType.reminder) {
+          _clearPendingVoiceReminder();
+        }
+        debugPrint(
+          'Focus intervention suppressed by quiet mode: '
+          '${intervention.type.name}',
+        );
+        continue;
+      }
       switch (intervention.type) {
         case FocusInterventionType.reminder:
-          if (_preferences.quietMode) {
-            _clearPendingVoiceReminder();
-            break;
-          }
           _requestLocalReminder(intervention.status, intervention.cause);
           break;
         case FocusInterventionType.checkIn:
-          if (_preferences.quietMode) {
-            _focusSessionMonitor.recordReminderResponse(
-              status: intervention.status,
-              cause: intervention.cause,
-              response: ReminderPolicyResponse.remindLater,
-            );
-            break;
-          }
           unawaited(
             _showReminderCheckIn(intervention.status, intervention.cause),
           );
@@ -931,17 +938,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           );
           break;
         case FocusInterventionType.offerPause:
-          if (_preferences.quietMode) break;
           unawaited(
             _showFocusPauseSuggestion(intervention.status, intervention.cause),
           );
           break;
         case FocusInterventionType.autoPause:
-          if (_preferences.quietMode) break;
           _autoPausePomodoro(intervention.status, intervention.cause);
           break;
         case FocusInterventionType.recovered:
-          if (_preferences.quietMode) break;
           unawaited(
             _showFocusResumeSuggestion(intervention.status, intervention.cause),
           );
@@ -976,7 +980,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _isFocusPauseDialogVisible = false;
     }
 
-    if (!mounted) return;
+    if (!mounted || _preferences.quietMode) return;
     final resolvedResponse = response ?? ReminderPolicyResponse.dismissed;
     _focusSessionMonitor.recordReminderResponse(
       status: status,
@@ -2548,6 +2552,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       ),
       'preferences': <String, dynamic>{
         'quietMode': _preferences.quietMode,
+        'voiceReplyEnabled': _preferences.voiceReplyEnabled,
         'reminderSensitivity': _preferences.reminderSensitivity.name,
         'aiResponseTone': _preferences.aiResponseTone.name,
       },
@@ -2599,16 +2604,17 @@ $toneLine
                 )
               : result.response.message.trim()
         : result.response.message;
-    final shouldSynchronizeWithVoice =
-        _dynamicAssistantVoiceEnabled &&
-        result.reply.mode == AssistantMode.chat &&
-        !result.usedFallback &&
-        backendAudio != null &&
-        backendAudio.bytes.isNotEmpty;
+    final shouldSynchronizeWithVoice = _assistantVoiceReplyPolicy.shouldPlay(
+      voiceReplyEnabled: _preferences.voiceReplyEnabled,
+      dynamicVoiceEnabled: _dynamicAssistantVoiceEnabled,
+      mode: result.reply.mode,
+      usedFallback: result.usedFallback,
+      audio: backendAudio,
+    );
     if (shouldSynchronizeWithVoice) {
       await _playAssistantChatReply(
         responseMessage,
-        audio: backendAudio,
+        audio: backendAudio!,
         requestId: assistantVoiceRequestId,
       );
       return;
@@ -2670,6 +2676,9 @@ $toneLine
           _recordAssistantPlaybackStarted(text, audio.duration);
         },
         requestId: audio.requestId,
+        canStartPlayback: () =>
+            _preferences.voiceReplyEnabled &&
+            requestId == _assistantVoiceRequestId,
       );
       if (!played && !responsePresented) {
         _presentAssistantResponse(text);
@@ -3868,7 +3877,7 @@ $toneLine
                     _buildAiPreferenceTile(
                       '安靜模式',
                       _preferences.quietMode
-                          ? '已開啟：只記錄狀態，不播放或跳出主動提醒。'
+                          ? '已開啟：不播放或跳出主動提醒；偵測、紀錄與已啟用的自動暫停照常。'
                           : '已關閉：偵測到狀態時會照常提醒。',
                       icon: _preferences.quietMode
                           ? Icons.notifications_off_rounded
@@ -3877,6 +3886,23 @@ $toneLine
                       trailingText: _preferences.quietMode ? '開' : '關',
                       onTap: () {
                         _toggleQuietMode();
+                        Navigator.pop(context);
+                      },
+                    ),
+                    _buildAiPreferenceTile(
+                      '語音回覆',
+                      _preferences.voiceReplyEnabled
+                          ? '已開啟：AI 文字答案會播放語音；不控制喚醒確認音與主動提醒。'
+                          : '已關閉：保留辨識、指令與文字答案；其他提示音由各自功能控制。',
+                      icon: _preferences.voiceReplyEnabled
+                          ? Icons.volume_up_rounded
+                          : Icons.volume_off_rounded,
+                      isActive: _preferences.voiceReplyEnabled,
+                      trailingText: _preferences.voiceReplyEnabled ? '開' : '關',
+                      onTap: () {
+                        _preferencesController.setVoiceReplyEnabled(
+                          !_preferences.voiceReplyEnabled,
+                        );
                         Navigator.pop(context);
                       },
                     ),
@@ -4090,6 +4116,10 @@ $toneLine
       }
       _focusPauseAutoDismissTimer?.cancel();
       _focusPauseAutoDismissTimer = null;
+      final dialogContext = _focusDecisionDialogContext;
+      if (dialogContext != null && Navigator.of(dialogContext).canPop()) {
+        Navigator.of(dialogContext).pop();
+      }
       _idleBubbleVisibleUntil = null;
       _idleBubbleHideTimer?.cancel();
     }
