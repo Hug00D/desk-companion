@@ -2,13 +2,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'navigation/app_route_observer.dart';
+import 'preferences/companion_preferences_controller.dart';
 import 'screens/face_detection_screen.dart';
 import 'screens/login_screen.dart';
 
 const bool _offlineDemoRequested = bool.fromEnvironment('OFFLINE_DEMO');
 
-void main() =>
-    runApp(DeskCompanionApp(offlineDemo: kDebugMode && _offlineDemoRequested));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await CompanionPreferencesController.instance.initialize();
+  runApp(DeskCompanionApp(offlineDemo: kDebugMode && _offlineDemoRequested));
+}
 
 class DeskCompanionApp extends StatelessWidget {
   const DeskCompanionApp({super.key, this.offlineDemo = false});
