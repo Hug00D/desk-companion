@@ -10,15 +10,23 @@ import '../widgets/glass_bottom_nav_bar.dart';
 import 'profile_detail_screen.dart';
 import 'statistics_screen.dart';
 import 'tasks_screen.dart';
+import '../widgets/data_privacy_dialog.dart';
 
 class ProfileHubScreen extends StatelessWidget {
   const ProfileHubScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: AuthSession.instance,
+      builder: (context, _) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     final session = AuthSession.instance;
     final email = session.email ?? 'reader@desk-companion.local';
-    final displayName = email.split('@').first;
+    final displayName = session.displayName;
 
     return Scaffold(
       backgroundColor: const Color(0xFF10283D),
@@ -132,6 +140,13 @@ class ProfileHubScreen extends StatelessWidget {
                                   (route) => route.isFirst,
                                 );
                               },
+                            ),
+                            _SettingsTile(
+                              icon: Icons.privacy_tip_rounded,
+                              title: '資料與隱私',
+                              subtitle: '了解相機、語音、專注紀錄與資料保存方式。',
+                              color: const Color(0xFF9FF3D0),
+                              onTap: () => showDataPrivacyDialog(context),
                             ),
                           ],
                         ),

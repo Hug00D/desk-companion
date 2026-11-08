@@ -4,11 +4,16 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/statistics_api.dart';
+import '../api/user_facing_error.dart';
+import '../focus/focus_sync_controller.dart';
+import '../focus/focus_report_history.dart';
 import '../auth/auth_session.dart';
 import '../statistics/statistics_summary.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
+import '../widgets/focus_sync_failure_notice.dart';
 import 'profile_hub_screen.dart';
 import 'tasks_screen.dart';
+import 'focus_report_history_screen.dart';
 
 enum _StatisticsRange {
   today(label: '今日', days: 1),
@@ -22,23 +27,36 @@ enum _StatisticsRange {
 }
 
 class StatisticsScreen extends StatefulWidget {
-  const StatisticsScreen({super.key});
+  const StatisticsScreen({
+    super.key,
+    this.statisticsApi,
+    this.syncController,
+    this.historyRepository,
+  });
+
+  final StatisticsApi? statisticsApi;
+  final FocusSyncController? syncController;
+  final FocusReportHistoryRepository? historyRepository;
 
   @override
   State<StatisticsScreen> createState() => _StatisticsScreenState();
 }
 
 class _StatisticsScreenState extends State<StatisticsScreen> {
-  final StatisticsApi _statisticsApi = StatisticsApi(ApiClient());
+  late final StatisticsApi _statisticsApi;
+  FocusSyncController? _syncController;
   final AuthSession _authSession = AuthSession.instance;
 
   _StatisticsRange _selectedRange = _StatisticsRange.today;
   Future<StatisticsSummary>? _summaryFuture;
   DateTime? _lastLoadedAt;
+  int _loadRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    _statisticsApi = widget.statisticsApi ?? StatisticsApi(ApiClient());
+    _syncController = widget.syncController ?? FocusSyncController.active;
     _reloadSummary();
   }
 
@@ -49,15 +67,19 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   }
 
   Future<StatisticsSummary> _fetchSummary() async {
+    final range = _selectedRange;
+    final request = ++_loadRequest;
     if (!_authSession.isSignedIn) {
       throw StateError('請先登入後再查看統計資料。');
     }
 
+    await _syncController?.retrySync();
+
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
-    final from = _selectedRange == _StatisticsRange.today
+    final from = range == _StatisticsRange.today
         ? startOfToday
-        : startOfToday.subtract(Duration(days: _selectedRange.days - 1));
+        : startOfToday.subtract(Duration(days: range.days - 1));
 
     final summary = await _statisticsApi.getMySummary(
       authSession: _authSession,
@@ -66,7 +88,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       timezone: 'Asia/Taipei',
     );
 
-    if (mounted) {
+    if (mounted && request == _loadRequest) {
       setState(() => _lastLoadedAt = DateTime.now());
     }
     return summary;
@@ -74,7 +96,11 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
 
   Future<void> _refreshSummary() async {
     _reloadSummary();
-    await _summaryFuture;
+    try {
+      await _summaryFuture;
+    } catch (_) {
+      // The FutureBuilder presents the error and its retry action.
+    }
   }
 
   void _selectRange(_StatisticsRange range) {
@@ -131,14 +157,30 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                             children: [
                               _buildPageHeader(),
                               const SizedBox(height: 14),
+                              _buildReportHistoryEntry(),
+                              const SizedBox(height: 14),
                               _buildRangeSelector(),
                               const SizedBox(height: 14),
+                              if (snapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  summary != null)
+                                const LinearProgressIndicator(),
+                              if (_syncController != null)
+                                AnimatedBuilder(
+                                  animation: _syncController!,
+                                  builder: (context, _) =>
+                                      FocusSyncFailureNotice(
+                                        state: _syncController!.syncState,
+                                      ),
+                                ),
                               if (isLoading)
                                 const _GlassPanel(child: _LoadingState())
                               else if (snapshot.hasError)
                                 _GlassPanel(
                                   child: _ErrorState(
-                                    message: snapshot.error.toString(),
+                                    message: !_authSession.isSignedIn
+                                        ? '請先登入後再查看統計資料。'
+                                        : userFacingError(snapshot.error!),
                                     onRetry: _reloadSummary,
                                   ),
                                 )
@@ -171,9 +213,61 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     );
   }
 
+  Widget _buildReportHistoryEntry() {
+    return _GlassPanel(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => FocusReportHistoryScreen(
+                repository: widget.historyRepository,
+              ),
+            ),
+          ),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Icon(Icons.history_rounded, color: Color(0xFF9FF3D0), size: 28),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '逐輪評分紀錄',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        '查看此裝置保存的每一輪專注評分表。',
+                        style: TextStyle(
+                          color: Color(0xCCFFFFFF),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: Colors.white70),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPageHeader() {
     final loadedText = _lastLoadedAt == null
-        ? '尚未同步'
+        ? '尚未更新'
         : '更新於 ${_formatClock(_lastLoadedAt!)}';
 
     return Row(
@@ -431,19 +525,19 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
             color: const Color(0xFFFFB648),
           ),
           _ProgressRow(
-            label: '疲勞 / 打瞌睡',
+            label: '疲勞／疑似瞌睡',
             value: distribution.ratioFor(distribution.fatigueSeconds),
             detail: _formatDuration(distribution.fatigueSeconds),
             color: const Color(0xFFFF7A3D),
           ),
           _ProgressRow(
-            label: '打瞌睡',
+            label: '疑似瞌睡',
             value: distribution.ratioFor(distribution.drowsySeconds),
             detail: _formatDuration(distribution.drowsySeconds),
             color: const Color(0xFFE85D75),
           ),
           _ProgressRow(
-            label: '趴下',
+            label: '姿勢過低',
             value: distribution.ratioFor(distribution.postureDownSeconds),
             detail: _formatDuration(distribution.postureDownSeconds),
             color: const Color(0xFFC06CFF),
@@ -615,9 +709,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       case 'vision.fatigue_detected':
         return '疲勞 / 閉眼';
       case 'vision.drowsy_detected':
-        return '打瞌睡';
+        return '疑似瞌睡';
       case 'vision.posture_down':
-        return '趴下';
+        return '姿勢過低';
       case 'voice.startPomodoro':
         return '語音開始番茄鐘';
       case 'voice.pausePomodoro':
@@ -838,7 +932,7 @@ class _MetricTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, color: color, size: 22),
-          const Spacer(),
+          const SizedBox(height: 12),
           Text(
             value,
             maxLines: 2,

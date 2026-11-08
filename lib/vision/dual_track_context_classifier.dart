@@ -631,8 +631,15 @@ class DualTrackContextClassifier {
 
     final confirmedFastAway =
         fastPriority == 'user_missing' &&
-        result.personPresenceSampled &&
-        result.personPresent == false;
+        ((result.personPresenceSampled && result.personPresent == false) ||
+            // The mask model can be unavailable. Do not erase an already
+            // debounced absence just because the camera never saw enough
+            // shoulder geometry to establish a departure trajectory. Keep
+            // low-head/descent and latched sleep contexts on their own path.
+            (fullyTrackingLost &&
+                continuousTrackingLossMs >= windowMs &&
+                disappearance?.reason == 'insufficient_exit_evidence' &&
+                !_sleepLatched));
     final confirmedAwayPriority =
         presenceOverride == 'user_missing' || confirmedFastAway;
     final finalState = confirmedAwayPriority

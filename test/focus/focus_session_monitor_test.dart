@@ -340,7 +340,7 @@ void main() {
       _step(monitor, CompanionStatus.distracted, start, 2);
       _step(monitor, CompanionStatus.distracted, start, 3);
 
-      expect(monitor.effectiveFocusDuration, const Duration(seconds: 2));
+      expect(monitor.effectiveFocusDuration, const Duration(seconds: 1));
       expect(monitor.distractedDuration, const Duration(seconds: 1));
     });
 

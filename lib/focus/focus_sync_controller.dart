@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
 import '../api/focus_api.dart';
+import '../api/user_facing_error.dart';
+import 'focus_sync_state.dart';
 import '../auth/auth_session.dart';
 import '../events/companion_event.dart';
 import '../events/companion_event_buffer.dart';
@@ -17,7 +19,9 @@ import 'pomodoro_controller.dart';
 import 'study_session.dart';
 import 'study_session_controller.dart';
 
-class FocusSyncController {
+class FocusSyncController extends ChangeNotifier {
+  /// The home route owns the active controller; other routes may retry it.
+  static FocusSyncController? active;
   FocusSyncController({
     required AuthSession authSession,
     FocusApi? focusApi,
@@ -25,9 +29,11 @@ class FocusSyncController {
     this.eventFlushInterval = const Duration(seconds: 20),
     this.eventBatchSize = 30,
   }) : _authSession = authSession,
+       _ownerUserId = authSession.userId,
        _focusApi = focusApi ?? FocusApi(ApiClient());
 
   final AuthSession _authSession;
+  final String? _ownerUserId;
   final FocusApi _focusApi;
   final CompanionEventBuffer _eventBuffer = CompanionEventBuffer();
   final Duration sessionSyncInterval;
@@ -42,21 +48,90 @@ class FocusSyncController {
   Duration _roundPausedDuration = Duration.zero;
   int _revision = 0;
   int _roundNumber = 0;
-  bool _isCreatingSession = false;
-  bool _isSyncingSession = false;
-  bool _isUploadingEvents = false;
-  bool _isCreatingRound = false;
-  bool _isUpdatingRound = false;
   bool _isClosed = false;
+  bool _disposed = false;
+  int _requestsInFlight = 0;
+  final Map<String, String> _errors = {};
+  final Map<String, FocusRoundSnapshot> _pendingRounds = {};
+  Future<String?>? _sessionCreation;
+  Future<void>? _sessionWrite;
+  Future<void>? _roundWrite;
+  Future<FocusEventUploadResult>? _eventUpload;
+  Future<void>? _flushInFlight;
+  StudySessionController? _studyController;
+  PomodoroController? _timerController;
+  DateTime? _lastSyncedAt;
+
+  bool get _canSync =>
+      _authSession.isSignedIn && _authSession.userId == _ownerUserId;
+  FocusSyncState get syncState => FocusSyncState(
+    phase: !_canSync
+        ? FocusSyncPhase.localOnly
+        : _requestsInFlight > 0 || _flushInFlight != null
+        ? FocusSyncPhase.syncing
+        : _errors.isNotEmpty
+        ? FocusSyncPhase.failed
+        : _eventBuffer.length > 0 ||
+              _pendingRounds.isNotEmpty ||
+              _lastSyncedAt == null
+        ? FocusSyncPhase.pending
+        : FocusSyncPhase.synced,
+    pendingEvents: _eventBuffer.length,
+    pendingRounds: _pendingRounds.length,
+    lastSyncedAt: _lastSyncedAt,
+    message: _errors.isEmpty ? null : _errors.values.first,
+  );
+
+  void _emit() {
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<T> _request<T>(String key, Future<T> Function() action) async {
+    if (!_canSync) throw StateError('Account changed during sync');
+    _requestsInFlight++;
+    _emit();
+    try {
+      final result = await action();
+      _errors.remove(key);
+      return result;
+    } catch (error) {
+      _errors[key] = userFacingError(error);
+      rethrow;
+    } finally {
+      _requestsInFlight--;
+      _emit();
+    }
+  }
+
+  Future<bool> retrySync() async {
+    final study = _studyController;
+    final timer = _timerController;
+    if (!_canSync || study == null || timer == null || _isClosed) return false;
+    await flushNow(studySessionController: study, pomodoroController: timer);
+    return _errors.isEmpty && _eventBuffer.isEmpty && _pendingRounds.isEmpty;
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _sessionSyncTimer?.cancel();
+    _eventFlushTimer?.cancel();
+    if (identical(active, this)) active = null;
+    super.dispose();
+  }
 
   String? get serverSessionId => _localSession?.serverSessionId;
   String? get currentServerRoundId => _currentRound?.serverRoundId;
+  String? get currentClientRoundId => _currentRound?.clientRoundId;
+  DateTime? get currentRoundStartedAt => _currentRound?.startedAt;
 
   void start({
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
   }) {
     if (_isClosed) return;
+    _studyController = studySessionController;
+    _timerController = pomodoroController;
     studySessionController.ensureStarted();
     _ensureLocalSession(
       studySessionController: studySessionController,
@@ -299,40 +374,25 @@ class FocusSyncController {
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
   }) async {
-    final sessionId = await ensureRemoteSession(
+    final session = _ensureLocalSession(
       studySessionController: studySessionController,
       pomodoroController: pomodoroController,
     );
-    if (sessionId == null || _isCreatingRound) return;
-
-    _roundNumber += 1;
+    _roundNumber++;
     _roundPausedAt = null;
     _roundPausedDuration = Duration.zero;
-    final targetSeconds = pomodoroController.totalDuration.inSeconds;
     final round = FocusRoundSnapshot.start(
-      sessionId: sessionId,
+      sessionId: session.serverSessionId ?? session.clientSessionId,
       roundNumber: _roundNumber,
       type: FocusRoundType.focus,
-      targetSeconds: targetSeconds > 0 ? targetSeconds : 25 * 60,
+      targetSeconds: pomodoroController.totalDuration.inSeconds > 0
+          ? pomodoroController.totalDuration.inSeconds
+          : 25 * 60,
     );
     _currentRound = round;
-
-    _isCreatingRound = true;
-    try {
-      final response = await _focusApi.createMyRound(
-        authSession: _authSession,
-        sessionId: sessionId,
-        round: round,
-      );
-      _currentRound = _copyRound(
-        round,
-        serverRoundId: _stringValue(response['roundId']),
-      );
-    } catch (error) {
-      debugPrint('Focus round create failed: $error');
-    } finally {
-      _isCreatingRound = false;
-    }
+    _pendingRounds[round.clientRoundId] = round;
+    _emit();
+    await _flushRounds(studySessionController, pomodoroController);
   }
 
   Future<void> updateCurrentRound({
@@ -343,11 +403,12 @@ class FocusSyncController {
     DateTime? endedAt,
   }) async {
     final current = _currentRound;
-    final sessionId = serverSessionId;
-    final roundId = current?.serverRoundId;
-    if (current == null || sessionId == null || roundId == null) return;
-    if (_isUpdatingRound) return;
-
+    if (current == null) return;
+    if (status == FocusRoundStatus.paused) {
+      _markRoundPaused();
+    } else {
+      _markRoundResumed();
+    }
     final snapshot = _copyRound(
       current,
       status: status,
@@ -356,67 +417,143 @@ class FocusSyncController {
       endedAt: endedAt,
       endReason: endReason,
     );
-    _currentRound = snapshot;
-
-    _isUpdatingRound = true;
-    try {
-      await _focusApi.updateMyRound(
-        authSession: _authSession,
-        sessionId: sessionId,
-        roundId: roundId,
-        round: snapshot,
-      );
-    } catch (error) {
-      debugPrint('Focus round update failed: $error');
-    } finally {
-      _isUpdatingRound = false;
-    }
-
-    if (endedAt != null) {
-      _currentRound = null;
-    }
-    unawaited(
-      syncSession(
-        studySessionController: studySessionController,
-        pomodoroController: pomodoroController,
-      ),
+    _pendingRounds[snapshot.clientRoundId] = snapshot;
+    _currentRound = endedAt == null ? snapshot : null;
+    _emit();
+    await _flushRounds(studySessionController, pomodoroController);
+    await syncSession(
+      studySessionController: studySessionController,
+      pomodoroController: pomodoroController,
     );
+  }
+
+  Future<void> _flushRounds(
+    StudySessionController study,
+    PomodoroController timer,
+  ) {
+    return _roundWrite ??= _performRoundSync(study, timer).whenComplete(() {
+      _roundWrite = null;
+      _emit();
+    });
+  }
+
+  Future<void> _performRoundSync(
+    StudySessionController study,
+    PomodoroController timer,
+  ) async {
+    if (_pendingRounds.isEmpty) return;
+    final sessionId = await ensureRemoteSession(
+      studySessionController: study,
+      pomodoroController: timer,
+    );
+    if (sessionId == null) return;
+    while (_pendingRounds.isNotEmpty) {
+      var snapshot = _pendingRounds.values.first;
+      final key = snapshot.clientRoundId;
+      try {
+        if (snapshot.serverRoundId == null) {
+          final response = await _request(
+            'round:$key',
+            () => _focusApi.createMyRound(
+              authSession: _authSession,
+              sessionId: sessionId,
+              round: _copyRound(snapshot, sessionId: sessionId),
+            ),
+          );
+          final roundId = _stringValue(response['roundId']);
+          if (roundId == null) throw const FormatException('Missing roundId');
+          // Completion may have arrived while the create request was in flight.
+          snapshot = _copyRound(
+            _pendingRounds[key] ?? snapshot,
+            serverRoundId: roundId,
+            sessionId: sessionId,
+          );
+          _pendingRounds[key] = snapshot;
+          if (_currentRound?.clientRoundId == key) _currentRound = snapshot;
+        }
+        final sent = snapshot;
+        await _request(
+          'round:$key',
+          () => _focusApi.updateMyRound(
+            authSession: _authSession,
+            sessionId: sessionId,
+            roundId: sent.serverRoundId!,
+            round: sent,
+          ),
+        );
+        if (identical(_pendingRounds[key], sent)) _pendingRounds.remove(key);
+      } catch (error) {
+        _errors['round:$key'] = userFacingError(error);
+        debugPrint('Focus round sync deferred: $error');
+        return;
+      } finally {
+        _emit();
+      }
+    }
   }
 
   Future<String?> ensureRemoteSession({
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
-  }) async {
-    if (!_authSession.isSignedIn || _authSession.userId == null) return null;
-    final existingServerId = serverSessionId;
-    if (existingServerId != null) return existingServerId;
-    if (_isCreatingSession) return null;
+  }) {
+    if (!_canSync) return Future.value(null);
+    if (serverSessionId != null) return Future.value(serverSessionId);
+    return _sessionCreation ??= _createRemoteSession(
+      studySessionController,
+      pomodoroController,
+    ).whenComplete(() => _sessionCreation = null);
+  }
 
+  Future<String?> _createRemoteSession(
+    StudySessionController study,
+    PomodoroController timer,
+  ) async {
     final session = _ensureLocalSession(
-      studySessionController: studySessionController,
-      pomodoroController: pomodoroController,
+      studySessionController: study,
+      pomodoroController: timer,
     );
-
-    _isCreatingSession = true;
     try {
-      final response = await _focusApi.createMySession(
-        authSession: _authSession,
-        session: session,
+      final response = await _request(
+        'session:create',
+        () => _focusApi.createMySession(
+          authSession: _authSession,
+          session: session,
+        ),
       );
       final remoteId = _stringValue(response['sessionId']);
-      if (remoteId != null) {
-        _localSession = _copySession(session, serverSessionId: remoteId);
-      }
+      if (remoteId == null) throw const FormatException('Missing sessionId');
+      _localSession = _copySession(session, serverSessionId: remoteId);
       return remoteId;
     } catch (error) {
+      _errors['session:create'] = userFacingError(error);
       debugPrint('Focus session create failed: $error');
       return null;
     } finally {
-      _isCreatingSession = false;
+      _emit();
     }
   }
 
   Future<void> syncSession({
+    required StudySessionController studySessionController,
+    required PomodoroController pomodoroController,
+    StudySessionStatus status = StudySessionStatus.active,
+    StudySessionEndReason? endReason,
+    DateTime? endedAt,
+  }) {
+    final write = (_sessionWrite ?? Future<void>.value()).then(
+      (_) => _syncSessionOnce(
+        studySessionController: studySessionController,
+        pomodoroController: pomodoroController,
+        status: status,
+        endReason: endReason,
+        endedAt: endedAt,
+      ),
+    );
+    _sessionWrite = write;
+    return write;
+  }
+
+  Future<void> _syncSessionOnce({
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
     StudySessionStatus status = StudySessionStatus.active,
@@ -427,9 +564,7 @@ class FocusSyncController {
       studySessionController: studySessionController,
       pomodoroController: pomodoroController,
     );
-    if (sessionId == null || _isSyncingSession) return;
-
-    _isSyncingSession = true;
+    if (sessionId == null) return;
     try {
       final snapshot = _buildSessionSnapshot(
         studySessionController: studySessionController,
@@ -438,20 +573,38 @@ class FocusSyncController {
         endReason: endReason,
         endedAt: endedAt,
       );
-      await _focusApi.updateMySession(
-        authSession: _authSession,
-        sessionId: sessionId,
-        session: snapshot,
+      await _request(
+        'session:update',
+        () => _focusApi.updateMySession(
+          authSession: _authSession,
+          sessionId: sessionId,
+          session: snapshot,
+        ),
       );
       _localSession = snapshot;
+      if (_errors.isEmpty && _eventBuffer.isEmpty && _pendingRounds.isEmpty) {
+        _lastSyncedAt = DateTime.now();
+      }
     } catch (error) {
       debugPrint('Focus session sync failed: $error');
-    } finally {
-      _isSyncingSession = false;
     }
   }
 
   Future<FocusEventUploadResult> flushEvents({
+    required StudySessionController studySessionController,
+    required PomodoroController pomodoroController,
+  }) {
+    return _eventUpload ??=
+        _flushEventsOnce(
+          studySessionController: studySessionController,
+          pomodoroController: pomodoroController,
+        ).whenComplete(() {
+          _eventUpload = null;
+          _emit();
+        });
+  }
+
+  Future<FocusEventUploadResult> _flushEventsOnce({
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
   }) async {
@@ -460,11 +613,6 @@ class FocusSyncController {
         attemptedCount: 0,
         savedCount: 0,
         skippedDuplicateCount: 0,
-      );
-    }
-    if (_isUploadingEvents) {
-      return const FocusEventUploadResult.failure(
-        message: 'Event upload is already in progress.',
       );
     }
     final sessionId = await ensureRemoteSession(
@@ -486,13 +634,21 @@ class FocusSyncController {
       );
     }
 
-    _isUploadingEvents = true;
     try {
-      final response = await _focusApi.uploadMyEvents(
-        authSession: _authSession,
-        sessionId: sessionId,
-        events: events,
+      final response = await _request(
+        'events',
+        () => _focusApi.uploadMyEvents(
+          authSession: _authSession,
+          sessionId: sessionId,
+          events: events,
+        ),
       );
+      final acknowledged =
+          _intValue(response['savedCount']) +
+          _intValue(response['skippedDuplicateCount']);
+      if (acknowledged != events.length) {
+        throw const FormatException('Incomplete event acknowledgement');
+      }
       _eventBuffer.markUploaded(events.map((event) => event.clientEventId));
       debugPrint(
         'Uploaded focus events: '
@@ -508,6 +664,7 @@ class FocusSyncController {
         eventTypes: events.map((event) => event.eventType).toList(),
       );
     } catch (error) {
+      _errors['events'] = userFacingError(error);
       debugPrint(
         'Focus events upload failed: $error, '
         'types=${events.map((event) => event.eventType).join(', ')}',
@@ -519,22 +676,46 @@ class FocusSyncController {
         eventTypes: events.map((event) => event.eventType).toList(),
       );
     } finally {
-      _isUploadingEvents = false;
+      _emit();
     }
   }
 
   Future<void> flushNow({
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
-  }) async {
-    await flushEvents(
-      studySessionController: studySessionController,
-      pomodoroController: pomodoroController,
-    );
-    await syncSession(
-      studySessionController: studySessionController,
-      pomodoroController: pomodoroController,
-    );
+  }) {
+    return _flushInFlight ??=
+        _flushAll(studySessionController, pomodoroController).whenComplete(() {
+          _flushInFlight = null;
+          _emit();
+        });
+  }
+
+  Future<void> _flushAll(
+    StudySessionController study,
+    PomodoroController timer,
+  ) async {
+    await _flushRounds(study, timer);
+    // Drain the backlog that existed when retry began, without blocking
+    // indefinitely if vision continues producing new events.
+    var remaining = _eventBuffer.length;
+    while (remaining > 0) {
+      final result = await flushEvents(
+        studySessionController: study,
+        pomodoroController: timer,
+      );
+      if (!result.success || result.attemptedCount == 0) break;
+      remaining -= result.attemptedCount;
+    }
+    await syncSession(studySessionController: study, pomodoroController: timer);
+    if (_canSync &&
+        _errors.isEmpty &&
+        _eventBuffer.isEmpty &&
+        _pendingRounds.isEmpty &&
+        serverSessionId != null) {
+      _lastSyncedAt = DateTime.now();
+    }
+    _emit();
   }
 
   Future<void> close({
@@ -564,7 +745,7 @@ class FocusSyncController {
   }) {
     _sessionSyncTimer ??= Timer.periodic(sessionSyncInterval, (_) {
       unawaited(
-        syncSession(
+        flushNow(
           studySessionController: studySessionController,
           pomodoroController: pomodoroController,
         ),
@@ -584,6 +765,7 @@ class FocusSyncController {
     required StudySessionController studySessionController,
     required PomodoroController pomodoroController,
   }) {
+    _emit();
     if (_eventBuffer.length < eventBatchSize) return;
     unawaited(
       flushEvents(
@@ -729,6 +911,7 @@ class FocusSyncController {
   FocusRoundSnapshot _copyRound(
     FocusRoundSnapshot source, {
     String? serverRoundId,
+    String? sessionId,
     FocusRoundStatus? status,
     int? actualSeconds,
     int? pausedSeconds,
@@ -738,7 +921,7 @@ class FocusSyncController {
     return FocusRoundSnapshot(
       clientRoundId: source.clientRoundId,
       serverRoundId: serverRoundId ?? source.serverRoundId,
-      sessionId: source.sessionId,
+      sessionId: sessionId ?? source.sessionId,
       roundNumber: source.roundNumber,
       type: source.type,
       status: status ?? source.status,
@@ -833,7 +1016,10 @@ class FocusSyncController {
     };
   }
 
-  String? _stringValue(Object? value) => value?.toString();
+  String? _stringValue(Object? value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty ? null : text;
+  }
 
   static int _intValue(Object? value) {
     if (value is int) return value;

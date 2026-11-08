@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/profile_api.dart';
+import '../api/user_facing_error.dart';
 import '../auth/auth_session.dart';
 import '../widgets/glass_bottom_nav_bar.dart';
 import 'profile_hub_screen.dart';
@@ -43,11 +44,7 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
 
   String get _fallbackEmail => _session.email ?? 'reader@desk-companion.local';
 
-  String get _fallbackDisplayName {
-    final email = _session.email;
-    if (email == null || email.isEmpty) return 'Reader';
-    return email.split('@').first;
-  }
+  String get _fallbackDisplayName => _session.displayName;
 
   String get _avatarInitial {
     final name = _displayNameController.text.trim();
@@ -77,10 +74,10 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       _avatarUrlController.text = avatarUrl ?? '';
     } on ApiException catch (e) {
       if (!mounted) return;
-      setState(() => _loadMessage = '讀取個人資料失敗：${e.message}');
+      setState(() => _loadMessage = '讀取個人資料失敗：${userFacingError(e)}');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loadMessage = '讀取個人資料失敗：$e');
+      setState(() => _loadMessage = '讀取個人資料失敗：${userFacingError(e)}');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -113,10 +110,10 @@ class _ProfileDetailScreenState extends State<ProfileDetailScreen> {
       _showSnackBar('個人檔案已更新。');
     } on ApiException catch (e) {
       if (!mounted) return;
-      _showSnackBar('儲存失敗：${e.message}');
+      _showSnackBar('儲存失敗：${userFacingError(e)}');
     } catch (e) {
       if (!mounted) return;
-      _showSnackBar('儲存失敗：$e');
+      _showSnackBar('儲存失敗：${userFacingError(e)}');
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }

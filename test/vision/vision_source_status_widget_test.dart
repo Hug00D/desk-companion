@@ -34,6 +34,11 @@ void main() {
       ),
     );
 
+    expect(find.text('測試影片'), findsNothing);
+    expect(find.text('重試相機'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('vision-source-toggle')));
+    await tester.pumpAndSettle();
+    expect(retries, 0);
     expect(find.text('測試影片'), findsOneWidget);
     await tester.tap(find.text('重試相機'));
     await tester.pump();
@@ -61,6 +66,9 @@ void main() {
       ),
     );
 
+    expect(find.text('未就緒'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('vision-source-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('未就緒'), findsOneWidget);
     await tester.tap(find.text('重試相機'));
     expect(retried, isTrue);
@@ -92,14 +100,20 @@ void main() {
         ),
       );
 
+      expect(find.text('即時相機・校正中'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('vision-source-toggle')));
+      await tester.pumpAndSettle();
       expect(find.text('即時相機・校正中'), findsOneWidget);
       expect(find.text('重新校正'), findsNothing);
 
       update(() => calibrating = false);
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(find.text('即時相機'), findsOneWidget);
       await tester.tap(find.text('重新校正'));
       expect(recalibrations, 1);
+      await tester.tap(find.byKey(const ValueKey('vision-source-collapse')));
+      await tester.pumpAndSettle();
+      expect(find.text('即時相機'), findsNothing);
     },
   );
 }

@@ -319,7 +319,7 @@ class _TasksScreenState extends State<TasksScreen> {
             Divider(color: Colors.white.withValues(alpha: 0.14), height: 1),
             _buildPolicyToggle(
               title: '嚴重狀況自動暫停',
-              subtitle: '趴下或打瞌睡 8 秒；離席 10 秒。',
+              subtitle: '姿勢過低或疑似瞌睡 8 秒；離席 10 秒。',
               value: _focusSessionMonitor.severeAutoPauseEnabled,
               onChanged: _focusSessionMonitor.setSevereAutoPauseEnabled,
             ),
@@ -547,7 +547,7 @@ class _TasksScreenState extends State<TasksScreen> {
       case CompanionStatus.distracted:
         return '分心';
       case CompanionStatus.sleeping:
-        return '疑似睡著';
+        return '疑似瞌睡／姿勢過低';
       case CompanionStatus.userMissing:
         return '離席';
     }
@@ -592,7 +592,7 @@ class _TasksScreenState extends State<TasksScreen> {
       case PomodoroPauseReason.drowsy:
         return '疑似打瞌睡，已自動暫停';
       case PomodoroPauseReason.postureDown:
-        return '偵測到趴下，已自動暫停';
+        return '偵測到姿勢過低，已自動暫停';
       case PomodoroPauseReason.userMissing:
         return '離席過久，已自動暫停';
       case PomodoroPauseReason.manual:

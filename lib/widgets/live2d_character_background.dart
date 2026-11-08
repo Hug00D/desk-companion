@@ -12,6 +12,7 @@ class Live2DCharacterBackground extends StatefulWidget {
     this.reaction = CompanionCharacterReaction.none,
     this.reactionSerial = 0,
     this.paused = false,
+    this.verticalOffset = 0,
   });
 
   final CompanionCharacterMood mood;
@@ -21,6 +22,9 @@ class Live2DCharacterBackground extends StatefulWidget {
   /// 由外部要求暫停算圖（例如切換到其他畫面時）。實際是否暫停還會併入
   /// App 生命週期狀態一起判斷。
   final bool paused;
+
+  /// Moves only the character viewport, keeping its size and background.
+  final double verticalOffset;
 
   @override
   State<Live2DCharacterBackground> createState() =>
@@ -160,7 +164,12 @@ class _Live2DCharacterBackgroundState extends State<Live2DCharacterBackground>
   Widget build(BuildContext context) {
     return ColoredBox(
       color: const Color(0xFF10283D),
-      child: IgnorePointer(child: Live2DView(controller: _controller)),
+      child: ClipRect(
+        child: Transform.translate(
+          offset: Offset(0, widget.verticalOffset),
+          child: IgnorePointer(child: Live2DView(controller: _controller)),
+        ),
+      ),
     );
   }
 }

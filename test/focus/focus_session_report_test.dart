@@ -27,8 +27,10 @@ void main() {
       expect(report.attentionEventCount, 2);
       expect(report.fatigueEventCount, 1);
       expect(report.causeEventCountFor(CompanionCause.postureDown), 1);
-      expect(report.score, 82);
-      expect(report.grade, 'A');
+      expect(report.sessionFocusRatio, closeTo(0.64, 0.001));
+      expect(report.unobservedDuration, const Duration(minutes: 5));
+      expect(report.score, 60);
+      expect(report.grade, 'C');
     });
 
     test('does not force a score when observation coverage is too low', () {

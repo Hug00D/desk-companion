@@ -7,6 +7,8 @@ import '../focus/focus_session_report.dart';
 Future<void> showFocusSessionReportDialog({
   required BuildContext context,
   required FocusSessionReport report,
+  DateTime? startedAt,
+  bool isHistory = false,
 }) {
   return showGeneralDialog<void>(
     context: context,
@@ -15,7 +17,11 @@ Future<void> showFocusSessionReportDialog({
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
     barrierColor: const Color(0x8A071725),
     transitionDuration: const Duration(milliseconds: 240),
-    pageBuilder: (_, _, _) => FocusSessionReportDialog(report: report),
+    pageBuilder: (_, _, _) => FocusSessionReportDialog(
+      report: report,
+      startedAt: startedAt,
+      isHistory: isHistory,
+    ),
     transitionBuilder: (_, animation, _, child) {
       final curved = CurvedAnimation(
         parent: animation,
@@ -34,9 +40,20 @@ Future<void> showFocusSessionReportDialog({
 }
 
 class FocusSessionReportDialog extends StatelessWidget {
-  const FocusSessionReportDialog({super.key, required this.report});
+  const FocusSessionReportDialog({
+    super.key,
+    required this.report,
+    this.startedAt,
+    this.isHistory = false,
+  });
 
   final FocusSessionReport report;
+  final DateTime? startedAt;
+  final bool isHistory;
+
+  String _formatTime(DateTime time) =>
+      '${time.year}/${time.month.toString().padLeft(2, '0')}/${time.day.toString().padLeft(2, '0')} '
+      '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
@@ -76,6 +93,8 @@ class FocusSessionReportDialog extends StatelessWidget {
                           _buildFocusDistribution(accentColor),
                           const SizedBox(height: 18),
                           _buildMetrics(),
+                          const SizedBox(height: 14),
+                          _buildObservationMetrics(),
                           const SizedBox(height: 18),
                           Divider(
                             height: 1,
@@ -92,7 +111,7 @@ class FocusSessionReportDialog extends StatelessWidget {
                             child: FilledButton.icon(
                               onPressed: () => Navigator.of(context).pop(),
                               icon: const Icon(Icons.check_rounded, size: 20),
-                              label: const Text('收下這份報告'),
+                              label: Text(isHistory ? '關閉報告' : '收下這份報告'),
                               style: FilledButton.styleFrom(
                                 foregroundColor: const Color(0xFF17334B),
                                 backgroundColor: accentColor,
@@ -132,12 +151,12 @@ class FocusSessionReportDialog extends StatelessWidget {
           child: Icon(Icons.auto_graph_rounded, color: accentColor, size: 23),
         ),
         const SizedBox(width: 12),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '本輪專注報告',
+                isHistory ? '專注評分報告' : '本輪專注報告',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 20,
@@ -146,13 +165,21 @@ class FocusSessionReportDialog extends StatelessWidget {
               ),
               SizedBox(height: 2),
               Text(
-                '番茄鐘已完成',
+                '完成於 ${_formatTime(report.completedAt)}',
                 style: TextStyle(
                   color: Color(0xBFFFFFFF),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              if (startedAt != null)
+                Text(
+                  '開始於 ${_formatTime(startedAt!)}',
+                  style: const TextStyle(
+                    color: Color(0xBFFFFFFF),
+                    fontSize: 12,
+                  ),
+                ),
             ],
           ),
         ),
@@ -240,16 +267,19 @@ class FocusSessionReportDialog extends StatelessWidget {
   }
 
   Widget _buildFocusDistribution(Color accentColor) {
-    final focusPercent = (report.focusRatio * 100).round();
+    final ratio = report.usesLegacyScoring
+        ? report.focusRatio
+        : report.sessionFocusRatio;
+    final focusPercent = (ratio * 100).round();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
-                '有效專注比例',
-                style: TextStyle(
+                report.usesLegacyScoring ? '觀測內專注比例（舊版）' : '整輪有效專注比例',
+                style: const TextStyle(
                   color: Colors.white,
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
@@ -271,7 +301,7 @@ class FocusSessionReportDialog extends StatelessWidget {
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
             minHeight: 8,
-            value: report.hasEnoughData ? report.focusRatio : 0,
+            value: report.hasEnoughData ? ratio : 0,
             backgroundColor: Colors.white.withValues(alpha: 0.1),
             valueColor: AlwaysStoppedAnimation<Color>(accentColor),
           ),
@@ -296,9 +326,39 @@ class FocusSessionReportDialog extends StatelessWidget {
         ),
         _MetricDivider(),
         _ReportMetric(
-          label: '分心時間',
+          label: '非專注（含離席）',
           value: _formatDuration(report.distractedDuration),
           color: const Color(0xFFFFB474),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildObservationMetrics() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _ReportMetric(
+              label: '其中離席',
+              value: report.awayDuration == null
+                  ? '未分開紀錄'
+                  : _formatDuration(report.awayDuration!),
+              color: const Color(0xFF79D2F5),
+            ),
+            _MetricDivider(),
+            _ReportMetric(
+              label: '未觀測時間',
+              value: _formatDuration(report.unobservedDuration),
+              color: const Color(0xFFB9CAD8),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          '資料涵蓋率 ${(report.coverageRatio * 100).round()}%・未觀測不計入有效專注',
+          style: const TextStyle(color: Color(0xBFFFFFFF), fontSize: 11),
         ),
       ],
     );
@@ -351,15 +411,21 @@ class FocusSessionReportDialog extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: accentColor.withValues(alpha: 0.22)),
       ),
-      child: const Row(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.info_outline_rounded, color: Color(0xFF9FF3D0), size: 19),
-          SizedBox(width: 9),
+          const Icon(
+            Icons.info_outline_rounded,
+            color: Color(0xFF9FF3D0),
+            size: 19,
+          ),
+          const SizedBox(width: 9),
           Expanded(
             child: Text(
-              '評分依有效專注比例與已記錄事件估算，作為調整節奏的參考，不代表能力高低。',
-              style: TextStyle(
+              report.usesLegacyScoring
+                  ? '舊版評分：保留當時分數，舊公式未以整輪時間計算；請以新版完成的報告確認離席影響。'
+                  : '評分＝有效專注時間 ÷ 預定時間 × 100，再依事件扣分（最多 10 分）。離席與未觀測時間都不算有效專注；觀測不足時不評分。',
+              style: const TextStyle(
                 color: Color(0xCCFFFFFF),
                 fontSize: 11,
                 height: 1.45,

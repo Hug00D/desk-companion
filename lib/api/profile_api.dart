@@ -25,21 +25,30 @@ class ProfileApi {
     );
   }
 
-  Future<Map<String, dynamic>> getMyProfile(AuthSession session) {
-    return getProfile(
-      userId: session.userId!,
+  Future<Map<String, dynamic>> getMyProfile(AuthSession session) async {
+    final userId = session.userId!;
+    final data = await getProfile(
+      userId: userId,
       accessToken: session.accessToken,
     );
+    session.updateDisplayName(data['displayName']?.toString(), userId: userId);
+    return data;
   }
 
   Future<Map<String, dynamic>> updateMyProfile({
     required AuthSession session,
     required Map<String, dynamic> body,
-  }) {
-    return updateProfile(
-      userId: session.userId!,
+  }) async {
+    final userId = session.userId!;
+    final data = await updateProfile(
+      userId: userId,
       body: body,
       accessToken: session.accessToken,
     );
+    session.updateDisplayName(
+      (data['displayName'] ?? body['displayName'])?.toString(),
+      userId: userId,
+    );
+    return data;
   }
 }

@@ -4,12 +4,16 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
+import '../api/user_facing_error.dart';
 import '../api/auth_api.dart';
 import '../auth/auth_session.dart';
+import '../auth/auth_error_message.dart';
 import 'face_detection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.authApi});
+
+  final AuthApi? authApi;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -18,12 +22,13 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _pwController = TextEditingController();
-  final _authApi = AuthApi(ApiClient());
+  late final _authApi = widget.authApi ?? AuthApi(ApiClient());
   final _authSession = AuthSession.instance;
   bool _isSignUp = false; // 切換註冊/登入
   bool _isLoading = false;
 
   void _toggleMode() {
+    if (_isLoading) return;
     setState(() => _isSignUp = !_isSignUp);
   }
 
@@ -34,7 +39,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("請填寫 Email 與密碼")));
+      ).showSnackBar(const SnackBar(content: Text("請填寫電子郵件與密碼")));
       return;
     }
 
@@ -63,14 +68,22 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } on ApiException catch (e) {
       if (!mounted) return;
+      debugPrint(
+        '[AUTH] operation=${_isSignUp ? 'register' : 'login'} '
+        'status=${e.statusCode} code=${e.errorCode ?? 'unspecified'} '
+        'service=${_authApi.baseUrl}',
+      );
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
+        SnackBar(
+          content: Text(authErrorMessage(e)),
+          backgroundColor: Colors.redAccent,
+        ),
       );
     } on TimeoutException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('伺服器連線逾時，請確認手機可以連到 ${_authApi.baseUrl}'),
+          content: Text('連線逾時，請確認網路與服務後重試。'),
           backgroundColor: Colors.redAccent,
           duration: const Duration(seconds: 8),
         ),
@@ -79,7 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("網路連線失敗: $e")));
+      ).showSnackBar(SnackBar(content: Text(userFacingError(e))));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -117,13 +130,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   // 輸入框組
                   _buildGlassField(
                     Icons.email_outlined,
-                    "Email",
+                    "電子郵件",
                     _emailController,
                   ),
                   const SizedBox(height: 15),
                   _buildGlassField(
                     Icons.lock_outline,
-                    "Password",
+                    "密碼",
                     _pwController,
                     isObscure: true,
                   ),
@@ -140,15 +153,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     onTap: _toggleMode,
                     child: RichText(
                       text: TextSpan(
-                        text: _isSignUp
-                            ? "Already have an account? "
-                            : "New here? ",
+                        text: _isSignUp ? "已經有帳號？ " : "第一次使用？ ",
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.6),
                         ),
                         children: [
                           TextSpan(
-                            text: _isSignUp ? "Sign In" : "Create Account",
+                            text: _isSignUp ? "登入" : "註冊帳號",
                             style: const TextStyle(
                               color: Color(0xFF79D2F5),
                               fontWeight: FontWeight.bold,
@@ -179,7 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 15),
         Text(
-          _isSignUp ? "JOIN US" : "WELCOME BACK",
+          _isSignUp ? "建立帳號" : "歡迎回來",
           style: const TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.w900,
@@ -255,7 +266,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 )
               : Text(
-                  _isSignUp ? "REGISTER" : "SIGN IN",
+                  _isSignUp ? "註冊" : "登入",
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,

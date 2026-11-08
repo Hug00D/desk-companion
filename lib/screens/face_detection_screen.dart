@@ -10,12 +10,16 @@ import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 
 import '../auth/auth_session.dart';
+import '../events/companion_event.dart';
 import '../navigation/app_route_observer.dart';
 import '../ai/assistant_interaction_controller.dart';
 import '../ai/assistant_reply_formatter.dart';
 import '../ai/assistant_reply.dart';
 import '../ai/pending_action_controller.dart';
 import '../api/api_client.dart';
+import '../api/profile_api.dart';
+import '../api/user_facing_error.dart';
+import '../companion/companion_status_text.dart';
 import '../api/assistant_api.dart';
 import '../companion/assistant_identity.dart';
 import '../companion/companion_controller.dart';
@@ -23,6 +27,7 @@ import '../companion/character_reaction.dart';
 import '../companion/companion_response_builder.dart';
 import '../focus/focus_session_monitor.dart';
 import '../focus/focus_session_report.dart';
+import '../focus/focus_report_history.dart';
 import '../focus/focus_intervention_delivery_policy.dart';
 import '../focus/focus_round.dart';
 import '../focus/pomodoro_action_dispatcher.dart';
@@ -343,6 +348,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   @override
   void initState() {
     super.initState();
+    _authSession.addListener(_handleAccountChanged);
+    if (_authSession.isSignedIn) {
+      unawaited(_loadAccountProfile());
+    }
     _calibrationRequestController.addListener(
       _handleExternalCalibrationRequest,
     );
@@ -376,6 +385,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       timeout: const Duration(seconds: 135),
     );
     _focusSyncController = FocusSyncController(authSession: _authSession);
+    FocusSyncController.active = _focusSyncController;
     _focusSyncController.start(
       studySessionController: _studySessionController,
       pomodoroController: _pomodoroController,
@@ -870,7 +880,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         _syncBreathingPaceForStatus(analysis.status);
       }
       _companionStatus = analysis.status;
-      _fatigueLevel = analysis.status.label;
+      _fatigueLevel = companionStatusText(analysis.status, analysis.cause);
       if (!_isVoiceMessagePinned && shouldUpdateVisionMessage) {
         _companionMessage = _latestDetectedCompanionMessage;
       }
@@ -880,6 +890,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final focusInterventions = _focusSessionMonitor.update(
       status: analysis.status,
       cause: analysis.cause,
+      hasObservation:
+          analysis.status == CompanionStatus.userMissing ||
+          visionResult.hasFace ||
+          visionResult.hasPose,
       sessionActive: isPomodoroSessionActive,
       sessionRunning: _pomodoroController.isRunning,
       sessionAutoPaused: _pomodoroController.isAutoPaused,
@@ -1762,7 +1776,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _syncBreathingPaceForStatus(status);
     }
     _companionStatus = status;
-    _fatigueLevel = status.label;
+    _fatigueLevel = companionStatusText(status, _latestDetectedCompanionCause);
     _companionMessage = message;
     if (mounted) setState(() {});
   }
@@ -1773,7 +1787,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _syncBreathingPaceForStatus(_latestDetectedCompanionStatus);
     }
     _companionStatus = _latestDetectedCompanionStatus;
-    _fatigueLevel = _latestDetectedCompanionStatus.label;
+    _fatigueLevel = companionStatusText(
+      _latestDetectedCompanionStatus,
+      _latestDetectedCompanionCause,
+    );
     if (!_isVoiceMessagePinned) {
       _companionMessage = _latestDetectedCompanionMessage;
     }
@@ -2518,7 +2535,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _triggerCharacterReaction(CompanionCharacterReaction.error);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Assistant decide failed: $error'),
+          content: Text('AI 回覆未完成：${userFacingError(error)}'),
           duration: const Duration(seconds: 4),
         ),
       );
@@ -2621,6 +2638,13 @@ $toneLine
     }
 
     _presentAssistantResponse(responseMessage);
+    if (_preferences.voiceReplyEnabled &&
+        _dynamicAssistantVoiceEnabled &&
+        !result.usedFallback &&
+        result.reply.mode == AssistantMode.chat &&
+        backendAudio == null) {
+      _showVoiceUnavailableNotice();
+    }
   }
 
   void _presentAssistantResponse(
@@ -2686,6 +2710,9 @@ $toneLine
       }
     } catch (error) {
       debugPrint('Assistant dynamic voice failed: $error');
+      if (mounted && requestId == _assistantVoiceRequestId) {
+        _showVoiceUnavailableNotice();
+      }
       if (mounted &&
           requestId == _assistantVoiceRequestId &&
           !responsePresented) {
@@ -2928,6 +2955,12 @@ $toneLine
       final report = _focusSessionMonitor.completeSession(
         plannedDuration: _pomodoroController.totalDuration,
       );
+      final record = FocusReportRecord(
+        id: _focusSyncController.currentClientRoundId ?? generateClientUuid(),
+        startedAt: _focusSyncController.currentRoundStartedAt,
+        report: report,
+      );
+      unawaited(_saveCompletedReport(_authSession.userId, record));
       _studySessionController.recordPomodoroCompleted();
       _focusSyncController.recordPomodoroCompleted(
         studySessionController: _studySessionController,
@@ -2948,6 +2981,32 @@ $toneLine
     }
     _lastObservedPomodoroStatus = currentStatus;
     if (mounted) setState(() {});
+  }
+
+  Future<void> _saveCompletedReport(
+    String? userId,
+    FocusReportRecord record,
+  ) async {
+    try {
+      await FocusReportHistoryRepository.instance.save(
+        userId: userId,
+        record: record,
+      );
+    } catch (error) {
+      debugPrint('Focus report archive failed: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('這輪報告尚未儲存，請重試；目前仍可查看本輪報告。'),
+          action: SnackBarAction(
+            label: '重試',
+            onPressed: () {
+              unawaited(_saveCompletedReport(userId, record));
+            },
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _showCompletedSessionReport(FocusSessionReport report) async {
@@ -3236,7 +3295,26 @@ $toneLine
     return _companionMessage;
   }
 
+  String? get _voiceProgressMessage => switch (_voiceSessionPhase) {
+    _VoiceSessionPhase.thinking =>
+      _preferences.voiceReplyEnabled ? 'AI 正在整理回答與準備語音，請稍候…' : 'AI 正在整理回答，請稍候…',
+    _VoiceSessionPhase.synthesizing => '正在產生語音，請稍候…',
+    _VoiceSessionPhase.speechInitializing => '正在準備麥克風…',
+    _VoiceSessionPhase.speechListening => '正在聆聽，請說話…',
+    _VoiceSessionPhase.speechStopping ||
+    _VoiceSessionPhase.submittingSpeech => '正在整理辨識結果…',
+    _ => null,
+  };
+
+  void _showVoiceUnavailableNotice() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('語音暫時無法播放，請先查看文字回答；可再次操作重試。')));
+  }
+
   bool get _shouldShowCompanionBubble {
+    if (_voiceProgressMessage != null) return true;
     if (_activeSpokenReminderMessage != null) return true;
     if (_isVoiceMessagePinned) return true;
 
@@ -3245,6 +3323,7 @@ $toneLine
   }
 
   String get _companionBubbleMessage {
+    if (_voiceProgressMessage != null) return _voiceProgressMessage!;
     final spokenMessage = _activeSpokenReminderMessage;
     if (spokenMessage != null) return spokenMessage;
     if (_isVoiceMessagePinned) return _getCompanionMessage();
@@ -3257,9 +3336,11 @@ $toneLine
       case CompanionStatus.distracted:
         return '欸，視線飄走了，回來陪我一下。';
       case CompanionStatus.fatigue:
-        return '眼睛真的累了，先休息一下比較帥。';
+        return '眼睛可能有些疲勞，先休息一下再繼續吧。';
       case CompanionStatus.sleeping:
-        return '看起來快睡著啦，先坐直醒一下。';
+        return _latestDetectedCompanionCause == CompanionCause.postureDown
+            ? '姿勢有點低，先坐正、放鬆肩膀再繼續吧。'
+            : '看起來有點想睡，先休息一下吧。';
       case CompanionStatus.userMissing:
         return '我先待機，回來再陪你。';
     }
@@ -3282,10 +3363,18 @@ $toneLine
     if (mounted) setState(() {});
   }
 
-  String get _displayName {
-    final email = _authSession.email;
-    if (email == null || email.isEmpty) return 'Reader';
-    return email.split('@').first;
+  String get _displayName => _authSession.displayName;
+
+  void _handleAccountChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadAccountProfile() async {
+    try {
+      await ProfileApi(ApiClient()).getMyProfile(_authSession);
+    } catch (error) {
+      debugPrint('Profile load deferred: $error');
+    }
   }
 
   // ignore: unused_element
@@ -3319,7 +3408,7 @@ $toneLine
       case CompanionStatus.distracted:
         return "視線偏離了一段時間，先把注意力帶回螢幕吧。";
       case CompanionStatus.sleeping:
-        return "偵測到疑似睡著，先坐直休息一下。";
+        return '${companionStatusText(_companionStatus, _latestDetectedCompanionCause)}，請調整姿勢或休息。';
       case CompanionStatus.userMissing:
         return '暫時離開';
       case CompanionStatus.normal:
@@ -3338,7 +3427,10 @@ $toneLine
       case CompanionStatus.distracted:
         return '分心';
       case CompanionStatus.sleeping:
-        return '睡著';
+        return companionStatusText(
+          _companionStatus,
+          _latestDetectedCompanionCause,
+        );
       case CompanionStatus.userMissing:
         return '離席';
     }
@@ -3810,8 +3902,8 @@ $toneLine
                     const SizedBox(height: 14),
                     _buildToolSheetAction(
                       icon: Icons.record_voice_over_rounded,
-                      title: '語音 Demo',
-                      subtitle: '開發測試用，正式版會拿掉。',
+                      title: '語音與文字互動',
+                      subtitle: '說話、輸入文字，或設定喚醒詞。',
                       isActive: _showVoiceDemoPanel,
                       onTap: () {
                         Navigator.pop(context);
@@ -4201,82 +4293,75 @@ $toneLine
       right: 82,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.22),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.34),
+        // A backdrop blur crossing the translated native Live2D viewport can
+        // expose a dark compositing seam. Use a readable translucent fill.
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: const Color(0xD9E7F5FF),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.34)),
+                boxShadow: [
+                  BoxShadow(
+                    color: glowColor.withValues(alpha: 0.20),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: glowColor.withValues(alpha: 0.20),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.auto_awesome_rounded,
-                      color: glowColor,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        child: Text(
-                          _companionBubbleMessage,
-                          key: ValueKey(_companionBubbleMessage),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF25324A),
-                            fontSize: 14,
-                            height: 1.45,
-                            fontWeight: FontWeight.w700,
-                          ),
+                ],
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.auto_awesome_rounded, color: glowColor, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: Text(
+                        _companionBubbleMessage,
+                        key: ValueKey(_companionBubbleMessage),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF25324A),
+                          fontSize: 14,
+                          height: 1.45,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              Positioned(
-                right: 18,
-                bottom: -6,
-                child: Transform.rotate(
-                  angle: 0.78,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.22),
-                      border: Border(
-                        right: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.24),
-                        ),
-                        bottom: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.24),
-                        ),
+            ),
+            Positioned(
+              right: 18,
+              bottom: -6,
+              child: Transform.rotate(
+                angle: 0.78,
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: const Color(0xD9E7F5FF),
+                    border: Border(
+                      right: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.24),
+                      ),
+                      bottom: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.24),
                       ),
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -4436,12 +4521,7 @@ $toneLine
         return _statusPulseValue();
       },
       onHomeTap: _closeAllDeveloperPanels,
-      onStatisticsTap: () async {
-        await _focusSyncController.flushNow(
-          studySessionController: _studySessionController,
-          pomodoroController: _pomodoroController,
-        );
-        if (!mounted) return;
+      onStatisticsTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const StatisticsScreen()),
@@ -4512,7 +4592,7 @@ $toneLine
                       const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
-                          '語音 Demo',
+                          '語音與文字互動',
                           style: TextStyle(
                             color: Color(0xFF20324D),
                             fontSize: 15,
@@ -4521,7 +4601,7 @@ $toneLine
                         ),
                       ),
                       IconButton(
-                        tooltip: '關閉語音 Demo',
+                        tooltip: '關閉語音與文字互動',
                         onPressed: () {
                           setState(_hideVoiceDemoPanelState);
                         },
@@ -5068,7 +5148,7 @@ $toneLine
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
-                          "語音 Demo",
+                          "語音對話",
                           style: TextStyle(
                             color: Color(0xFF20324D),
                             fontSize: 16,
@@ -5355,9 +5435,40 @@ $toneLine
                     Text("目前狀態：$_fatigueLevel"),
                     Text("視覺事件：${_lastVisionEventType.storageValue}"),
                     Text(
-                      "統計：疲勞 ${_studySessionController.fatigueEventCount} 次，"
+                      "一般狀態累計（非本輪評分）："
+                      "疲勞 ${_studySessionController.fatigueEventCount} 次，"
                       "注意 ${_studySessionController.attentionWarningCount} 次，"
                       "離開 ${_studySessionController.awayDuration.inSeconds} 秒",
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '本輪評分資料',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      '評分輸入：${analysis == null ? "等待資料" : companionStatusText(analysis.status, analysis.cause)}',
+                    ),
+                    Text(
+                      '計時狀態：${_pomodoroController.status.name}'
+                      '${_pomodoroController.pauseReason == null ? "" : "（${_pomodoroController.pauseReason!.name}）"}',
+                    ),
+                    Text(
+                      '本筆累計：${!_pomodoroController.isRunning
+                          ? "未計入（計時未進行）"
+                          : _focusSessionMonitor.lastIntervalRecorded
+                          ? "已計入本輪"
+                          : "未計入（等待有效且連續的觀測）"}',
+                    ),
+                    Text(
+                      '資料間隔：${_focusSessionMonitor.lastSampleGap?.inMilliseconds ?? "--"} ms（超過 3000 ms 不延續前次狀態）',
+                    ),
+                    Text(
+                      '本輪累計：有效專注 ${_focusSessionMonitor.effectiveFocusDuration.inSeconds} 秒，'
+                      '非專注 ${_focusSessionMonitor.distractedDuration.inSeconds} 秒，'
+                      '其中離席 ${_focusSessionMonitor.awayDuration.inSeconds} 秒',
+                    ),
+                    Text(
+                      '本輪離席事件：${_focusSessionMonitor.eventCountFor(CompanionStatus.userMissing)} 次（有效離席觀測累積滿 5 秒記錄）',
                     ),
                     const SizedBox(height: 10),
                     Text(_status),
@@ -5611,11 +5722,14 @@ $toneLine
 
   Widget _buildCameraBackground() {
     return RepaintBoundary(
-      child: Live2DCharacterBackground(
-        mood: _characterMood,
-        reaction: _characterReaction,
-        reactionSerial: _characterReactionSerial,
-        paused: _isSuspendedForNavigation,
+      child: LayoutBuilder(
+        builder: (context, constraints) => Live2DCharacterBackground(
+          mood: _characterMood,
+          reaction: _characterReaction,
+          reactionSerial: _characterReactionSerial,
+          paused: _isSuspendedForNavigation,
+          verticalOffset: (constraints.maxHeight * 0.12).clamp(64.0, 120.0),
+        ),
       ),
     );
   }
@@ -5752,16 +5866,22 @@ $toneLine
 
   @override
   void dispose() {
+    _authSession.removeListener(_handleAccountChanged);
+    if (identical(FocusSyncController.active, _focusSyncController)) {
+      FocusSyncController.active = null;
+    }
     _resetVoiceReminderCandidate();
     appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _printHeadOffsetStats();
     _detectionTimer?.cancel();
     unawaited(
-      _focusSyncController.close(
-        studySessionController: _studySessionController,
-        pomodoroController: _pomodoroController,
-      ),
+      _focusSyncController
+          .close(
+            studySessionController: _studySessionController,
+            pomodoroController: _pomodoroController,
+          )
+          .whenComplete(_focusSyncController.dispose),
     );
     _userStatusCollapseTimer?.cancel();
     _idleBubbleTimer?.cancel();
@@ -5831,6 +5951,10 @@ $toneLine
                     QuickExperienceButton(
                       controller: _pomodoroController,
                       onPressed: _startQuickExperience,
+                      onOpenPomodoro: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const TasksScreen()),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     VisionSourceIndicator(

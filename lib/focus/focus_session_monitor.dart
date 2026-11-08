@@ -55,11 +55,16 @@ class FocusSessionMonitor extends ChangeNotifier {
   CompanionStatus? _activeEpisodeStatus;
   CompanionStatus? _autoPausedStatus;
   DateTime? _lastSampleAt;
+  bool _lastSampleValid = false;
+  bool _lastSampleRunning = false;
+  Duration? _lastSampleGap;
+  bool _lastIntervalRecorded = false;
   DateTime? _normalStartedAt;
   bool _recoveryPromptDelivered = false;
 
   Duration effectiveFocusDuration = Duration.zero;
   Duration distractedDuration = Duration.zero;
+  Duration awayDuration = Duration.zero;
   FocusSessionReport? lastCompletedReport;
 
   bool severeAutoPauseEnabled = true;
@@ -67,6 +72,8 @@ class FocusSessionMonitor extends ChangeNotifier {
   bool experimentalReminderPolicyEnabled = false;
 
   CompanionStatus? get activeEpisodeStatus => _activeEpisodeStatus;
+  Duration? get lastSampleGap => _lastSampleGap;
+  bool get lastIntervalRecorded => _lastIntervalRecorded;
 
   int eventCountFor(CompanionStatus status) => _eventCounts[status] ?? 0;
 
@@ -78,10 +85,15 @@ class FocusSessionMonitor extends ChangeNotifier {
   void beginSession({DateTime? now}) {
     effectiveFocusDuration = Duration.zero;
     distractedDuration = Duration.zero;
+    awayDuration = Duration.zero;
     _eventCounts.clear();
     _causeEventCounts.clear();
     lastCompletedReport = null;
     _lastSampleAt = now ?? DateTime.now();
+    _lastSampleValid = false;
+    _lastSampleRunning = false;
+    _lastSampleGap = null;
+    _lastIntervalRecorded = false;
     _clearAllState();
     notifyListeners();
   }
@@ -90,11 +102,19 @@ class FocusSessionMonitor extends ChangeNotifier {
     required Duration plannedDuration,
     DateTime? now,
   }) {
+    final completedAt = now ?? DateTime.now();
+    _accumulateElapsed(
+      timestamp: completedAt,
+      sessionRunning: _lastSampleRunning,
+      shouldCollectEvidence: false,
+      hasObservation: _lastSampleValid,
+    );
     final report = FocusSessionReport(
-      completedAt: now ?? DateTime.now(),
+      completedAt: completedAt,
       plannedDuration: plannedDuration,
       effectiveFocusDuration: effectiveFocusDuration,
       distractedDuration: distractedDuration,
+      awayDuration: awayDuration,
       eventCounts: <CompanionStatus, int>{
         for (final status in CompanionStatus.values)
           if (eventCountFor(status) > 0) status: eventCountFor(status),
@@ -113,12 +133,18 @@ class FocusSessionMonitor extends ChangeNotifier {
 
   void endSession() {
     _lastSampleAt = null;
+    _lastSampleGap = null;
+    _lastIntervalRecorded = false;
     _clearAllState();
     notifyListeners();
   }
 
   void resetDetectionState({DateTime? now}) {
     _lastSampleAt = now ?? DateTime.now();
+    _lastSampleValid = false;
+    _lastSampleRunning = false;
+    _lastSampleGap = null;
+    _lastIntervalRecorded = false;
     _clearAllState();
     notifyListeners();
   }
@@ -164,6 +190,7 @@ class FocusSessionMonitor extends ChangeNotifier {
     required bool sessionActive,
     required bool sessionRunning,
     required bool sessionAutoPaused,
+    bool hasObservation = true,
     DateTime? now,
   }) {
     final timestamp = now ?? DateTime.now();
@@ -172,9 +199,17 @@ class FocusSessionMonitor extends ChangeNotifier {
       timestamp: timestamp,
       sessionRunning: sessionRunning,
       shouldCollectEvidence: shouldCollectEvidence,
+      hasObservation: hasObservation,
     );
+    _lastSampleValid = hasObservation;
+    _lastSampleRunning = sessionRunning;
     _lastObservedStatus = status;
     _lastObservedCause = cause;
+    if (!hasObservation) {
+      _resetEvidence();
+      notifyListeners();
+      return const <FocusIntervention>[];
+    }
     if (status == CompanionStatus.userMissing) {
       // An away episode must not carry departure warnings into the return.
       final previousWarnings = _evidenceByStatus.keys
@@ -232,10 +267,17 @@ class FocusSessionMonitor extends ChangeNotifier {
     required DateTime timestamp,
     required bool sessionRunning,
     required bool shouldCollectEvidence,
+    required bool hasObservation,
   }) {
     final previousSampleAt = _lastSampleAt;
     _lastSampleAt = timestamp;
-    if (previousSampleAt == null) return;
+    _lastIntervalRecorded = false;
+    _lastSampleGap = previousSampleAt == null
+        ? null
+        : timestamp.difference(previousSampleAt);
+    if (previousSampleAt == null || !_lastSampleValid || !hasObservation) {
+      return;
+    }
 
     final delta = timestamp.difference(previousSampleAt);
     if (delta <= Duration.zero || delta > maximumSampleGap) return;
@@ -254,12 +296,16 @@ class FocusSessionMonitor extends ChangeNotifier {
       evidence.lastSeenAt = timestamp;
     }
 
-    if (!sessionRunning) return;
+    if (!sessionRunning || !_lastSampleRunning) return;
+    _lastIntervalRecorded = true;
     if (_lastObservedStatus == CompanionStatus.normal ||
         _lastObservedStatus == CompanionStatus.attention) {
       effectiveFocusDuration += delta;
     } else {
       distractedDuration += delta;
+      if (_lastObservedStatus == CompanionStatus.userMissing) {
+        awayDuration += delta;
+      }
     }
   }
 
